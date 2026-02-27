@@ -8,47 +8,26 @@ Built with Django + Django REST Framework
 
 # 📌 Project Structure
 POD2INVEST/
-
 │
-
 ├── apps/
-
 │ ├── accounts/
-
 │ ├── ai_assistant/
-
 │ ├── calculator/
-
 │ ├── etf/
-
 │ ├── glossary/
-
 │ ├── knowledge_graph/
-
 │ ├── mindmap/
-
 │ ├── podcasts/
-
 │ └── summaries/
-
 │
-
 ├── config/
-
 │ ├── settings.py
-
 │ ├── urls.py
-
 │ ├── asgi.py
-
 │ └── wsgi.py
-
 │
-
 ├── manage.py
-
 ├── requirements.txt
-
 └── README.md
 
 
