@@ -43,14 +43,14 @@ git clone <your_repo_url>
 cd POD2INVEST
 
 ## 2️⃣ Create Virtual Environment
-Windows
+### Windows
 
 python -m venv .venv
 
 .\.venv\Scripts\activate
 
 
-Mac
+### Mac
 
 python3 -m venv .venv
 
