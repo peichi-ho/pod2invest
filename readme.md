@@ -7,6 +7,7 @@ Built with Django + Django REST Framework
 ---
 
 # 📌 Project Structure
+ ``` 
 POD2INVEST/
 │
 ├── apps/
@@ -29,7 +30,7 @@ POD2INVEST/
 ├── manage.py
 ├── requirements.txt
 └── README.md
-
+ ``` 
 
 ---
 
