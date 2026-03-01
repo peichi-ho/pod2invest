@@ -7,6 +7,11 @@ sqlparse==0.5.0
 tzdata==2025.1
 google-generativeai==0.8.3
 
+# --- etf 比較 ---
+psycopg2-binary
+pandas
+sqlalchemy
+
 # --- 新增的 Podcast 轉錄與校稿功能 ---
 # 解析 Podcast 的 RSS Feed
 feedparser==6.0.12
