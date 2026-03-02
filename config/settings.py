@@ -31,6 +31,15 @@ DEBUG = True
 
 ALLOWED_HOSTS = []
 
+
+# Gemini / AI Assistant settings
+
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
+
+# 股票資料快取秒數（避免 yfinance 太慢）
+STOCK_CACHE_TTL_SECONDS = int(os.getenv("STOCK_CACHE_TTL_SECONDS", "60"))
+
 # Application definition
 
 INSTALLED_APPS = [

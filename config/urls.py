@@ -21,4 +21,5 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     path("api/glossary/", include("apps.glossary.urls")),
     path("api/etf/", include("apps.etf.api.urls")),
+    path("api/ai/", include("apps.ai_assistant.urls")),
 ]
