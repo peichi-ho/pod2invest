@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
 import sys
+import os
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -34,7 +35,8 @@ ALLOWED_HOSTS = []
 
 INSTALLED_APPS = [
     'django.contrib.admin', 'django.contrib.auth', 'django.contrib.contenttypes', 'django.contrib.sessions',
-    'django.contrib.messages', 'django.contrib.staticfiles', "apps.glossary.apps.GlossaryConfig", 'rest_framework'
+    'django.contrib.messages', 'django.contrib.staticfiles', "apps.glossary.apps.GlossaryConfig",
+    "apps.etf.apps.EtfConfig", 'rest_framework'
 ]
 
 MIDDLEWARE = [
@@ -70,10 +72,24 @@ WSGI_APPLICATION = 'config.wsgi.application'
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases
 
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
-    }
+    "default": {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": os.getenv("PG_DB", "pod2invest"),
+        "USER": os.getenv("PG_USER", "postgres"),
+        "PASSWORD": os.getenv("PG_PASS", "12345678"),
+        "HOST": os.getenv("PG_HOST", "127.0.0.1"),
+        "PORT": os.getenv("PG_PORT", "5432"),
+    },
+
+    # 新增：ETF 專用 PostgreSQL
+    "etfdb": {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": os.getenv("PG_DB", "etfdb"),
+        "USER": os.getenv("PG_USER", "etf"),
+        "PASSWORD": os.getenv("PG_PASS", "etfpass"),
+        "HOST": os.getenv("PG_HOST", "127.0.0.1"),
+        "PORT": os.getenv("PG_PORT", "5433"),
+    },
 }
 
 # Password validation
