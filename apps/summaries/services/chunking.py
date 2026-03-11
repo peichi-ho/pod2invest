@@ -7,8 +7,9 @@ from google import genai
 
 from .prompts import build_system_instruction, json_schema_description, build_user_prompt
 from .gemini import gemini_generate_with_retry, sanitize_json_text, repair_to_valid_json
-from .postprocess import normalize_schema, strict_filter_outlook_calls, postprocess_evidence_ranges
+from .postprocess import normalize_schema, postprocess_evidence_ranges
 from .enrich import enrich_arguments_if_empty, ensure_min_arguments
+from .outlook import extract_outlook_calls
 
 
 def chunk_text_by_chars(text: str, chunk_size: int, overlap: int) -> List[str]:
@@ -152,7 +153,6 @@ def map_reduce_summarize(
 
     chunks = chunk_text_by_chars(inline_text, chunk_size_chars, chunk_overlap_chars)
     all_notes: List[dict] = []
-    all_outlook_calls: List[dict] = []
     entities_acc = {"companies_or_stocks": [], "countries_or_regions": [], "people": []}
     tags_acc: List[str] = []
 
@@ -170,18 +170,16 @@ def map_reduce_summarize(
             "- bullets 是重點條列（可 3–8 條）\n"
             "- key_data 只收『明確數字/百分比/日期/指數』\n"
             "- evidence_timestamps 從逐字稿中的（m:ss）挑 1–3 個最相關的\n"
-            "- 同時抽取 entities 與 tags（tags 必須以 # 開頭）\n"
-            "- outlook_calls：只收『未來』對『具體可交易標的』的 bullish/bearish 觀點（asset 必須可交易，泛稱不行；timeframe 抓不到可 null；過去回顧或過去事實都不得放）\n\n"
+            "- 同時抽取 entities 與 tags（tags 必須以 # 開頭）\n\n"
             "===輸出 JSON 格式===\n"
             "{\n"
             '  "chunk": <int>,\n'
             '  "tags": ["#..."],\n'
             '  "entities": {"companies_or_stocks":[], "countries_or_regions":[], "people":[]},\n'
             '  "topic_notes": [\n'
-            '     {"topic_key":"...", "topic":"...", "position":"...", "bullets":[...], "key_data":[{"label":"...","value":"...","context":"..."}], "related_concepts":[...], "evidence_timestamps":[...]}\n'
-            "  ],\n"
-            '  "outlook_calls": [\n'
-            '    {"asset":"...", "direction":"bullish|bearish", "timeframe": null, "evidence_timestamps":[...], "evidence_quote":"(最多25字且避免雙引號)"}\n'
+            '     {"topic_key":"...", "topic":"...", "position":"...", "bullets":[...], '
+            '"key_data":[{"label":"...","value":"...","context":"..."}], '
+            '"related_concepts":[...], "evidence_timestamps":[...]}\n'
             "  ]\n"
             "}\n\n"
             "===逐字稿（本段）===\n"
@@ -213,28 +211,12 @@ def map_reduce_summarize(
         for k in ["companies_or_stocks", "countries_or_regions", "people"]:
             entities_acc[k].extend(ent.get(k) or [])
         all_notes.extend(obj.get("topic_notes") or [])
-        all_outlook_calls.extend(obj.get("outlook_calls") or [])
 
     merged_notes = _merge_topic_notes(all_notes)
 
     tags_acc = _dedupe_list(tags_acc)
     for k in ["companies_or_stocks", "countries_or_regions", "people"]:
         entities_acc[k] = _dedupe_list(entities_acc[k])
-
-    seen_oc = set()
-    ocs = []
-    for c in all_outlook_calls:
-        if not isinstance(c, dict):
-            continue
-        asset = (c.get("asset") or "").strip()
-        direction = (c.get("direction") or "").strip()
-        timeframe = c.get("timeframe", None)
-        key = (asset, direction, str(timeframe))
-        if not asset or not direction:
-            continue
-        if key not in seen_oc:
-            seen_oc.add(key)
-            ocs.append(c)
 
     final_prompt = (
         "===SYSTEM INSTRUCTIONS===\n"
@@ -245,13 +227,11 @@ def map_reduce_summarize(
         "- 必須符合下列 schema\n"
         "- 以主題式彙整\n"
         "- entities/tags 必須明確且完整\n"
-        "- outlook_calls：只收『未來』對『具體可交易標的』的 bullish/bearish 觀點（asset 必須可交易；timeframe 抓不到可 null；過去回顧或過去事實都不得放；若無則 []）\n\n"
         "===SCHEMA===\n"
         f"{schema_prompt}\n"
         "===END SCHEMA===\n\n"
         "===MERGED NOTES===\n"
-        f"{json.dumps({'tags': tags_acc, 'entities': entities_acc, 'topic_notes': merged_notes, 'outlook_calls': ocs}, ensure_ascii=False)}\n"
-    )
+        f"{json.dumps({'tags': tags_acc, 'entities': entities_acc, 'topic_notes': merged_notes}, ensure_ascii=False)}\n"    )
 
     resp2 = gemini_generate_with_retry(
         client=client,
@@ -282,10 +262,16 @@ def map_reduce_summarize(
                 }
                 for n in merged_notes[:10]
             ],
-            "outlook_calls": ocs,
-        }
+            "outlook_calls": [],        }
         fallback = normalize_schema(fallback)
-        fallback = strict_filter_outlook_calls(fallback, inline_text)
+
+        fallback["outlook_calls"] = extract_outlook_calls(
+            client=client,
+            model=model,
+            inline_text=inline_text,
+            raw_save_path=raw_save_path,
+        )
+
         fallback = postprocess_evidence_ranges(fallback)
         return fallback
 
@@ -295,7 +281,14 @@ def map_reduce_summarize(
         obj = repair_to_valid_json(client, model, clean2)
 
     obj = normalize_schema(obj)
-    obj = strict_filter_outlook_calls(obj, inline_text)
+
+    obj["outlook_calls"] = extract_outlook_calls(
+        client=client,
+        model=model,
+        inline_text=inline_text,
+        raw_save_path=raw_save_path,
+    )
+
     obj = postprocess_evidence_ranges(obj)
     return obj
 
@@ -337,8 +330,7 @@ def generate_json_summary(
         "- 只能輸出 JSON，不要輸出 ```json 或 ``` 或任何說明\n"
         "- tags 每個都要以 # 開頭（例如 #美國經濟）\n"
         "- arguments 至少 5 個 topic\n"
-        "- 你必須包含 outlook_calls 欄位（就算是空陣列也要輸出 \\\"outlook_calls\\\": []）\n"
-        "- outlook_calls 必須符合嚴格條件：只收未來語氣 + 可交易股票(asset) + 明確 bullish/bearish；timeframe 抓不到可 null；若沒有符合就 []\n"
+        "- outlook_calls 欄位先固定輸出 []\n"
     )
 
     resp1 = gemini_generate_with_retry(
@@ -390,16 +382,7 @@ def generate_json_summary(
         "- 每一個 arguments.summary 都必須是『詳細段落型摘要』，至少 120字以上，220字以下\n"
         "- arguments 依主題式合併、補充 key_data、related_concepts、evidence_timestamps\n"
         "- entities/tags 補齊（必須明確名稱）\n"
-        "\n"
-        "- outlook_calls：抽取「講者對股票的未來方向性判斷」（嚴格篩選）\n"
-        "  1) 必須是未來語氣（未來/明年/下一季/接下來/預估/有機會/會來到/將/目標價…），過去發生的事絕對不可放入\n"
-        "  2) asset 必須是可交易股票：只接受個股/代號/美股ticker，產業泛稱一律不行\n"
-        "  3) direction 必須明確 bullish 或 bearish；只有估值區間但無方向不要放\n"
-        "  4) timeframe：有明確時間就填，抓不到可 null\n"
-        "  5) 若無符合者：outlook_calls 必須是 []\n"
-        "  6) evidence_quote 最多25字且避免雙引號\n"
-        "\n"
-        "- 你必須保留並輸出 outlook_calls 欄位（就算是空陣列也要輸出）\n"
+        "- outlook_calls 欄位請維持為 []，後續會由另一個步驟單獨補上\n"
         "- 只能輸出 JSON，不要輸出 ```json 或 ``` 或任何說明\n\n"
         "===現有 JSON===\n"
         f"{json.dumps(base_obj, ensure_ascii=False)}\n\n"
@@ -432,7 +415,15 @@ def generate_json_summary(
         final_obj = ensure_min_arguments(client, model, mode, final_obj, inline_text, raw_save_path, min_topics=5)
 
         final_obj = normalize_schema(final_obj)
-        final_obj = strict_filter_outlook_calls(final_obj, inline_text)
+
+        # 單獨抽取 outlook_calls
+        final_obj["outlook_calls"] = extract_outlook_calls(
+            client=client,
+            model=model,
+            inline_text=inline_text,
+            raw_save_path=raw_save_path,
+        )
+
         final_obj = postprocess_evidence_ranges(final_obj)
         return final_obj
 
@@ -443,6 +434,13 @@ def generate_json_summary(
         base_obj = ensure_min_arguments(client, model, mode, base_obj, inline_text, raw_save_path, min_topics=5)
 
         base_obj = normalize_schema(base_obj)
-        base_obj = strict_filter_outlook_calls(base_obj, inline_text)
+
+        base_obj["outlook_calls"] = extract_outlook_calls(
+            client=client,
+            model=model,
+            inline_text=inline_text,
+            raw_save_path=raw_save_path,
+        )
+
         base_obj = postprocess_evidence_ranges(base_obj)
         return base_obj
