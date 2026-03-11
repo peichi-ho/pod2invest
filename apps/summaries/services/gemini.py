@@ -6,6 +6,14 @@ import time
 from typing import Optional
 
 from google import genai
+from google.genai import types
+
+
+def make_client(api_key: str) -> genai.Client:
+    return genai.Client(
+        api_key=api_key,
+        http_options=types.HttpOptions(api_version="v1"),
+    )
 
 
 def gemini_generate_with_retry(
@@ -24,19 +32,24 @@ def gemini_generate_with_retry(
             return client.models.generate_content(
                 model=model,
                 contents=[{"role": "user", "parts": [{"text": prompt_text}]}],
-                config={"temperature": temperature, "max_output_tokens": max_output_tokens},
+                config={
+                    "temperature": temperature,
+                    "max_output_tokens": max_output_tokens,
+                },
             )
         except Exception as e:
             last_err = e
             msg = str(e)
             is_503 = ("503" in msg) or ("UNAVAILABLE" in msg) or ("overloaded" in msg)
             is_429 = ("429" in msg) or ("RESOURCE_EXHAUSTED" in msg) or ("quota" in msg.lower())
+
             if not (is_503 or is_429) or attempt == max_tries:
                 raise
+
             sleep_s = min(70.0, base * (2 ** (attempt - 1)) + random.uniform(0, 0.5))
             time.sleep(sleep_s)
 
-    raise last_err  # pragma: no cover
+    raise last_err
 
 
 def sanitize_json_text(text: str) -> str:
@@ -45,11 +58,9 @@ def sanitize_json_text(text: str) -> str:
 
     s = text.lstrip("\ufeff")
 
-    # remove code fences
     s = re.sub(r"^\s*```(?:json)?\s*", "", s, flags=re.IGNORECASE | re.MULTILINE)
     s = re.sub(r"\s*```\s*$", "", s, flags=re.MULTILINE)
 
-    # from first '{'
     first = s.find("{")
     if first != -1:
         s = s[first:]
@@ -70,6 +81,7 @@ def extract_json_object(text: str) -> Optional[str]:
     start = s.find("{")
     if start == -1:
         return None
+
     s = s[start:]
 
     depth = 0
@@ -85,16 +97,17 @@ def extract_json_object(text: str) -> Optional[str]:
             elif ch == '"':
                 in_str = False
             continue
-        else:
-            if ch == '"':
-                in_str = True
-                continue
-            if ch == "{":
-                depth += 1
-            elif ch == "}":
-                depth -= 1
-                if depth == 0:
-                    return s[: i + 1]
+
+        if ch == '"':
+            in_str = True
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return s[: i + 1]
+
     return None
 
 
@@ -115,7 +128,7 @@ def repair_to_valid_json(client: genai.Client, model: str, bad_text: str) -> dic
         model=model,
         prompt_text=prompt,
         temperature=0.0,
-        max_output_tokens=6000,
+        max_output_tokens=4000,
         max_tries=6,
     )
 
@@ -125,5 +138,28 @@ def repair_to_valid_json(client: genai.Client, model: str, bad_text: str) -> dic
     if not clean.strip():
         raise RuntimeError("JSON repair returned empty/invalid text.")
 
-    js = extract_json_object(clean) or clean
-    return json.loads(js)
+    # 先試直接 parse
+    try:
+        return json.loads(clean)
+    except json.JSONDecodeError:
+        pass
+
+    # 再試抽第一個完整 JSON 物件
+    js = extract_json_object(clean)
+    if js:
+        try:
+            return json.loads(js)
+        except json.JSONDecodeError:
+            pass
+
+    # 最後再試一次：如果 bad_text 本身其實已經有完整 JSON，就直接抽
+    original_clean = sanitize_json_text(bad_text)
+    js2 = extract_json_object(original_clean)
+    if js2:
+        try:
+            return json.loads(js2)
+        except json.JSONDecodeError:
+            pass
+
+    preview = clean[:400].replace("\n", "\\n")
+    raise RuntimeError(f"JSON repair still invalid. Preview: {preview}")

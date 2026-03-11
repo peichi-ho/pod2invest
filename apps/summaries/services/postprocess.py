@@ -5,6 +5,64 @@ from typing import List, Optional
 from .srt import mss_to_seconds, seconds_to_mss
 
 
+def _dedupe_str_list(values):
+    out = []
+    seen = set()
+
+    if not isinstance(values, list):
+        return []
+
+    for v in values:
+        s = str(v).strip()
+        if not s:
+            continue
+        if s not in seen:
+            seen.add(s)
+            out.append(s)
+    return out
+
+
+def _normalize_tags(tags):
+    out = []
+    seen = set()
+
+    if not isinstance(tags, list):
+        return []
+
+    for t in tags:
+        s = str(t).strip()
+        if not s:
+            continue
+        if not s.startswith("#"):
+            s = "#" + s
+        if s not in seen:
+            seen.add(s)
+            out.append(s)
+    return out
+
+
+def _normalize_evidence_timestamps(values):
+    out = []
+    if isinstance(values, str):
+        values = [values]
+    if not isinstance(values, list):
+        return []
+
+    for v in values:
+        s = str(v).strip()
+        if not s:
+            continue
+
+        # 抓出所有 m:ss，像 "0:14-0:54" 也會變成 ["0:14", "0:54"]
+        matches = re.findall(r"\d+:\d{2}", s)
+
+        for m in matches:
+            if m not in out:
+                out.append(m)
+
+    return out
+
+
 def normalize_schema(summary: dict) -> dict:
     if not isinstance(summary, dict):
         return {}
@@ -25,24 +83,83 @@ def normalize_schema(summary: dict) -> dict:
     summary.setdefault("arguments", [])
     summary.setdefault("outlook_calls", [])
 
+    # tags 標準化
+    summary["tags"] = _normalize_tags(summary.get("tags", []))
+
+    # entities 去重
+    summary["entities"]["companies_or_stocks"] = _dedupe_str_list(
+        summary["entities"].get("companies_or_stocks", [])
+    )
+    summary["entities"]["countries_or_regions"] = _dedupe_str_list(
+        summary["entities"].get("countries_or_regions", [])
+    )
+    summary["entities"]["people"] = _dedupe_str_list(
+        summary["entities"].get("people", [])
+    )
+
     args = summary.get("arguments") or []
     if isinstance(args, list):
         for a in args:
             if not isinstance(a, dict):
                 continue
+
+            a.setdefault("topic", "")
+            a.setdefault("position", "")
+            a.setdefault("summary", "")
+            a.setdefault("key_data", [])
+            a.setdefault("related_concepts", [])
+            a.setdefault("evidence_timestamps", [])
+
+            # evidence_timestamps 標準化
+            a["evidence_timestamps"] = _normalize_evidence_timestamps(
+                a.get("evidence_timestamps", [])
+            )
+
+            # related_concepts 去重
+            a["related_concepts"] = _dedupe_str_list(a.get("related_concepts", []))
+
+            # key_data 標準化
             kd = a.get("key_data", [])
+
             if isinstance(kd, dict):
                 new_list = []
                 for k, v in kd.items():
                     if v is None:
                         continue
-                    new_list.append({"label": str(k), "value": str(v), "context": ""})
+                    new_list.append({
+                        "label": str(k).strip(),
+                        "value": str(v).strip(),
+                        "context": "",
+                    })
                 a["key_data"] = new_list
+
             elif isinstance(kd, str):
-                a["key_data"] = [{"label": "", "value": kd.strip(), "context": ""}]
-            elif not isinstance(kd, list):
+                s = kd.strip()
+                a["key_data"] = [{"label": "", "value": s, "context": ""}] if s else []
+
+            elif isinstance(kd, list):
+                new_kd = []
+                for row in kd:
+                    if isinstance(row, dict):
+                        new_kd.append({
+                            "label": str(row.get("label", "")).strip(),
+                            "value": str(row.get("value", "")).strip(),
+                            "context": str(row.get("context", "")).strip(),
+                        })
+                    elif isinstance(row, str):
+                        s = row.strip()
+                        if s:
+                            new_kd.append({
+                                "label": "",
+                                "value": s,
+                                "context": "",
+                            })
+                a["key_data"] = new_kd
+
+            else:
                 a["key_data"] = []
 
+    # outlook_calls 型別標準化
     oc = summary.get("outlook_calls") or []
     if isinstance(oc, dict):
         summary["outlook_calls"] = [oc]
@@ -50,6 +167,25 @@ def normalize_schema(summary: dict) -> dict:
         summary["outlook_calls"] = []
     elif not isinstance(oc, list):
         summary["outlook_calls"] = []
+
+    # one_sentence_summary 補救
+    if not (summary.get("one_sentence_summary") or "").strip():
+        args = summary.get("arguments") or []
+        if args and isinstance(args, list):
+            first_topic = ""
+            first_position = ""
+
+            for a in args:
+                if isinstance(a, dict):
+                    first_topic = (a.get("topic") or "").strip()
+                    first_position = (a.get("position") or "").strip()
+                    if first_topic:
+                        break
+
+            if first_topic and first_position:
+                summary["one_sentence_summary"] = f"本集重點聚焦於{first_topic}，整體觀點為{first_position}。"
+            elif first_topic:
+                summary["one_sentence_summary"] = f"本集重點聚焦於{first_topic}。"
 
     return summary
 
@@ -78,8 +214,8 @@ def strict_filter_outlook_calls(summary: dict, inline_text: str) -> dict:
         "AI", "人工智慧", "半導體", "科技股", "金融股", "族群", "板塊", "概念股", "供應鏈", "美股七雄"
     ]
 
-    ticker_re = re.compile(r"^\d{3,6}$")       # 2330, 0050...
-    us_ticker_re = re.compile(r"^[A-Z]{1,5}$") # AAPL, NVDA...
+    ticker_re = re.compile(r"^\d{3,6}$")
+    us_ticker_re = re.compile(r"^[A-Z]{1,5}$")
     cn_name_re = re.compile(r"^[\u4e00-\u9fff]{2,8}$")
 
     ALIAS = {
@@ -326,6 +462,7 @@ def postprocess_evidence_ranges(summary: dict) -> dict:
     for a in args:
         if not isinstance(a, dict):
             continue
+
         tps = a.get("evidence_timestamps") or []
         if isinstance(tps, str):
             tps = [tps]

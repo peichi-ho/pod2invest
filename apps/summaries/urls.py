@@ -1,7 +1,7 @@
+# apps/summaries/urls.py
 from django.urls import path
-from .views import GenerateSummaryView
+from .views import SummarizeAPIView
 
 urlpatterns = [
-    path("", GenerateSummaryView.as_view(), name="summary-root"),
-    path("generate/", GenerateSummaryView.as_view(), name="summary-generate"),
+    path("generate/", SummarizeAPIView.as_view(), name="summaries-generate"),
 ]

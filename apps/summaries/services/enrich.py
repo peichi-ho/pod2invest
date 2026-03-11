@@ -58,7 +58,7 @@ def enrich_arguments_if_empty(
         "- 你要輸出物件：{ \"arguments\": [...] }\n"
         "- arguments 每個主題都必須填：topic, position, summary, key_data, related_concepts, evidence_timestamps\n"
         "- position：一句話立場（不可空）\n"
-        "- summary：至少150字主題式摘要（不可空）\n"
+        "- summary：至少120字、最多220字的主題式摘要（不可空）\n"
         "- key_data：若有明確數字/百分比/日期/指數就放入（沒有可空陣列）\n"
         "- evidence_timestamps：每個主題至少 1 個（從逐字稿（m:ss）挑最相關）\n\n"
         f"===要補的 topics（請維持這些 topic 名稱）===\n{json.dumps(topics, ensure_ascii=False)}\n\n"
@@ -120,9 +120,9 @@ def ensure_min_arguments(
 
     system_prompt = build_system_instruction(mode)
 
-    head = inline_text[:25000]
-    tail = inline_text[-15000:] if len(inline_text) > 15000 else ""
-    excerpt = f"{head}\n\n---\n（中略）\n---\n\n{tail}" if tail else head
+    head = inline_text[:12000]
+    tail = inline_text[-3000:] if len(inline_text) > 15000 else ""
+    excerpt = head + ("\n\n---\n（中略）\n---\n\n" + tail if tail else "")
 
     prompt = (
         "===SYSTEM INSTRUCTIONS===\n"
@@ -130,7 +130,7 @@ def ensure_min_arguments(
         "===END SYSTEM INSTRUCTIONS===\n\n"
         f"你要把 arguments 補到至少 {min_topics} 個主題（主題式合併，不要時間序切）。\n"
         "只輸出 JSON：{ \"arguments\": [...] }，不要解釋 ```。\n"
-        "每個 arguments 必填 topic, position, summary(至少150字), key_data, related_concepts, evidence_timestamps(至少1個)。\n\n"
+        "每個 arguments 必填 topic, position, summary(120到220字), key_data, related_concepts, evidence_timestamps(至少1個)。\n\n"
         f"===現有 topics===\n{json.dumps([a.get('topic','') for a in (args or []) if isinstance(a, dict)], ensure_ascii=False)}\n\n"
         f"===逐字稿節選===\n{excerpt}\n"
     )

@@ -1,33 +1,51 @@
-from django.shortcuts import render
-
-# Create your views here.
-import os
+# apps/summaries/views.py
+from django.conf import settings
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 
-from .serializers import GenerateSummarySerializer
+from .serializers import SummarizeRequestSerializer
 from .services.engine import summarize_from_srt_text
 
-class GenerateSummaryView(APIView):
+
+class SummarizeAPIView(APIView):
     def post(self, request):
-        ser = GenerateSummarySerializer(data=request.data)
-        ser.is_valid(raise_exception=True)
+        serializer = SummarizeRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
 
-        api_key = (os.getenv("GEMINI_API_KEY") or "").strip()
+        api_key = getattr(settings, "GEMINI_API_KEY", "").strip()
         if not api_key:
-            return Response({"error": "GEMINI_API_KEY not set"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response(
+                {"detail": "GEMINI_API_KEY 未設定。"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
-        mode = ser.validated_data["mode"]
-        srt_text = ser.validated_data["srt_text"]
-        model = ser.validated_data["model"]
-        chunk_threshold_chars = ser.validated_data["chunk_threshold_chars"]
+        srt_text = data.get("srt_text", "")
+        srt_file = data.get("srt_file")
 
-        result = summarize_from_srt_text(
-            api_key=api_key,
-            srt_text=srt_text,
-            mode=mode,
-            model=model,
-            chunk_threshold_chars=chunk_threshold_chars,
-        )
-        return Response(result, status=status.HTTP_200_OK)
+        if srt_file:
+            raw_bytes = srt_file.read()
+            try:
+                srt_text = raw_bytes.decode("utf-8")
+            except UnicodeDecodeError:
+                srt_text = raw_bytes.decode("utf-8-sig", errors="ignore")
+        try:
+            result = summarize_from_srt_text(
+                api_key=api_key,
+                srt_text=srt_text,
+                mode=data["mode"],
+                model=data.get("model", "models/gemini-2.5-flash-lite"),
+                chunk_threshold_chars=data.get("chunk_threshold_chars", 30000),
+                debug_chars=data.get("debug_chars", 0),
+            )
+            return Response(result, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response(
+                {
+                    "detail": "摘要失敗",
+                    "error": str(e),
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )

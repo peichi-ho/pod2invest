@@ -307,7 +307,7 @@ def generate_json_summary(
     inline_text: str,
     raw_save_path: Optional[Path] = None,
     temperature: float = 0.2,
-    max_output_tokens: int = 6000,
+    max_output_tokens: int = 4200,
 ) -> dict:
     system_prompt = build_system_instruction(mode)
     schema_prompt = json_schema_description()
@@ -318,7 +318,7 @@ def generate_json_summary(
         with open(raw_save_path, "a", encoding="utf-8") as f:
             f.write(f"{title}\n{content}\n\n")
 
-    # ✅ 真正截斷：避免 prompt/token 爆
+    # STEP 1 用較短節選
     head = inline_text[:20000]
     tail = inline_text[-8000:] if len(inline_text) > 28000 else ""
     excerpt = head + ("\n\n---\n（中略）\n---\n\n" + tail if tail else "")
@@ -370,15 +370,24 @@ def generate_json_summary(
                     "podcaster_stance": "混合/視情況",
                 },
                 "tags": [],
-                "entities": {"companies_or_stocks": [], "countries_or_regions": [], "people": []},
+                "entities": {
+                    "companies_or_stocks": [],
+                    "countries_or_regions": [],
+                    "people": [],
+                },
                 "arguments": [],
                 "outlook_calls": [],
             }
 
+    # STEP 2 再用另一個較保守節選
+    full_head = inline_text[:12000]
+    full_tail = inline_text[-3000:] if len(inline_text) > 15000 else ""
+    full_excerpt = full_head + ("\n\n---\n（中略）\n---\n\n" + full_tail if full_tail else "")
+
     prompt2 = (
         "你將收到一個 JSON（已符合格式）。\n"
         "請在『不改動欄位結構』的前提下，根據逐字稿補充內容，使摘要更完整：\n"
-        "- 每一個 arguments.summary 都必須是『詳細段落型摘要』，至少 150字以上，350字以下\n"
+        "- 每一個 arguments.summary 都必須是『詳細段落型摘要』，至少 120字以上，220字以下\n"
         "- arguments 依主題式合併、補充 key_data、related_concepts、evidence_timestamps\n"
         "- entities/tags 補齊（必須明確名稱）\n"
         "\n"
@@ -394,8 +403,8 @@ def generate_json_summary(
         "- 只能輸出 JSON，不要輸出 ```json 或 ``` 或任何說明\n\n"
         "===現有 JSON===\n"
         f"{json.dumps(base_obj, ensure_ascii=False)}\n\n"
-        "===逐字稿（全文）===\n"
-        f"{inline_text}\n"
+        "===逐字稿（截斷版）===\n"
+        f"{full_excerpt}\n"
     )
 
     try:
