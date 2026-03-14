@@ -1,4 +1,6 @@
 # apps/summaries/services/prompts.py
+from .tag_taxonomy import classification_rules_text
+
 
 def build_system_instruction(mode: str) -> str:
     common = (
@@ -11,6 +13,9 @@ def build_system_instruction(mode: str) -> str:
         "2) 你要輸出 JSON（只輸出 JSON，不要加任何多餘文字）。\n"
         "3) 內容要清晰、好讀、不空泛。\n"
         "4) JSON 內所有字串必須使用標準雙引號，若內容包含雙引號請用 \\\" 跳脫。\n"
+        "5) classification 各欄位必須嚴格從白名單中選，不得自創新值。\n"
+        "6) 若無法確定分類，請輸出空陣列，不要猜測。\n\n"
+        f"{classification_rules_text()}\n"
     )
 
     if mode == "novice":
@@ -52,6 +57,13 @@ def json_schema_description() -> str:
     "watchlist": [],
     "podcaster_stance": "看多|看空|觀望|混合/視情況"
   },
+  "classification": {
+    "financial_topics": [],
+    "industries": [],
+    "content_types": [],
+    "markets": [],
+    "asset_types": []
+  },
   "tags": [],
   "entities": {
     "companies_or_stocks": [],
@@ -84,6 +96,8 @@ def json_schema_description() -> str:
   4) 限制/不確定性/反例
 - key_data：只收明確數字，沒有就 []
 - evidence_timestamps：從逐字稿（m:ss）挑 1–5 個
+- classification 各欄位只能從固定白名單中選，不得自創
+- tags 欄位固定輸出 [] 即可，系統後處理會自動根據 classification 生成
 - outlook_calls 欄位先固定輸出 []，後續會由另一個步驟單獨補上
 
 """

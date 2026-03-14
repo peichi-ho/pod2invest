@@ -3,42 +3,12 @@ import re
 from typing import List, Optional
 
 from .srt import mss_to_seconds, seconds_to_mss
-
-
-def _dedupe_str_list(values):
-    out = []
-    seen = set()
-
-    if not isinstance(values, list):
-        return []
-
-    for v in values:
-        s = str(v).strip()
-        if not s:
-            continue
-        if s not in seen:
-            seen.add(s)
-            out.append(s)
-    return out
-
-
-def _normalize_tags(tags):
-    out = []
-    seen = set()
-
-    if not isinstance(tags, list):
-        return []
-
-    for t in tags:
-        s = str(t).strip()
-        if not s:
-            continue
-        if not s.startswith("#"):
-            s = "#" + s
-        if s not in seen:
-            seen.add(s)
-            out.append(s)
-    return out
+from .tag_taxonomy import (
+    empty_classification,
+    normalize_classification_dict,
+    flatten_classification_to_tags,
+    dedupe_str_list,
+)
 
 
 def _normalize_evidence_timestamps(values):
@@ -53,7 +23,6 @@ def _normalize_evidence_timestamps(values):
         if not s:
             continue
 
-        # 抓出所有 m:ss，像 "0:14-0:54" 也會變成 ["0:14", "0:54"]
         matches = re.findall(r"\d+:\d{2}", s)
 
         for m in matches:
@@ -74,7 +43,14 @@ def normalize_schema(summary: dict) -> dict:
     summary["investment_takeaways"].setdefault("watchlist", [])
     summary["investment_takeaways"].setdefault("podcaster_stance", "混合/視情況")
 
-    summary.setdefault("tags", [])
+    summary.setdefault("classification", empty_classification())
+    summary["classification"] = normalize_classification_dict(
+        summary.get("classification", {})
+    )
+
+    # tags 保留做向下相容，但不再由 LLM 自由生成
+    summary["tags"] = flatten_classification_to_tags(summary["classification"])
+
     summary.setdefault("entities", {})
     summary["entities"].setdefault("companies_or_stocks", [])
     summary["entities"].setdefault("countries_or_regions", [])
@@ -83,17 +59,13 @@ def normalize_schema(summary: dict) -> dict:
     summary.setdefault("arguments", [])
     summary.setdefault("outlook_calls", [])
 
-    # tags 標準化
-    summary["tags"] = _normalize_tags(summary.get("tags", []))
-
-    # entities 去重
-    summary["entities"]["companies_or_stocks"] = _dedupe_str_list(
+    summary["entities"]["companies_or_stocks"] = dedupe_str_list(
         summary["entities"].get("companies_or_stocks", [])
     )
-    summary["entities"]["countries_or_regions"] = _dedupe_str_list(
+    summary["entities"]["countries_or_regions"] = dedupe_str_list(
         summary["entities"].get("countries_or_regions", [])
     )
-    summary["entities"]["people"] = _dedupe_str_list(
+    summary["entities"]["people"] = dedupe_str_list(
         summary["entities"].get("people", [])
     )
 
@@ -110,15 +82,12 @@ def normalize_schema(summary: dict) -> dict:
             a.setdefault("related_concepts", [])
             a.setdefault("evidence_timestamps", [])
 
-            # evidence_timestamps 標準化
             a["evidence_timestamps"] = _normalize_evidence_timestamps(
                 a.get("evidence_timestamps", [])
             )
 
-            # related_concepts 去重
-            a["related_concepts"] = _dedupe_str_list(a.get("related_concepts", []))
+            a["related_concepts"] = dedupe_str_list(a.get("related_concepts", []))
 
-            # key_data 標準化
             kd = a.get("key_data", [])
 
             if isinstance(kd, dict):
@@ -159,7 +128,6 @@ def normalize_schema(summary: dict) -> dict:
             else:
                 a["key_data"] = []
 
-    # outlook_calls 型別標準化
     oc = summary.get("outlook_calls") or []
     if isinstance(oc, dict):
         summary["outlook_calls"] = [oc]
@@ -168,7 +136,6 @@ def normalize_schema(summary: dict) -> dict:
     elif not isinstance(oc, list):
         summary["outlook_calls"] = []
 
-    # one_sentence_summary 補救
     if not (summary.get("one_sentence_summary") or "").strip():
         args = summary.get("arguments") or []
         if args and isinstance(args, list):

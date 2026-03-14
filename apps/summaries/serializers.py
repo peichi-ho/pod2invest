@@ -5,7 +5,7 @@ from rest_framework import serializers
 class SummarizeRequestSerializer(serializers.Serializer):
     mode = serializers.ChoiceField(choices=["novice", "pro", "both"], default="novice")
     model = serializers.CharField(default="models/gemini-2.5-flash-lite", required=False)
-    chunk_threshold_chars = serializers.IntegerField(default=30000, required=False)
+    chunk_threshold_chars = serializers.IntegerField(default=20000, required=False)
     debug_chars = serializers.IntegerField(default=0, required=False)
 
     srt_text = serializers.CharField(required=False, allow_blank=False)

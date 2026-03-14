@@ -5,7 +5,8 @@ from typing import Optional
 from .srt import parse_srt, srt_to_inline_text
 from .gemini import make_client
 from .chunking import summarize_with_optional_chunking
-from .harmonize import harmonize_tags_entities, harmonize_investment_takeaways_dual_style
+from .harmonize import harmonize_classification_entities, harmonize_investment_takeaways_dual_style
+
 
 def summarize_from_srt_text(
     *,
@@ -13,7 +14,7 @@ def summarize_from_srt_text(
     srt_text: str,
     mode: str,  # "novice" | "pro" | "both"
     model: str = "models/gemini-2.5-flash-lite",
-    chunk_threshold_chars: int = 30000,
+    chunk_threshold_chars: int = 20000,
     debug_chars: int = 0,
     raw_save_path: Optional[Path] = None,
 ):
@@ -68,7 +69,7 @@ def summarize_from_srt_text(
             errors["pro"] = str(e)
 
         if novice and pro:
-            novice, pro = harmonize_tags_entities(novice, pro)
+            novice, pro = harmonize_classification_entities(novice, pro)
             novice, pro = harmonize_investment_takeaways_dual_style(novice, pro)
             return {"novice": novice, "pro": pro}
 

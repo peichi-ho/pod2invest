@@ -2,27 +2,46 @@
 import re
 from typing import List
 
+from .tag_taxonomy import (
+    empty_classification,
+    normalize_classification_dict,
+    flatten_classification_to_tags,
+    dedupe_str_list,
+)
+
 
 def _dedupe_str_list(xs: List[str]) -> List[str]:
-    out = []
-    seen = set()
-    for x in xs or []:
-        x = (x or "").strip()
-        if not x:
-            continue
-        if x not in seen:
-            seen.add(x)
-            out.append(x)
-    return out
+    return dedupe_str_list(xs)
 
 
-def harmonize_tags_entities(novice: dict, pro: dict) -> tuple[dict, dict]:
+def harmonize_classification_entities(novice: dict, pro: dict) -> tuple[dict, dict]:
     """
-    讓 tags / entities 兩版完全一致（用 union 後去重）。
+    讓 classification / tags / entities 兩版完全一致（用 union 後去重）。
+    tags 不再自由生成，而是由 classification 展平得到。
     """
-    n_tags = novice.get("tags") or []
-    p_tags = pro.get("tags") or []
-    tags = _dedupe_str_list(list(n_tags) + list(p_tags))
+    def get_cls(obj):
+        c = obj.get("classification") or {}
+        c = normalize_classification_dict(c)
+        return {
+            "financial_topics": list(c.get("financial_topics") or []),
+            "industries": list(c.get("industries") or []),
+            "content_types": list(c.get("content_types") or []),
+            "markets": list(c.get("markets") or []),
+            "asset_types": list(c.get("asset_types") or []),
+        }
+
+    nc = get_cls(novice)
+    pc = get_cls(pro)
+
+    merged_cls = {
+        "financial_topics": _dedupe_str_list(nc["financial_topics"] + pc["financial_topics"]),
+        "industries": _dedupe_str_list(nc["industries"] + pc["industries"]),
+        "content_types": _dedupe_str_list(nc["content_types"] + pc["content_types"]),
+        "markets": _dedupe_str_list(nc["markets"] + pc["markets"]),
+        "asset_types": _dedupe_str_list(nc["asset_types"] + pc["asset_types"]),
+    }
+    merged_cls = normalize_classification_dict(merged_cls)
+    merged_tags = flatten_classification_to_tags(merged_cls)
 
     def get_ents(obj):
         e = obj.get("entities") or {}
@@ -41,8 +60,10 @@ def harmonize_tags_entities(novice: dict, pro: dict) -> tuple[dict, dict]:
         "people": _dedupe_str_list(ne["people"] + pe["people"]),
     }
 
-    novice["tags"] = tags
-    pro["tags"] = tags
+    novice["classification"] = merged_cls
+    pro["classification"] = merged_cls
+    novice["tags"] = list(merged_tags)
+    pro["tags"] = list(merged_tags)
     novice["entities"] = ents
     pro["entities"] = ents
     return novice, pro

@@ -39,7 +39,7 @@ class SummarizeAPIView(APIView):
                 srt_text=srt_text,
                 mode=data["mode"],
                 model=data.get("model", "models/gemini-2.5-flash-lite"),
-                chunk_threshold_chars=data.get("chunk_threshold_chars", 30000),
+                chunk_threshold_chars=data.get("chunk_threshold_chars", 20000),
                 debug_chars=data.get("debug_chars", 0),
             )
 
