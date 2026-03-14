@@ -6,12 +6,19 @@ from psycopg2.extras import execute_values
 from datetime import timedelta
 from sqlalchemy import create_engine, text
 from urllib.parse import quote_plus
+from dotenv import load_dotenv
 
-PG_HOST = os.getenv("PG_HOST", "127.0.0.1")
-PG_PORT = int(os.getenv("PG_PORT", "5433"))
-PG_DB   = os.getenv("PG_DB", "etfdb")
-PG_USER = os.getenv("PG_USER", "etf")
-PG_PASS = os.getenv("PG_PASS", "etfpass")
+BASE_DIR = Path(__file__).resolve().parents[3]
+load_dotenv(BASE_DIR / ".env")
+
+PG_HOST = os.getenv("ETF_DB_HOST", "")
+PG_PORT = int(os.getenv("ETF_DB_PORT", "5432"))
+PG_DB   = os.getenv("ETF_DB_NAME", "postgres")
+PG_USER = os.getenv("ETF_DB_USER", "")
+PG_PASS = os.getenv("ETF_DB_PASSWORD", "")
+
+if not all([PG_HOST, PG_DB, PG_USER, PG_PASS]):
+    raise RuntimeError("ETF database environment variables are not fully set.")
 
 # 全域變數 EXCHANGES 為 List
 EXCHANGES = [x.strip() for x in os.getenv("EXCHANGES", "TWSE,TPEx").split(",")]
@@ -352,53 +359,64 @@ def compute_for_exchange(conn, engine, exchange):
     return results
 
 def main():
-    conn = get_connection()
-    engine = get_read_engine()
+    conn = None
+    engine = None
+    try:
+        conn = get_connection()
+        engine = get_read_engine()
 
-    all_results = []
-    for ex in EXCHANGES:
-        res = compute_for_exchange(conn, engine, ex)
-        all_results.extend(res)
+        all_results = []
+        for ex in EXCHANGES:
+            res = compute_for_exchange(conn, engine, ex)
+            all_results.extend(res)
 
-    if not all_results:
-        print("No metrics computed.")
-        return
+        if not all_results:
+            print("No metrics computed.")
+            return
 
-    # 使用 execute_values 批次寫入資料庫
-    with conn.cursor() as cur:
-        # 在寫入時處理欄位對應
-        execute_values(
-            cur,
-            """
-            INSERT INTO etf_metrics_daily(
-                symbol, exchange, as_of_date,
-                total_return_1y, total_return_3y, total_return_5y,
-                max_drawdown_1y, max_drawdown_3y, max_drawdown_5y,
-                sharpe_1y, volatility_1y,
-                annualized_yield, days_to_fill_last_distribution
+        with conn.cursor() as cur:
+            execute_values(
+                cur,
+                """
+                INSERT INTO etf_metrics_daily(
+                    symbol, exchange, as_of_date,
+                    total_return_1y, total_return_3y, total_return_5y,
+                    max_drawdown_1y, max_drawdown_3y, max_drawdown_5y,
+                    sharpe_1y, volatility_1y,
+                    annualized_yield, days_to_fill_last_distribution
+                )
+                VALUES %s
+                ON CONFLICT (symbol, exchange, as_of_date)
+                DO UPDATE SET
+                    total_return_1y = EXCLUDED.total_return_1y,
+                    total_return_3y = EXCLUDED.total_return_3y,
+                    total_return_5y = EXCLUDED.total_return_5y,
+                    max_drawdown_1y = EXCLUDED.max_drawdown_1y,
+                    max_drawdown_3y = EXCLUDED.max_drawdown_3y,
+                    max_drawdown_5y = EXCLUDED.max_drawdown_5y,
+                    sharpe_1y = EXCLUDED.sharpe_1y,
+                    volatility_1y = EXCLUDED.volatility_1y,
+                    annualized_yield = EXCLUDED.annualized_yield,
+                    days_to_fill_last_distribution = EXCLUDED.days_to_fill_last_distribution,
+                    computed_at = now();
+                """,
+                all_results,
+                page_size=500
             )
-            VALUES %s
-            ON CONFLICT (symbol, exchange, as_of_date)
-            DO UPDATE SET
-                total_return_1y = EXCLUDED.total_return_1y,
-                total_return_3y = EXCLUDED.total_return_3y,
-                total_return_5y = EXCLUDED.total_return_5y,
-                max_drawdown_1y = EXCLUDED.max_drawdown_1y,
-                max_drawdown_3y = EXCLUDED.max_drawdown_3y,
-                max_drawdown_5y = EXCLUDED.max_drawdown_5y,
-                sharpe_1y = EXCLUDED.sharpe_1y,
-                volatility_1y = EXCLUDED.volatility_1y,
-                annualized_yield = EXCLUDED.annualized_yield,
-                days_to_fill_last_distribution = EXCLUDED.days_to_fill_last_distribution,
-                computed_at = now();
-            """,
-            all_results,
-            page_size=500
-        )
 
-    conn.commit()
-    conn.close()
-    print(f"Inserted/Updated {len(all_results)} ETF metrics.")
+        conn.commit()
+        print(f"Inserted/Updated {len(all_results)} ETF metrics.")
+
+    except Exception:
+        if conn:
+            conn.rollback()
+        raise
+
+    finally:
+        if conn:
+            conn.close()
+        if engine:
+            engine.dispose()
 
 if __name__ == "__main__":
     main()

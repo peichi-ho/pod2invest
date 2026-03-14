@@ -7,17 +7,23 @@ import requests
 import psycopg2
 from psycopg2.extras import execute_values
 
-# ==============================
-# DB ENV
-# ==============================
-PG_HOST = os.getenv("PG_HOST", "127.0.0.1")
-PG_PORT = int(os.getenv("PG_PORT", "5433"))
-PG_DB   = os.getenv("PG_DB", "etfdb")
-PG_USER = os.getenv("PG_USER", "etf")
-PG_PASS = os.getenv("PG_PASS", "etfpass")
+from pathlib import Path
+from dotenv import load_dotenv
+
+BASE_DIR = Path(__file__).resolve().parents[3]
+load_dotenv(BASE_DIR / ".env")
+
+PG_HOST = os.getenv("ETF_DB_HOST", "")
+PG_PORT = int(os.getenv("ETF_DB_PORT", "5432"))
+PG_DB   = os.getenv("ETF_DB_NAME", "postgres")
+PG_USER = os.getenv("ETF_DB_USER", "")
+PG_PASS = os.getenv("ETF_DB_PASSWORD", "")
+
+if not all([PG_HOST, PG_DB, PG_USER, PG_PASS]):
+    raise RuntimeError("ETF database environment variables are not fully set.")
 
 # 單一交易所：TWSE 或 TPEx
-EXCHANGES = os.getenv("EXCHANGES", "TWSE,TPEx").split(",")
+EXCHANGES = [x.strip() for x in os.getenv("EXCHANGES", "TWSE,TPEx").split(",") if x.strip()]
 DATE_YYYYMMDD = os.getenv("DATE")  # e.g. 20251231; if None -> today
 
 SOURCE_TWSE = "TWSE"
@@ -361,8 +367,10 @@ def main():
     )
     try:
         for ex in EXCHANGES:
-            sync_one_day(conn, ex.strip(), date_yyyymmdd)
-
+            sync_one_day(conn, ex, date_yyyymmdd)
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 

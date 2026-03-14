@@ -10,21 +10,30 @@ from decimal import Decimal, InvalidOperation
 import psycopg2
 from psycopg2.extras import execute_values
 
-# =========================
-# DB ENV
-# =========================
-PG_HOST = os.getenv("PG_HOST", "127.0.0.1")
-PG_PORT = int(os.getenv("PG_PORT", "5433"))
-PG_DB   = os.getenv("PG_DB", "etfdb")
-PG_USER = os.getenv("PG_USER", "etf")
-PG_PASS = os.getenv("PG_PASS", "etfpass")
+from pathlib import Path
+from dotenv import load_dotenv
+
+BASE_DIR = Path(__file__).resolve().parents[3]
+load_dotenv(BASE_DIR / ".env")
+
+PG_HOST = os.getenv("ETF_DB_HOST", "")
+PG_PORT = int(os.getenv("ETF_DB_PORT", "5432"))
+PG_DB   = os.getenv("ETF_DB_NAME", "postgres")
+PG_USER = os.getenv("ETF_DB_USER", "")
+PG_PASS = os.getenv("ETF_DB_PASSWORD", "")
+
+if not all([PG_HOST, PG_DB, PG_USER, PG_PASS]):
+    raise RuntimeError("ETF database environment variables are not fully set.")
+
 
 TABLE_NAME = os.getenv("FEES_TABLE", "etf_fees")
 SOURCE_TAG = os.getenv("SOURCE_TAG", "wantgoo_manual_json")
 
 AS_OF_DATE_ENV = os.getenv("AS_OF_DATE")  # YYYYMMDD optional
-JSON_PATH = os.getenv("JSON_PATH", "/Users/iristsou/etf-db/wantgoo_basic_data.json")
-
+JSON_PATH = os.getenv(
+    "JSON_PATH",
+    str(BASE_DIR / "data" / "wantgoo_basic_data.json")
+)
 
 # =========================
 # Helpers
