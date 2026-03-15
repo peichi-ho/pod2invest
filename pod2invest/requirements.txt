@@ -1,0 +1,36 @@
+# --- 原有 Django 專案套件 (Original) ---
+asgiref==3.7.2
+Django==5.0.4
+djangorestframework==3.16.1
+python-dotenv==1.0.1
+sqlparse==0.5.0
+tzdata==2025.1
+google-generativeai==0.8.3
+
+# --- 新增的 Podcast 轉錄與校稿功能 ---
+# 解析 Podcast 的 RSS Feed
+feedparser==6.0.12
+# 用於下載音檔
+requests==2.32.5
+# OpenAI Whisper 語音轉文字核心 (需要系統有 FFmpeg)
+openai-whisper==20250625
+# 腳本依賴套件
+openai==2.24.0
+# 運算引擎 (跑 Whisper)
+torch==2.10.0
+numpy==2.4.2
+
+# --- (Dependencies) ---
+annotated-types==0.7.0
+certifi==2026.2.25
+cffi==2.0.0
+charset-normalizer==3.4.4
+colorama==0.4.6
+cryptography==46.0.5
+google-ai-generativelanguage==0.6.10
+google-api-core==2.30.0
+google-auth==2.48.0
+idna==3.11
+pydantic==2.12.5
+tqdm==4.67.3
+urllib3==2.6.3
