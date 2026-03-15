@@ -13,12 +13,11 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 import sys
 import os
 from pathlib import Path
+from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(BASE_DIR / ".env")
 sys.path.append(str(BASE_DIR / "apps"))
-
-# Build paths inside the project like this: BASE_DIR / 'subdir'.
-BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
@@ -74,23 +73,27 @@ WSGI_APPLICATION = 'config.wsgi.application'
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
-        "NAME": os.getenv("PG_DB", "pod2invest"),
-        "USER": os.getenv("PG_USER", "postgres"),
-        "PASSWORD": os.getenv("PG_PASS", "12345678"),
-        "HOST": os.getenv("PG_HOST", "127.0.0.1"),
-        "PORT": os.getenv("PG_PORT", "5432"),
+        "NAME": os.getenv("GLOSSARY_DB_NAME", "postgres"),
+        "USER": os.getenv("GLOSSARY_DB_USER", ""),
+        "PASSWORD": os.getenv("GLOSSARY_DB_PASSWORD", ""),
+        "HOST": os.getenv("GLOSSARY_DB_HOST", ""),
+        "PORT": os.getenv("GLOSSARY_DB_PORT", "5432"),
+        "OPTIONS": {
+            "sslmode": "require",
+        },
     },
-
-    # 新增：ETF 專用 PostgreSQL
     "etfdb": {
         "ENGINE": "django.db.backends.postgresql",
-        "NAME": os.getenv("PG_DB", "etfdb"),
-        "USER": os.getenv("PG_USER", "etf"),
-        "PASSWORD": os.getenv("PG_PASS", "etfpass"),
-        "HOST": os.getenv("PG_HOST", "127.0.0.1"),
-        "PORT": os.getenv("PG_PORT", "5433"),
+        "NAME": os.getenv("ETF_DB_NAME", "postgres"),
+        "USER": os.getenv("ETF_DB_USER", ""),
+        "PASSWORD": os.getenv("ETF_DB_PASSWORD", ""),
+        "HOST": os.getenv("ETF_DB_HOST", ""),
+        "PORT": os.getenv("ETF_DB_PORT", "5432"),
     },
 }
+
+# 資料庫 routing
+DATABASE_ROUTERS = ["config.db_routers.EtfRouter"]
 
 # Password validation
 # https://docs.djangoproject.com/en/6.0/ref/settings/#auth-password-validators
