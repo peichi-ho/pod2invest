@@ -18,6 +18,8 @@ from django.contrib import admin
 from django.urls import path, include
 
 urlpatterns = [
-    path('admin/', admin.site.urls), path("api/glossary/", include("apps.glossary.urls")),
-    path("api/summaries/", include("apps.summaries.urls"))
+    path('admin/', admin.site.urls),
+    path("api/glossary/", include("apps.glossary.urls")),
+    path("api/summaries/", include("apps.summaries.urls")),
+    path("api/mindmap/", include("apps.mindmap.urls")),
 ]
