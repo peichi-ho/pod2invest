@@ -12,6 +12,18 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 
 import sys
 from pathlib import Path
+import os
+from dotenv import load_dotenv
+
+# 載入 .env 檔案
+load_dotenv()
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+sys.path.append(str(BASE_DIR / "apps"))
+
+# 改寫 SECRET_KEY 與 DEBUG
+SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'django-insecure-預設字串請在.env中覆蓋')
+DEBUG = os.getenv('DJANGO_DEBUG', 'True') == 'True'
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.append(str(BASE_DIR / "apps"))
@@ -33,8 +45,15 @@ ALLOWED_HOSTS = []
 # Application definition
 
 INSTALLED_APPS = [
-    'django.contrib.admin', 'django.contrib.auth', 'django.contrib.contenttypes', 'django.contrib.sessions',
-    'django.contrib.messages', 'django.contrib.staticfiles', "apps.glossary.apps.GlossaryConfig", 'rest_framework'
+    'django.contrib.admin', 
+    'django.contrib.auth', 
+    'django.contrib.contenttypes', 
+    'django.contrib.sessions',
+    'django.contrib.messages', 
+    'django.contrib.staticfiles', 
+    "apps.glossary.apps.GlossaryConfig", 
+    "apps.podcasts",  
+    'rest_framework'
 ]
 
 MIDDLEWARE = [

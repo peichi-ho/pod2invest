@@ -3,16 +3,13 @@ from __future__ import annotations
 import json
 import os
 import re
-import sys
+import uuid
 import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
-from dotenv import load_dotenv
 
 import requests
-import feedparser
-from openai import OpenAI
 import google.generativeai as genai
 
 # 配置資訊與常數定義
@@ -34,7 +31,8 @@ def fix_content_with_gemini(batch_text: str, gemini_key: str) -> str:
     執行重點：同音錯字修正、財經專業術語校正、保持 SRT 格式結構。
     """
     genai.configure(api_key=gemini_key)
-    model = genai.GenerativeModel("gemini-1.5-flash")
+    
+    model = genai.GenerativeModel("gemini-2.5-flash")
 
     prompt = f"""
     任務：專業逐字稿校對。
@@ -197,85 +195,136 @@ def transcribe_and_fix(
     if temp_srt_path.exists():
         os.remove(temp_srt_path)
 
-
-# --- 程式進入點 ---
-
-
-def main():
-    # 載入環境變數檔案
-    load_dotenv()
-
-    print("=== 自動化 Podcast 轉錄與 AI 校對工具 ===\n")
-
-    # 優先讀取環境變數，缺項則提示輸入
-    openai_key = os.getenv("OPENAI_API_KEY")
-    gemini_key = os.getenv("GEMINI_API_KEY")
-
-    if not openai_key:
-        openai_key = input_nonempty("請輸入 OPENAI_API_KEY: ")
-    if not gemini_key:
-        gemini_key = input_nonempty("請輸入 GEMINI_API_KEY: ")
-
-    os.environ["OPENAI_API_KEY"] = openai_key
-
-    # 運行參數設定
-    podcast_name = input_nonempty("請輸入 Podcast 名稱: ")
-    n = input_int("處理集數 N", default=1)
-    start = input_int("起始集數 (0 代表最新集)", default=0)
-    language = input_optional("語言代碼 (如 zh/en，預設為自動偵測): ")
-
-    # 設定輸出目錄（基於專案根目錄）
-    script_path = Path(__file__).resolve()
-    project_root = (
-        script_path.parent.parent.parent
-    )  # 根據 apps/podcasts/ 結構回推根目錄
-    outdir = project_root / "out"
-    outdir.mkdir(parents=True, exist_ok=True)
-
-    # 執行檢索與下載
-    show = itunes_search_first_podcast(podcast_name)
-    feed_url = show.get("feedUrl")
-    show_name = show.get("collectionName", podcast_name)
-    feed = feedparser.parse(feed_url)
-    entries = list(feed.entries or [])
-    selected = entries[start : start + n]
-
-    safe_show = sanitize_filename(show_name)
-    show_dir = outdir / safe_show
-    show_dir.mkdir(parents=True, exist_ok=True)
-
-    print(f"\n[目標頻道] {show_name}")
-    print(f"[輸出路徑] {show_dir}\n")
-
-    # 批次執行轉錄任務
-    for i, entry in enumerate(selected):
-        ep_index = start + i
-        title = entry.get("title", f"episode_{ep_index}")
-        safe_title = sanitize_filename(title)
-
-        try:
-            url = extract_enclosure_url(entry)
-            audio_path = (
-                show_dir
-                / f"{safe_title}{os.path.splitext(url.split('?')[0])[1] or '.audio'}"
-            )
-            sub_path = show_dir / f"{safe_title}.srt"
-
-            if not audio_path.exists():
-                print(f"下載音檔: {title}")
-                download_file(url, audio_path)
-
-            transcribe_and_fix(audio_path, sub_path, language, gemini_key)
-            print(f"任務成功：{sub_path.name}")
-
-        except Exception as e:
-            print(f"任務失敗：{title} | 原因：{e}")
-
-    print("\n[任務結束] 已完成所有指定集數處理。")
+        # --- 只校對現有 SRT（不重跑 Whisper） ---
 
 
-if __name__ == "__main__":
+def fix_existing_srt_only(
+    srt_path: Path, gemini_key: str
+) -> None:
+    """
+    當 SRT 已經存在時，只重新執行 Gemini 語意校對並覆蓋檔案
+    """
+    print(f"   [Smart Skip] 偵測到 SRT 已存在，跳過 Whisper 轉錄，直接校對...")
+
+    with open(srt_path, "r", encoding="utf-8") as f:
+        srt_content = f.read()
+
+    srt_blocks = srt_content.strip().split("\n\n")
+    batch_size = 50
+    final_srt_blocks = []
+
+    print(f"   [Step 2] 開始 Gemini AI 語意校對（共 {len(srt_blocks)} 區塊）...")
+    for i in range(0, len(srt_blocks), batch_size):
+        batch = "\n\n".join(srt_blocks[i : i + batch_size])
+        print(
+            f"      處理進度：校正第 {i+1} ~ {min(i + batch_size, len(srt_blocks))} 句..."
+        )
+        fixed_batch = fix_content_with_gemini(batch, gemini_key)
+        final_srt_blocks.append(fixed_batch)
+
+    # 覆蓋存檔
+    with open(srt_path, "w", encoding="utf-8") as f:
+        f.write("\n\n".join(final_srt_blocks))
+
+    print(f"   [✓] Gemini 校對完成，已覆蓋 {srt_path.name}")
+
+    
+    
+# --- Supabase 上傳與資料庫寫入（安全版：強制產生純 ASCII 路徑） ---
+
+def upload_to_supabase_and_insert_db(
+    audio_path: Path,
+    srt_path: Path,
+    show_name: str,
+    episode_title: str,
+    supabase_url: str,
+    supabase_key: str,
+    bucket_name: str,
+) -> str:
+    """
+    1. 上傳音檔到 Storage（使用安全路徑，避免中文/特殊字符）
+    2. 取得公開 URL
+    3. 讀取 SRT 內容
+    4. 寫入 podcasts_metadata 資料表
+    回傳 audio_url
+    """
     try:
-        main()
-    except KeyboardInterrupt:
-        sys.exit(130)
+        from supabase import create_client, Client
+    except ImportError:
+        raise ImportError("請先 pip install supabase")
+
+    supabase: Client = create_client(supabase_url, supabase_key)
+
+    import re
+    import uuid
+
+    # 產生完全安全的路徑部分（只保留 ASCII 英數字、底線、連字號、點）
+    def safe_path_part(text: str, max_len: int = 80) -> str:
+        if not text:
+            return f"unnamed_{uuid.uuid4().hex[:8]}"
+
+        from pypinyin import pinyin, Style
+
+        # 先轉成拼音（不帶聲調，方便閱讀）
+        pinyin_list = pinyin(text, style=Style.NORMAL, heteronym=False)
+        pinyin_text = ''.join(item[0] for item in pinyin_list)
+
+        # 再清理不安全字符
+        pinyin_text = re.sub(r'[^\w\s.-]', '_', pinyin_text)
+        pinyin_text = re.sub(r'\s+', '_', pinyin_text.strip())
+
+        # 避免太長
+        result = pinyin_text[:max_len]
+        return result or f"unnamed_{uuid.uuid4().hex[:8]}"
+
+    safe_show = safe_path_part(show_name)
+    safe_episode = safe_path_part(episode_title)
+
+    # 加唯一後綴避免同名衝突（UUID 前 8 碼）
+    unique_suffix = uuid.uuid4().hex[:8]
+    storage_path = f"{safe_show}/{safe_episode}_{unique_suffix}{audio_path.suffix}"
+
+    print(f"   [Supabase] 正在上傳到安全路徑：{storage_path}")
+
+        # 上傳音檔（允許覆蓋）
+    with open(audio_path, "rb") as audio_file:
+        try:
+            upload_res = supabase.storage.from_(bucket_name).upload(
+                path=storage_path,
+                file=audio_file,
+                file_options={"upsert": "true"}
+            )
+
+            # debug 用（之後可移除）
+            print(f"   [DEBUG] UploadResponse: {upload_res}")
+
+            # 成功上傳：沒有拋出例外 + 回傳 UploadResponse 物件 → 就成功
+            print(f"   [Supabase] 上傳成功！檔案路徑：{upload_res.full_path or upload_res.path}")
+
+        except Exception as upload_err:
+            # 只有真的失敗才會進這裡
+            print(f"   [DEBUG - Real Upload Error] {repr(upload_err)}")
+            raise Exception(f"上傳失敗: {str(upload_err)}")
+        
+    # 取得公開 URL
+    audio_url = supabase.storage.from_(bucket_name).get_public_url(storage_path)
+
+    # 讀取 SRT 完整內容
+    with open(srt_path, "r", encoding="utf-8") as f:
+        srt_content = f.read().strip()
+
+    # 插入資料庫（show_name 和 episode_title 保持原始中文，方便搜尋）
+    data = {
+        "show_name": show_name or "未知頻道",
+        "episode_title": episode_title or audio_path.stem,
+        "audio_url": audio_url,
+        "srt_content": srt_content,
+    }
+
+    insert_res = supabase.table("podcasts_metadata").insert(data).execute()
+
+    if hasattr(insert_res, "error") and insert_res.error:
+        raise Exception(f"資料庫插入失敗: {insert_res.error}")
+
+    print(f"   [Supabase] 已成功上傳音檔 & 寫入資料庫 → {audio_url}")
+    return audio_url

@@ -19,6 +19,10 @@ openai==2.24.0
 # 運算引擎 (跑 Whisper)
 torch==2.10.0
 numpy==2.4.2
+# Supabase 資料庫與儲存桶連線
+supabase==2.4.3  
+# 用於處理安全檔名的拼音轉換
+pypinyin==0.51.0 
 
 # --- (Dependencies) ---
 annotated-types==0.7.0
