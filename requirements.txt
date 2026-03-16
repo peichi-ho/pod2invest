@@ -14,8 +14,10 @@ sqlalchemy
 
 # --- AI / LLM ---
 google-generativeai==0.8.3
-openai==2.24.0
-
+# --- etf 比較 ---
+psycopg2-binary
+pandas
+sqlalchemy
 # --- Podcast processing ---
 feedparser==6.0.12
 requests==2.32.5

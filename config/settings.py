@@ -9,7 +9,6 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
 sys.path.append(str(BASE_DIR / "apps"))
@@ -21,15 +20,9 @@ DEBUG = os.getenv("DJANGO_DEBUG", "1") == "1"
 ALLOWED_HOSTS = os.getenv("DJANGO_ALLOWED_HOSTS", "127.0.0.1,localhost").split(",")
 
 INSTALLED_APPS = [
-    "django.contrib.admin",
-    "django.contrib.auth",
-    "django.contrib.contenttypes",
-    "django.contrib.sessions",
-    "django.contrib.messages",
-    "django.contrib.staticfiles",
-    "rest_framework",
-    "apps.glossary.apps.GlossaryConfig",
-    "apps.summaries",
+    'django.contrib.admin', 'django.contrib.auth', 'django.contrib.contenttypes', 'django.contrib.sessions',
+    'django.contrib.messages', 'django.contrib.staticfiles', "apps.glossary.apps.GlossaryConfig", 'rest_framework',
+    'apps.summaries', 'apps.etf.apps.EtfConfig'
 ]
 
 MIDDLEWARE = [
@@ -62,19 +55,35 @@ TEMPLATES = [
 WSGI_APPLICATION = "config.wsgi.application"
 
 DATABASES = {
-    "default": dj_database_url.parse(
+    "default": {dj_database_url.parse(
         os.getenv("DATABASE_URL"),
         conn_max_age=600,
         ssl_require=True,
-    )
+    )},
+    # 新增：ETF 專用 PostgreSQL
+    "etfdb": {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": os.getenv("ETF_DB_NAME", "postgres"),
+        "USER": os.getenv("ETF_DB_USER", ""),
+        "PASSWORD": os.getenv("ETF_DB_PASSWORD", ""),
+        "HOST": os.getenv("ETF_DB_HOST", ""),
+        "PORT": os.getenv("ETF_DB_PORT", "5432"),
+    },
 }
 
-
 AUTH_PASSWORD_VALIDATORS = [
-    {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
-    {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
-    {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
-    {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
+    {
+        "NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"
+    },
+    {
+        "NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"
+    },
+    {
+        "NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"
+    },
+    {
+        "NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"
+    },
 ]
 
 LANGUAGE_CODE = 'en-us'
