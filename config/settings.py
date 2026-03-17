@@ -4,8 +4,8 @@ Django settings for config project.
 
 import os
 import sys
-import dj_database_url
 from pathlib import Path
+import dj_database_url
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -54,11 +54,17 @@ TEMPLATES = [
 WSGI_APPLICATION = "config.wsgi.application"
 
 DATABASES = {
-    "default": {dj_database_url.parse(
-        os.getenv("DATABASE_URL"),
-        conn_max_age=600,
-        ssl_require=True,
-    )},
+     "default": {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": os.getenv("GLOSSARY_DB_NAME", "postgres"),
+        "USER": os.getenv("GLOSSARY_DB_USER", ""),
+        "PASSWORD": os.getenv("GLOSSARY_DB_PASSWORD", ""),
+        "HOST": os.getenv("GLOSSARY_DB_HOST", ""),
+        "PORT": os.getenv("GLOSSARY_DB_PORT", "5432"),
+        "OPTIONS": {
+            "sslmode": "require",
+        },
+    },
     # 新增：ETF 專用 PostgreSQL
     "etfdb": {
         "ENGINE": "django.db.backends.postgresql",
