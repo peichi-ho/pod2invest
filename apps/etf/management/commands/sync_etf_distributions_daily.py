@@ -32,13 +32,22 @@ from psycopg2.extras import execute_values
 # ==============================
 # ENV
 # ==============================
+from pathlib import Path
+from dotenv import load_dotenv
+
+BASE_DIR = Path(__file__).resolve().parents[3]
+load_dotenv(BASE_DIR / ".env")
+
 EXCHANGES = [x.strip() for x in os.getenv("EXCHANGES", "TWSE,TPEx").split(",") if x.strip()]
 
-PG_HOST = os.getenv("PG_HOST", "127.0.0.1")
-PG_PORT = int(os.getenv("PG_PORT", "5433"))
-PG_DB   = os.getenv("PG_DB", "etfdb")
-PG_USER = os.getenv("PG_USER", "etf")
-PG_PASS = os.getenv("PG_PASS", "etfpass")
+PG_HOST = os.getenv("ETF_DB_HOST", "")
+PG_PORT = int(os.getenv("ETF_DB_PORT", "5432"))
+PG_DB   = os.getenv("ETF_DB_NAME", "postgres")
+PG_USER = os.getenv("ETF_DB_USER", "")
+PG_PASS = os.getenv("ETF_DB_PASSWORD", "")
+
+if not all([PG_HOST, PG_DB, PG_USER, PG_PASS]):
+    raise RuntimeError("ETF database environment variables are not fully set.")
 
 # ==============================
 # 年份控制（最近 5 年）

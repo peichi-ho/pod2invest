@@ -3,7 +3,7 @@
 from rest_framework import serializers
 
 class ETFCompareQuerySerializer(serializers.Serializer):
-    # 例如：?symbols=0050,00878,00919
+    # e.g. ?symbols=0050,00878,00919
     symbols = serializers.CharField()
 
     def validate_symbols(self, v: str):
