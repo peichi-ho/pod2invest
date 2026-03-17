@@ -23,4 +23,5 @@ urlpatterns = [
     path("api/summaries/", include("apps.summaries.urls")),
     path("api/mindmap/", include("apps.mindmap.urls")),
     path("api/etf/", include("apps.etf.api.urls")),
+    path("api/ai/", include("apps.ai_assistant.urls")),
 ]
