@@ -6,7 +6,6 @@ import os
 import sys
 import dj_database_url
 from pathlib import Path
-
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -15,14 +14,14 @@ sys.path.append(str(BASE_DIR / "apps"))
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 
-SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "django-dev-secret-key")
-DEBUG = os.getenv("DJANGO_DEBUG", "1") == "1"
+# 改寫 SECRET_KEY 與 DEBUG
+SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'django-insecure-預設字串請在.env中覆蓋')
+DEBUG = os.getenv('DJANGO_DEBUG', 'True') == 'True'
 ALLOWED_HOSTS = os.getenv("DJANGO_ALLOWED_HOSTS", "127.0.0.1,localhost").split(",")
 
 INSTALLED_APPS = [
     'django.contrib.admin', 'django.contrib.auth', 'django.contrib.contenttypes', 'django.contrib.sessions',
-    'django.contrib.messages', 'django.contrib.staticfiles', "apps.glossary.apps.GlossaryConfig", 'rest_framework',
-    'apps.summaries', 'apps.etf.apps.EtfConfig'
+    'django.contrib.messages', 'django.contrib.staticfiles', "apps.glossary.apps.GlossaryConfig", 'rest_framework','apps.summaries', 'apps.etf.apps.EtfConfig','apps.podcasts', 
 ]
 
 MIDDLEWARE = [
