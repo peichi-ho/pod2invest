@@ -5,6 +5,6 @@ db.sqlite3
 .env
 media/
 data/
-
+.DS_Store
 # 忽略自動產生的音檔與逐字稿
 out/
