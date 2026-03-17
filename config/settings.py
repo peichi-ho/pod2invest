@@ -12,7 +12,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
 sys.path.append(str(BASE_DIR / "apps"))
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+
 
 # 改寫 SECRET_KEY 與 DEBUG
 SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'django-insecure-預設字串請在.env中覆蓋')
@@ -21,7 +21,7 @@ ALLOWED_HOSTS = os.getenv("DJANGO_ALLOWED_HOSTS", "127.0.0.1,localhost").split("
 
 # Gemini / AI Assistant settings
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
 
 # 股票資料快取秒數（避免 yfinance 太慢）
