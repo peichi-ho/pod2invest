@@ -83,6 +83,8 @@ DATABASES = {
         "PORT": os.getenv("ETF_DB_PORT", "5432"),
     },
 }
+# 資料庫 routing
+DATABASE_ROUTERS = ["config.db_routers.EtfRouter"]
 
 AUTH_PASSWORD_VALIDATORS = [
     {
