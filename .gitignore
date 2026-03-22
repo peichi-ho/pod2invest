@@ -7,5 +7,6 @@ media/
 data/
 .DS_Store
 apps/mindmap/services/test_data/
+.claude/
 # 忽略自動產生的音檔與逐字稿
 out/

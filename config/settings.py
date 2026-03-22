@@ -5,7 +5,6 @@ Django settings for config project.
 import os
 import sys
 from pathlib import Path
-import dj_database_url
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -28,9 +27,21 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
 STOCK_CACHE_TTL_SECONDS = int(os.getenv("STOCK_CACHE_TTL_SECONDS", "60"))
 
 INSTALLED_APPS = [
-    'django.contrib.admin', 'django.contrib.auth', 'django.contrib.contenttypes', 'django.contrib.sessions',
-    'django.contrib.messages', 'django.contrib.staticfiles', "apps.glossary.apps.GlossaryConfig", 'rest_framework','apps.summaries', 'apps.etf.apps.EtfConfig','apps.podcasts', 
+    'django.contrib.admin',
+    'django.contrib.auth',
+    'django.contrib.contenttypes',
+    'django.contrib.sessions',
+    'django.contrib.messages',
+    'django.contrib.staticfiles',
+    'rest_framework',
+    'apps.glossary.apps.GlossaryConfig',
+    'apps.summaries',
+    'apps.etf.apps.EtfConfig',
+    'apps.podcasts',
+    'apps.mindmap.apps.MindmapConfig',
+    'apps.ai_assistant.apps.AiAssistantConfig',
 ]
+
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
