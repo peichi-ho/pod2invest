@@ -5,7 +5,6 @@ Django settings for config project.
 import os
 import sys
 from pathlib import Path
-import dj_database_url
 from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -28,9 +27,21 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
 STOCK_CACHE_TTL_SECONDS = int(os.getenv("STOCK_CACHE_TTL_SECONDS", "60"))
 
 INSTALLED_APPS = [
-    'django.contrib.admin', 'django.contrib.auth', 'django.contrib.contenttypes', 'django.contrib.sessions',
-    'django.contrib.messages', 'django.contrib.staticfiles', "apps.glossary.apps.GlossaryConfig", 'rest_framework','apps.summaries', 'apps.etf.apps.EtfConfig','apps.podcasts', 
+    'django.contrib.admin',
+    'django.contrib.auth',
+    'django.contrib.contenttypes',
+    'django.contrib.sessions',
+    'django.contrib.messages',
+    'django.contrib.staticfiles',
+    'rest_framework',
+    'apps.glossary.apps.GlossaryConfig',
+    'apps.summaries.apps.SummariesConfig',
+    'apps.etf.apps.EtfConfig',
+    'apps.podcasts.apps.PodcastsConfig',
+    'apps.mindmap.apps.MindmapConfig',
+    'apps.ai_assistant.apps.AiAssistantConfig',
 ]
+
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
@@ -82,9 +93,24 @@ DATABASES = {
         "HOST": os.getenv("ETF_DB_HOST", ""),
         "PORT": os.getenv("ETF_DB_PORT", "5432"),
     },
+    "summariesdb": {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": os.getenv("SUMMARIES_DB_NAME", "postgres"),
+        "USER": os.getenv("SUMMARIES_DB_USER", ""),
+        "PASSWORD": os.getenv("SUMMARIES_DB_PASSWORD", ""),
+        "HOST": os.getenv("SUMMARIES_DB_HOST", ""),
+        "PORT": os.getenv("SUMMARIES_DB_PORT", "5432"),
+        "OPTIONS": {
+            "sslmode": "require",
+        },
+    },
 }
 # 資料庫 routing
-DATABASE_ROUTERS = ["config.db_routers.EtfRouter"]
+DATABASE_ROUTERS = [
+    "config.db_routers.EtfRouter",
+    "config.db_routers.SummariesRouter",
+]
+
 
 AUTH_PASSWORD_VALIDATORS = [
     {

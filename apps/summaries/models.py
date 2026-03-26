@@ -2,18 +2,22 @@ from django.db import models
 
 
 class SummaryRecord(models.Model):
-    MODE_CHOICES = [
-        ("novice", "Novice"),
-        ("pro", "Pro"),
-        ("both", "Both"),
-    ]
+    mode = models.CharField(max_length=20)
+    model = models.CharField(max_length=100)
+    source_filename = models.CharField(max_length=255, blank=True)
 
-    mode = models.CharField(max_length=10, choices=MODE_CHOICES)
-    model_name = models.CharField(max_length=100, blank=True, default="")
-    source_filename = models.CharField(max_length=255, blank=True, null=True)
-    srt_text = models.TextField(blank=True, default="")
-    result_json = models.JSONField()
+    one_sentence_summary = models.TextField(blank=True)
+    investment_takeaways = models.JSONField(default=dict, blank=True)
+    tags = models.JSONField(default=list, blank=True)
+    entities = models.JSONField(default=dict, blank=True)
+    arguments = models.JSONField(default=list, blank=True)
+    outlook_calls = models.JSONField(default=list, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
 
+    class Meta:
+        db_table = "summaries_summaryrecord"
+        app_label = "summaries"
+
     def __str__(self):
-        return f"{self.id} - {self.mode} - {self.created_at:%Y-%m-%d %H:%M:%S}"
+        return f"{self.id} - {self.mode} - {self.source_filename}"

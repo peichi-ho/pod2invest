@@ -3,9 +3,9 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 
-from .models import SummaryRecord
 from .serializers import SummarizeRequestSerializer
 from .services.engine import summarize_from_srt_text
+from .models import SummaryRecord
 
 
 class SummarizeAPIView(APIView):
@@ -23,7 +23,7 @@ class SummarizeAPIView(APIView):
 
         srt_text = data.get("srt_text", "")
         srt_file = data.get("srt_file")
-        source_filename = None
+        source_filename = ""
 
         if srt_file:
             source_filename = srt_file.name
@@ -39,26 +39,23 @@ class SummarizeAPIView(APIView):
                 srt_text=srt_text,
                 mode=data["mode"],
                 model=data.get("model", "models/gemini-2.5-flash-lite"),
-                chunk_threshold_chars=data.get("chunk_threshold_chars", 20000),
+                chunk_threshold_chars=data.get("chunk_threshold_chars", 30000),
                 debug_chars=data.get("debug_chars", 0),
             )
 
-            saved_record = SummaryRecord.objects.create(
+            SummaryRecord.objects.using("summariesdb").create(
                 mode=data["mode"],
-                model_name=data.get("model", "models/gemini-2.5-flash-lite"),
+                model=data.get("model", "models/gemini-2.5-flash-lite"),
                 source_filename=source_filename,
-                srt_text=srt_text,
-                result_json=result,
+                one_sentence_summary=result.get("one_sentence_summary", ""),
+                investment_takeaways=result.get("investment_takeaways", {}),
+                tags=result.get("tags", []),
+                entities=result.get("entities", {}),
+                arguments=result.get("arguments", []),
+                outlook_calls=result.get("outlook_calls", []),
             )
 
-            return Response(
-                {
-                    "message": "摘要成功並已存入資料庫",
-                    "summary_id": saved_record.id,
-                    "result": result,
-                },
-                status=status.HTTP_200_OK,
-            )
+            return Response(result, status=status.HTTP_200_OK)
 
         except Exception as e:
             return Response(

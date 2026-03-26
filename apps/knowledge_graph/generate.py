@@ -1,8 +1,11 @@
 import sqlite3
 import json
 import re
+import os
 from datetime import datetime
-import google.generativeai as genai
+from xmlrpc import client
+from google import genai
+from django.conf import settings
 
 # ==========================================
 # 參數與全域設定
@@ -10,9 +13,14 @@ import google.generativeai as genai
 DB_PATH = "podcast_graph.sqlite3"
 
 # 請替換為你的 Gemini API Key
-GOOGLE_API_KEY = "AIzaSyAqnpsSllMo8ncEpkjHkOauWSUqgrbhe_Q" 
-genai.configure(api_key=GOOGLE_API_KEY)
-model = genai.GenerativeModel('gemini-3-flash-preview') # 替換成你使用的模型版本
+_client = None
+
+def get_model():
+    global _client
+    if _client is None:
+        api_key = getattr(settings, "GEMINI_API_KEY", "").strip() or os.getenv("GEMINI_API_KEY", "")
+        _client = genai.Client(api_key=api_key)
+    return _client
 
 # ==========================================
 # 模組 1: 資料庫建置與初始化
@@ -79,7 +87,10 @@ def extract_graph_from_summary(podcast_summary: str) -> str:
     # 將 Prompt 與摘要合併
     request_content = f"{prompt_step1}\n\n【Podcast 摘要內容】：\n{podcast_summary}"
     
-    response = model.generate_content(request_content)
+    client = get_model()
+    model_name = getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash-lite")
+    response = client.models.generate_content(model=model_name, contents=request_content)
+
     output_text = response.text
 
     # 使用 Regex 抓取 JSON

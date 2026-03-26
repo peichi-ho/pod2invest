@@ -24,4 +24,6 @@ urlpatterns = [
     path("api/mindmap/", include("apps.mindmap.urls")),
     path("api/etf/", include("apps.etf.api.urls")),
     path("api/ai/", include("apps.ai_assistant.urls")),
+    path("api/knowledge-graph/", include("apps.knowledge_graph.urls")),
+    
 ]
