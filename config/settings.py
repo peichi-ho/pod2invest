@@ -35,9 +35,9 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'rest_framework',
     'apps.glossary.apps.GlossaryConfig',
-    'apps.summaries',
+    'apps.summaries.apps.SummariesConfig',
     'apps.etf.apps.EtfConfig',
-    'apps.podcasts',
+    'apps.podcasts.apps.PodcastsConfig',
     'apps.mindmap.apps.MindmapConfig',
     'apps.ai_assistant.apps.AiAssistantConfig',
 ]
@@ -93,9 +93,24 @@ DATABASES = {
         "HOST": os.getenv("ETF_DB_HOST", ""),
         "PORT": os.getenv("ETF_DB_PORT", "5432"),
     },
+    "summariesdb": {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": os.getenv("SUMMARIES_DB_NAME", "postgres"),
+        "USER": os.getenv("SUMMARIES_DB_USER", ""),
+        "PASSWORD": os.getenv("SUMMARIES_DB_PASSWORD", ""),
+        "HOST": os.getenv("SUMMARIES_DB_HOST", ""),
+        "PORT": os.getenv("SUMMARIES_DB_PORT", "5432"),
+        "OPTIONS": {
+            "sslmode": "require",
+        },
+    },
 }
 # 資料庫 routing
-DATABASE_ROUTERS = ["config.db_routers.EtfRouter"]
+DATABASE_ROUTERS = [
+    "config.db_routers.EtfRouter",
+    "config.db_routers.SummariesRouter",
+]
+
 
 AUTH_PASSWORD_VALIDATORS = [
     {
