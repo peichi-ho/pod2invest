@@ -104,11 +104,20 @@ DATABASES = {
             "sslmode": "require",
         },
     },
+    "podcasts": {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": os.getenv("PODCASTS_DB_NAME"),
+        "USER": os.getenv("PODCASTS_DB_USER"),
+        "PASSWORD": os.getenv("PODCASTS_DB_PASSWORD"),
+        "HOST": os.getenv("PODCASTS_DB_HOST"),
+        "PORT": os.getenv("PODCASTS_DB_PORT", "5432"),
+    },
 }
 # 資料庫 routing
 DATABASE_ROUTERS = [
     "config.db_routers.EtfRouter",
     "config.db_routers.SummariesRouter",
+    "config.db_routers.PodcastsRouter",
 ]
 
 

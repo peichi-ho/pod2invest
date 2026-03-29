@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import os
 import sys
-import feedparser                    
+import feedparser
 from pathlib import Path
-
 from dotenv import load_dotenv
 
-# 從 service 引入所有需要的函式
-# 從 service 引入所有需要的函式
+load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
+
 from service import (
     input_nonempty,
     input_int,
@@ -18,8 +17,8 @@ from service import (
     extract_enclosure_url,
     download_file,
     transcribe_and_fix,
-    fix_existing_srt_only,     
-    upload_to_supabase_and_insert_db,
+    fix_existing_srt_only,
+    insert_to_db,
 )
 
 
@@ -27,49 +26,30 @@ from service import (
 
 
 def main():
-    # 載入環境變數檔案
-    load_dotenv()
-
     print("=== 自動化 Podcast 轉錄與 AI 校對工具 ===\n")
 
-    # 只檢查 Gemini 金鑰
     gemini_key = os.getenv("GEMINI_API_KEY")
     if not gemini_key:
         gemini_key = input_nonempty("請輸入 GEMINI_API_KEY: ")
     else:
         print(f"   [✓] 已從 .env 讀取 GEMINI_API_KEY")
 
-    # ── 新增這段：讀取 Supabase 變數 ──
-    supabase_url = os.getenv("SUPABASE_URL")
-    supabase_key = os.getenv("SUPABASE_KEY")
-    bucket_name  = os.getenv("SUPABASE_BUCKET")
-    supabase_enabled = bool(supabase_url and supabase_key and bucket_name)
+    print("   [✓] 使用 Django ORM 寫入資料庫")
 
-    if supabase_enabled:
-        print(f"   [✓] 已從 .env 讀取 Supabase 設定 (Bucket: {bucket_name})")
-    else:
-        print("   [⚠️] .env 缺少 Supabase 設定，將僅儲存本地檔案")
-
-    # 運行參數設定
     podcast_name = input_nonempty("請輸入 Podcast 名稱: ")
     n = input_int("處理集數 N", default=1)
     start = input_int("起始集數 (0 代表最新集)", default=0)
     language = input_optional("語言代碼 (如 zh/en，預設為自動偵測): ")
-    # ... 後面原本的程式碼不變 ...
 
-    # 設定輸出目錄（基於專案根目錄）
     script_path = Path(__file__).resolve()
-    project_root = (
-        script_path.parent.parent.parent
-    )  # 根據 apps/podcasts/ 結構回推根目錄
+    project_root = script_path.parent.parent.parent
     outdir = project_root / "out"
     outdir.mkdir(parents=True, exist_ok=True)
 
-    # 執行檢索與下載
     show = itunes_search_first_podcast(podcast_name)
     feed_url = show.get("feedUrl")
     show_name = show.get("collectionName", podcast_name)
-    feed = feedparser.parse(feed_url)          # ← 現在可以正常使用了
+    feed = feedparser.parse(feed_url)
     entries = list(feed.entries or [])
     selected = entries[start : start + n]
 
@@ -80,7 +60,6 @@ def main():
     print(f"\n[目標頻道] {show_name}")
     print(f"[輸出路徑] {show_dir}\n")
 
-        # 批次執行轉錄 + 上傳任務
     for i, entry in enumerate(selected):
         ep_index = start + i
         title = entry.get("title", f"episode_{ep_index}")
@@ -99,7 +78,7 @@ def main():
                 print(f"下載音檔: {title}")
                 download_file(url, audio_path)
 
-            # 轉錄 + 校對（使用智慧跳過）
+            # 轉錄 + 校對
             if sub_path.exists():
                 print(f"   [Smart Skip] SRT 已存在，直接校對...")
                 fix_existing_srt_only(sub_path, gemini_key)
@@ -108,26 +87,22 @@ def main():
 
             print(f"任務成功：{sub_path.name}")
 
-            # === 上傳到 Supabase ===
-            if supabase_enabled:
-                try:
-                    audio_url = upload_to_supabase_and_insert_db(
-                        audio_path=audio_path,
-                        srt_path=sub_path,
-                        show_name=show_name,
-                        episode_title=title,  # 用原始標題
-                        supabase_url=supabase_url,
-                        supabase_key=supabase_key,
-                        bucket_name=bucket_name,
-                    )
-                    # 可選：印出 URL 讓你確認
-                except Exception as sup_err:
-                    print(f"   [Supabase 錯誤] 上傳/寫入失敗（本地檔案已完成）: {sup_err}")
-            else:
-                print("   [Supabase 已停用] 只儲存本地")
+            # 寫入資料庫（使用 RSS 原始音檔 URL）
+            try:
+                insert_to_db(
+                    audio_url=url,
+                    srt_path=sub_path,
+                    show_name=show_name,
+                    episode_title=title,
+                )
+            except Exception as db_err:
+                print(f"   [資料庫錯誤] {db_err}")
 
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             print(f"任務失敗：{title} | 原因：{e}")
+
 
 if __name__ == "__main__":
     try:

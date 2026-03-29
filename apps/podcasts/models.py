@@ -9,6 +9,8 @@ class PodcastMetadata(models.Model):
 
     class Meta:
         db_table = 'podcasts_metadata' # 確保跟 Supabase 的資料表名稱一致
+        app_label = 'podcasts'
+
 
     def __str__(self):
         return f"{self.show_name} - {self.episode_title}"
