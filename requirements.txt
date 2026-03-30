@@ -7,13 +7,13 @@ tzdata==2025.1
 python-dotenv==1.0.1
 
 # --- Database ---
-psycopg[binary]==3.2.9
+psycopg[binary]>=3.2.10
 psycopg2-binary
 pandas
 sqlalchemy
 
 # --- AI / LLM ---
-google-generativeai==0.8.3
+google-generativeai
 
 # --- Podcast processing ---
 feedparser==6.0.12
@@ -31,9 +31,9 @@ cffi==2.0.0
 charset-normalizer==3.4.4
 colorama==0.4.6
 cryptography==46.0.5
-google-ai-generativelanguage==0.6.10
-google-api-core==2.30.0
-google-auth==2.48.0
+google-ai-generativelanguage
+google-api-core
+google-auth
 idna==3.11
 pydantic==2.12.5
 tqdm==4.67.3

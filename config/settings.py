@@ -40,6 +40,7 @@ INSTALLED_APPS = [
     'apps.podcasts.apps.PodcastsConfig',
     'apps.mindmap.apps.MindmapConfig',
     'apps.ai_assistant.apps.AiAssistantConfig',
+    'apps.knowledge_graph.apps.KnowledgeGraphConfig',
 ]
 
 
@@ -112,12 +113,25 @@ DATABASES = {
         "HOST": os.getenv("PODCASTS_DB_HOST"),
         "PORT": os.getenv("PODCASTS_DB_PORT", "5432"),
     },
+    "knowledge_graphdb": {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": os.getenv("KG_DB_NAME"),
+        "USER": os.getenv("KG_DB_USER"),
+        "PASSWORD": os.getenv("KG_DB_PASSWORD"),
+        "HOST": os.getenv("KG_DB_HOST"),
+        "PORT": os.getenv("KG_DB_PORT", "5432"),
+        "OPTIONS": {
+            "sslmode": "require",
+        },
+    },
+
 }
 # 資料庫 routing
 DATABASE_ROUTERS = [
     "config.db_routers.EtfRouter",
     "config.db_routers.SummariesRouter",
     "config.db_routers.PodcastsRouter",
+    "config.db_routers.KnowledgeGraphRouter"
 ]
 
 
