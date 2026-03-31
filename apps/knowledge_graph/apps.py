@@ -2,4 +2,4 @@ from django.apps import AppConfig
 
 
 class KnowledgeGraphConfig(AppConfig):
-    name = 'knowledge_graph'
+    name = 'apps.knowledge_graph'

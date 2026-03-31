@@ -3,261 +3,417 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI & 半導體產業鏈動態供應關係圖</title>
+    <title>產業知識圖譜</title>
     <script src="https://d3js.org/d3.v7.min.js"></script>
     <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
         body {
-            margin: 0;
-            padding: 0;
             background-color: #1a1a1a;
             color: #ffffff;
             font-family: "PingFang TC", "Microsoft JhengHei", sans-serif;
             overflow: hidden;
-        }
-
-        #chart-container {
-            width: 100vw;
             height: 100vh;
+            display: flex;
+            flex-direction: column;
         }
 
-        /* 節點樣式 */
-        .node circle {
-            stroke: #fff;
-            stroke-width: 1.5px;
+        /* ── 頂部控制列 ── */
+        #control-bar {
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            padding: 12px 20px;
+            background: rgba(10, 10, 10, 0.85);
+            border-bottom: 1px solid #333;
+            backdrop-filter: blur(6px);
+            flex-wrap: wrap;
+        }
+
+        #control-bar .ctrl-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        #control-bar label {
+            font-size: 13px;
+            color: #aaa;
+            white-space: nowrap;
+        }
+
+        #control-bar input[type="text"],
+        #control-bar input[type="date"] {
+            background: #2a2a2a;
+            border: 1px solid #444;
+            border-radius: 6px;
+            color: #eee;
+            font-size: 13px;
+            padding: 6px 10px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        #control-bar input[type="text"] { width: 160px; }
+        #control-bar input[type="date"] { width: 140px; cursor: pointer; }
+
+        #control-bar input:focus { border-color: #4db8ff; }
+
+        #control-bar input[type="date"]::-webkit-calendar-picker-indicator {
+            filter: invert(0.7);
             cursor: pointer;
-            transition: r 0.2s ease;
         }
 
-        .node text {
-            font-size: 14px;
-            font-weight: bold;
-            pointer-events: none;
-            fill: #eee;
-            text-shadow: 1px 1px 2px #000;
+        #btn-query {
+            padding: 7px 20px;
+            background: #1a6fb5;
+            border: none;
+            border-radius: 6px;
+            color: #fff;
+            font-size: 13px;
+            cursor: pointer;
+            transition: background 0.2s;
+            white-space: nowrap;
+        }
+        #btn-query:hover { background: #2585d4; }
+        #btn-query:disabled { background: #444; cursor: not-allowed; }
+
+        #status-msg {
+            font-size: 12px;
+            color: #666;
+            margin-left: auto;
+            white-space: nowrap;
         }
 
-        /* 連線樣式 */
-        .link {
-            fill: none;
-            stroke-opacity: 0.6;
-            /* stroke-width 改由程式動態設定 */
-            transition: stroke-opacity 0.3s, stroke-width 0.3s, stroke 0.3s;
+        /* ── 圖表區 ── */
+        #chart-container {
+            flex: 1;
+            position: relative;
+            overflow: hidden;
         }
 
-        /* 連線感應區 (Hitbox) */
-        .link-hitbox {
-            fill: none;
-            stroke: transparent;
-            stroke-width: 20px; /* 稍微加粗感應區方便滑鼠懸停 */
-            cursor: help;
-        }
+        #chart-container svg { display: block; }
 
-        /* Tooltip 樣式 (共用給節點與連線) */
+        /* ── Loading 遮罩 ── */
+        #loading {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(26,26,26,0.75);
+            font-size: 18px;
+            color: #888;
+            z-index: 50;
+        }
+        #loading.hidden { display: none; }
+
+        /* ── 空資料提示 ── */
+        #empty-msg {
+            position: absolute;
+            inset: 0;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+            color: #666;
+        }
+        #empty-msg.visible { display: flex; }
+
+        /* ── Tooltip ── */
         #tooltip {
             position: absolute;
             padding: 12px;
-            background: rgba(30, 30, 30, 0.95);
+            background: rgba(20, 20, 20, 0.97);
             border: 1px solid #555;
-            border-radius: 6px;
+            border-radius: 8px;
             pointer-events: none;
             font-size: 13px;
-            line-height: 1.5;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.6);
+            line-height: 1.6;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.7);
             display: none;
             z-index: 100;
-            max-width: 300px;
+            max-width: 320px;
         }
-
         .tooltip-title {
             font-weight: bold;
             color: #4db8ff;
-            margin-bottom: 8px;
-            border-bottom: 1px solid #555;
+            margin-bottom: 6px;
             padding-bottom: 5px;
-            font-size: 15px;
+            border-bottom: 1px solid #444;
+            font-size: 14px;
         }
-        
         .reason-list {
-            margin: 0;
-            padding-left: 20px;
-            color: #ddd;
+            margin: 4px 0 0 16px;
+            color: #ccc;
         }
+        .reason-list li { margin-bottom: 3px; }
 
-        /* 當滑鼠移過連線群組時的高亮效果 */
+        /* ── 連線 Hover 高亮 ── */
         .link-group:hover .link {
             stroke-opacity: 1 !important;
-            stroke: #fff !important; /* 滑過時變白高亮 */
+            stroke: #fff !important;
         }
 
-        /* 圖例樣式 */
-        .legend {
+        /* ── 圖例 ── */
+        #legend {
             position: absolute;
             bottom: 20px;
             left: 20px;
-            background: rgba(0, 0, 0, 0.6);
-            padding: 15px;
+            background: rgba(0,0,0,0.65);
+            padding: 14px 16px;
             border-radius: 8px;
-            font-size: 13px;
+            font-size: 12px;
             pointer-events: none;
-            border: 1px solid #444;
+            border: 1px solid #383838;
+        }
+        .legend-title {
+            color: #888;
+            font-size: 11px;
+            margin-bottom: 8px;
         }
         .legend-item {
             display: flex;
             align-items: center;
-            margin-bottom: 8px;
+            margin-bottom: 6px;
+            gap: 8px;
         }
-        .legend-color {
-            width: 14px;
-            height: 14px;
-            margin-right: 10px;
-            border-radius: 3px;
-        }
-        
-        #loading {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            font-size: 20px;
-            color: #888;
+        .legend-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 2px;
+            flex-shrink: 0;
         }
     </style>
 </head>
 <body>
 
-    <div id="loading">正在載入圖譜資料...</div>
-    <div id="tooltip"></div>
-    <div id="chart-container"></div>
+    <!-- 控制列 -->
+    <div id="control-bar">
+        <div class="ctrl-group">
+            <label for="input-industry">產業關鍵字</label>
+            <input type="text" id="input-industry" placeholder="不填表示全部產業">
+        </div>
+        <div class="ctrl-group">
+            <label for="input-start">開始日期</label>
+            <input type="date" id="input-start">
+        </div>
+        <div class="ctrl-group">
+            <label for="input-end">結束日期</label>
+            <input type="date" id="input-end">
+        </div>
+        <button id="btn-query">查詢</button>
+        <span id="status-msg">預設顯示最近 7 天</span>
+    </div>
 
-    <div class="legend">
-        <div style="font-weight: bold; margin-bottom: 10px; color:#aaa;">關係類型 (連線粗細代表提及次數)</div>
-        <div class="legend-item"><div class="legend-color" style="background: #4CAF50;"></div>供應 (Supply)</div>
-        <div class="legend-item"><div class="legend-color" style="background: #F44336;"></div>替代競爭 (Substitution)</div>
-        <div class="legend-item"><div class="legend-color" style="background: #2196F3;"></div>趨勢共生 (Co-impact)</div>
+    <!-- 圖表區 -->
+    <div id="chart-container">
+        <div id="loading">載入圖譜資料中...</div>
+        <div id="empty-msg">無符合條件的資料</div>
+        <div id="tooltip"></div>
+
+        <div id="legend">
+            <div class="legend-title">關係類型（連線粗細 = 提及次數）</div>
+            <div class="legend-item"><div class="legend-dot" style="background:#4CAF50"></div>供應 Supply</div>
+            <div class="legend-item"><div class="legend-dot" style="background:#F44336"></div>競爭替代 Substitution</div>
+            <div class="legend-item"><div class="legend-dot" style="background:#2196F3"></div>趨勢共生 Co-impact</div>
+            <div class="legend-item"><div class="legend-dot" style="background:#999"></div>其他 Unknown</div>
+        </div>
     </div>
 
     <script>
-        const width = window.innerWidth;
-        const height = window.innerHeight;
-        
-        // 使用 industry 做為顏色的基準
-        const colorScale = d3.scaleOrdinal(d3.schemeTableau10);
-        
-        const relationColors = {
-            "Supply": "#4CAF50",
+    (() => {
+        // ── 常數 ──
+        const RELATION_COLORS = {
+            "Supply":       "#4CAF50",
             "Substitution": "#F44336",
-            "Co-impact": "#2196F3",
-            "Unknown": "#999999"
+            "Co-impact":    "#2196F3",
+            "Unknown":      "#999999",
         };
+        const colorScale = d3.scaleOrdinal(d3.schemeTableau10);
+
+        // ── 初始化 SVG ──
+        const container = document.getElementById("chart-container");
+        let width  = container.clientWidth;
+        let height = container.clientHeight;
 
         const svg = d3.select("#chart-container")
             .append("svg")
             .attr("width", width)
             .attr("height", height);
 
-        const g = svg.append("g");
-        
-        const zoom = d3.zoom()
-            .scaleExtent([0.1, 4])
-            .on("zoom", (event) => g.attr("transform", event.transform));
-        svg.call(zoom);
-
-        // 讀取外部 JSON 檔案
-        d3.json("d3_ready_graph.json").then(function(data) {
-            
-            // 隱藏載入提示
-            d3.select("#loading").style("display", "none");
-
-            // 確保有資料才繪圖
-            if (!data.nodes || data.nodes.length === 0) {
-                alert("沒有找到符合條件的圖譜資料！");
-                return;
-            }
-
-            // 定義箭頭 (Markers)
-            svg.append("defs").selectAll("marker")
-                .data(["Supply", "Substitution", "Co-impact", "Unknown"])
-                .enter().append("marker")
-                .attr("id", d => `marker-${d}`)
+        // 箭頭 defs（一次性）
+        const defs = svg.append("defs");
+        Object.entries(RELATION_COLORS).forEach(([type, color]) => {
+            defs.append("marker")
+                .attr("id", `marker-${type}`)
                 .attr("viewBox", "0 -5 10 10")
-                .attr("refX", 28) // 箭頭推遠一點，避免被變大的節點蓋住
+                .attr("refX", 30)
                 .attr("refY", 0)
                 .attr("markerWidth", 6)
                 .attr("markerHeight", 6)
                 .attr("orient", "auto")
                 .append("path")
-                .attr("fill", d => relationColors[d] || relationColors["Unknown"])
+                .attr("fill", color)
                 .attr("d", "M0,-5L10,0L0,5");
+        });
 
-            // 物理力引擎
-            const simulation = d3.forceSimulation(data.nodes)
-                .force("link", d3.forceLink(data.links).id(d => d.id).distance(250)) // 拉開節點距離
-                .force("charge", d3.forceManyBody().strength(-800))
-                .force("center", d3.forceCenter(width / 2, height / 2))
-                .force("collide", d3.forceCollide().radius(60))
-                .force("x", d3.forceX(width / 2).strength(0.05))
-                .force("y", d3.forceY(height / 2).strength(0.05));
+        const g = svg.append("g");
+        const zoom = d3.zoom()
+            .scaleExtent([0.1, 4])
+            .on("zoom", (e) => g.attr("transform", e.transform));
+        svg.call(zoom);
 
-            // 繪製連線組
+        // ── 狀態 ──
+        let simulation = null;
+
+        // ── UI refs ──
+        const loadingEl  = document.getElementById("loading");
+        const emptyEl    = document.getElementById("empty-msg");
+        const statusMsg  = document.getElementById("status-msg");
+        const btnQuery   = document.getElementById("btn-query");
+        const tooltip    = d3.select("#tooltip");
+
+        // ── 讓 Tooltip 跟隨滑鼠 ──
+        svg.on("mousemove", (event) => {
+            tooltip
+                .style("left", (event.pageX + 18) + "px")
+                .style("top",  (event.pageY - 18) + "px");
+        });
+
+        // ── Tooltip helpers ──
+        function showNodeTooltip(event, d) {
+            d3.select(this).transition().duration(150).attr("r", 28);
+            tooltip.style("display", "block").html(`
+                <div class="tooltip-title">${d.id}</div>
+                <div><b>所屬產業：</b>
+                    <span style="color:${colorScale(d.industry)}">${d.industry}</span>
+                </div>
+            `);
+        }
+
+        function showLinkTooltip(event, d) {
+            const reasonsHtml = (d.reasons && d.reasons.length > 0)
+                ? `<ul class="reason-list">${d.reasons.map(r => `<li>${r}</li>`).join("")}</ul>`
+                : `<span style="color:#888">無詳細敘述</span>`;
+            tooltip.style("display", "block").html(`
+                <div class="tooltip-title">${d.source.id ?? d.source} ➔ ${d.target.id ?? d.target}</div>
+                <div style="margin-bottom:4px">
+                    <b>關係：</b>
+                    <span style="color:${RELATION_COLORS[d.relation_type] ?? RELATION_COLORS.Unknown}">
+                        ${d.relation_type}
+                    </span>
+                </div>
+                <div style="margin-bottom:4px"><b>提及次數：</b>${d.weight} 次</div>
+                <div><b>關聯事件：</b></div>
+                ${reasonsHtml}
+            `);
+        }
+
+        function hideTooltip() {
+            d3.selectAll(".node circle").transition().duration(150).attr("r", 22);
+            tooltip.style("display", "none");
+        }
+
+        // ── 主繪圖函式 ──
+        function renderGraph(data) {
+            // 停掉舊的 simulation
+            if (simulation) simulation.stop();
+
+            // 清空舊圖層
+            g.selectAll("*").remove();
+
+            if (!data.nodes || data.nodes.length === 0) {
+                emptyEl.classList.add("visible");
+                return;
+            }
+            emptyEl.classList.remove("visible");
+
+            // 更新 SVG 尺寸（以防視窗曾 resize）
+            width  = container.clientWidth;
+            height = container.clientHeight;
+            svg.attr("width", width).attr("height", height);
+
+            // ── 連線組 ──
             const linkGroup = g.append("g")
                 .selectAll(".link-group")
                 .data(data.links)
                 .enter().append("g")
                 .attr("class", "link-group")
-                // 加入連線的 Tooltip 事件
                 .on("mouseover", showLinkTooltip)
                 .on("mouseout", hideTooltip);
 
-            // 實體連線 (根據 weight 決定粗細)
             const link = linkGroup.append("line")
                 .attr("class", "link")
-                .attr("stroke", d => relationColors[d.relation_type] || relationColors["Unknown"])
-                .attr("stroke-width", d => Math.max(2, (d.weight || 1) * 2)) // 權重越大線越粗，最低 2px
+                .attr("fill", "none")
+                .attr("stroke-opacity", 0.65)
+                .attr("stroke", d => RELATION_COLORS[d.relation_type] ?? RELATION_COLORS.Unknown)
+                .attr("stroke-width", d => Math.max(2, (d.weight ?? 1) * 1.8))
                 .attr("marker-end", d => `url(#marker-${d.relation_type})`);
 
-            // 透明的連線感應區
-            const linkHitbox = linkGroup.append("line")
-                .attr("class", "link-hitbox");
+            // 透明感應區
+            linkGroup.append("line")
+                .attr("fill", "none")
+                .attr("stroke", "transparent")
+                .attr("stroke-width", 20)
+                .style("cursor", "help");
 
-            // 繪製節點
+            // ── 節點組 ──
             const node = g.append("g")
                 .selectAll(".node")
                 .data(data.nodes)
                 .enter().append("g")
                 .attr("class", "node")
                 .call(d3.drag()
-                    .on("start", dragstarted)
-                    .on("drag", dragged)
-                    .on("end", dragended));
+                    .on("start", (e, d) => {
+                        if (!e.active) simulation.alphaTarget(0.3).restart();
+                        d.fx = d.x; d.fy = d.y;
+                    })
+                    .on("drag",  (e, d) => { d.fx = e.x; d.fy = e.y; })
+                    .on("end",   (e, d) => {
+                        if (!e.active) simulation.alphaTarget(0);
+                        d.fx = null; d.fy = null;
+                    })
+                );
 
-            // 節點圓圈 (大小稍微加大，顏色綁定 industry)
             node.append("circle")
                 .attr("r", 22)
-                .attr("fill", d => colorScale(d.industry || "未分類"))
+                .attr("fill", d => colorScale(d.industry ?? "未分類"))
+                .attr("stroke", "#fff")
+                .attr("stroke-width", 1.5)
+                .style("cursor", "pointer")
                 .on("mouseover", showNodeTooltip)
                 .on("mouseout", hideTooltip);
 
-            // 節點文字 (使用 d.id 作為名稱)
             node.append("text")
                 .attr("dy", 40)
                 .attr("text-anchor", "middle")
+                .attr("font-size", "13px")
+                .attr("font-weight", "bold")
+                .attr("fill", "#eee")
+                .style("pointer-events", "none")
+                .style("text-shadow", "1px 1px 2px #000")
                 .text(d => d.id);
 
-            // Tick 更新
+            // ── 力模擬 ──
+            simulation = d3.forceSimulation(data.nodes)
+                .force("link", d3.forceLink(data.links).id(d => d.id).distance(240))
+                .force("charge", d3.forceManyBody().strength(-700))
+                .force("center", d3.forceCenter(width / 2, height / 2))
+                .force("collide", d3.forceCollide().radius(60))
+                .force("x", d3.forceX(width / 2).strength(0.04))
+                .force("y", d3.forceY(height / 2).strength(0.04));
+
+            const r = 30;
             simulation.on("tick", () => {
-                const radius = 30;
                 data.nodes.forEach(d => {
-                    d.x = Math.max(radius, Math.min(width - radius, d.x));
-                    d.y = Math.max(radius, Math.min(height - radius, d.y));
+                    d.x = Math.max(r, Math.min(width  - r, d.x));
+                    d.y = Math.max(r, Math.min(height - r, d.y));
                 });
 
-                link
-                    .attr("x1", d => d.source.x)
-                    .attr("y1", d => d.source.y)
-                    .attr("x2", d => d.target.x)
-                    .attr("y2", d => d.target.y);
-
-                linkHitbox
+                // 更新連線（link group 包含兩條 line：實線 + 感應區）
+                linkGroup.selectAll("line")
                     .attr("x1", d => d.source.x)
                     .attr("y1", d => d.source.y)
                     .attr("x2", d => d.target.x)
@@ -265,82 +421,73 @@
 
                 node.attr("transform", d => `translate(${d.x},${d.y})`);
             });
+        }
 
-            // --- 互動功能區塊 ---
-            const tooltip = d3.select("#tooltip");
+        // ── 取得資料 ──
+        function fetchAndRender() {
+            const industry  = document.getElementById("input-industry").value.trim();
+            const startDate = document.getElementById("input-start").value;
+            const endDate   = document.getElementById("input-end").value;
 
-            // 節點 Tooltip
-            function showNodeTooltip(event, d) {
-                d3.select(this).transition().duration(200).attr("r", 28);
-                tooltip.style("display", "block")
-                    .html(`
-                        <div class="tooltip-title">${d.id}</div>
-                        <div><b>所屬產業：</b> <span style="color:${colorScale(d.industry)}">${d.industry}</span></div>
-                    `);
+            const params = new URLSearchParams();
+            if (industry)  params.set("industry",   industry);
+            if (startDate) params.set("start_date", startDate);
+            if (endDate)   params.set("end_date",   endDate);
+
+            const queryStr = params.toString();
+            const url = `/api/knowledge-graph/graph-data/${queryStr ? "?" + queryStr : ""}`;
+
+            // 更新狀態列文字
+            const labels = [];
+            if (industry)          labels.push(`產業：${industry}`);
+            if (startDate || endDate) {
+                labels.push(`${startDate || "最早"} ～ ${endDate || "最新"}`);
+            } else {
+                labels.push("最近 7 天");
             }
+            statusMsg.textContent = labels.join("　");
 
-            // 連線 Tooltip (展開我們用 LLM 整理的 reasons 清單)
-            function showLinkTooltip(event, d) {
-                // 將 reasons 陣列轉換成 HTML 清單 (li)
-                let reasonsHtml = "";
-                if (d.reasons && d.reasons.length > 0) {
-                    reasonsHtml = `<ul class="reason-list">` + 
-                                  d.reasons.map(r => `<li>${r}</li>`).join("") + 
-                                  `</ul>`;
-                } else {
-                    reasonsHtml = `<div style="color:#aaa;">無詳細敘述</div>`;
-                }
+            // 顯示 loading
+            loadingEl.classList.remove("hidden");
+            emptyEl.classList.remove("visible");
+            btnQuery.disabled = true;
 
-                tooltip.style("display", "block")
-                    .html(`
-                        <div class="tooltip-title">${d.source.id} ➔ ${d.target.id}</div>
-                        <div style="margin-bottom:5px;"><b>關係：</b> <span style="color:${relationColors[d.relation_type]}">${d.relation_type}</span></div>
-                        <div style="margin-bottom:5px;"><b>提及次數 (熱度)：</b> ${d.weight} 次</div>
-                        <div><b>關聯事件：</b></div>
-                        ${reasonsHtml}
-                    `);
-            }
+            fetch(url)
+                .then(res => {
+                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                    return res.json();
+                })
+                .then(data => {
+                    loadingEl.classList.add("hidden");
+                    btnQuery.disabled = false;
+                    renderGraph(data);
+                })
+                .catch(err => {
+                    loadingEl.classList.add("hidden");
+                    btnQuery.disabled = false;
+                    statusMsg.textContent = `❌ 查詢失敗：${err.message}`;
+                    console.error(err);
+                });
+        }
 
-            function hideTooltip() {
-                // 將節點恢復原本大小
-                d3.selectAll(".node circle").transition().duration(200).attr("r", 22);
-                tooltip.style("display", "none");
-            }
+        // ── 事件綁定 ──
+        btnQuery.addEventListener("click", fetchAndRender);
 
-            // 讓 Tooltip 跟隨滑鼠
-            svg.on("mousemove", (event) => {
-                // 加上一點偏移量，避免游標擋住 Tooltip
-                tooltip.style("left", (event.pageX + 20) + "px")
-                       .style("top", (event.pageY - 20) + "px");
-            });
-
-            // 拖曳功能
-            function dragstarted(event, d) {
-                if (!event.active) simulation.alphaTarget(0.3).restart();
-                d.fx = d.x;
-                d.fy = d.y;
-            }
-            function dragged(event, d) {
-                d.fx = event.x;
-                d.fy = event.y;
-            }
-            function dragended(event, d) {
-                if (!event.active) simulation.alphaTarget(0);
-                d.fx = null;
-                d.fy = null;
-            }
-
-        }).catch(function(error){
-            console.error("載入 JSON 失敗:", error);
-            d3.select("#loading").text("載入資料失敗，請確認 d3_ready_graph.json 是否存在且格式正確。").style("color", "red");
+        // Enter 鍵觸發查詢
+        document.getElementById("input-industry").addEventListener("keydown", e => {
+            if (e.key === "Enter") fetchAndRender();
         });
 
-        // 視窗縮放適應
-        window.addEventListener('resize', () => {
-            svg.attr("width", window.innerWidth).attr("height", window.innerHeight);
-            // 注意：重新啟動 simulation 需要確保它已被初始化，這裡假設不頻繁 resize
+        // ── 視窗縮放 ──
+        window.addEventListener("resize", () => {
+            width  = container.clientWidth;
+            height = container.clientHeight;
+            svg.attr("width", width).attr("height", height);
         });
 
+        // ── 初始載入（預設最近 7 天、不限產業）──
+        fetchAndRender();
+    })();
     </script>
 </body>
 </html>

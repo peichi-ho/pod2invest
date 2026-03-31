@@ -1,13 +1,44 @@
-from django.shortcuts import render
-
-# Create your views here.
 import json
 from django.http import JsonResponse
+from django.shortcuts import render
 from django.views.decorators.csrf import csrf_exempt
-from .generate import init_db, process_new_podcast
+
+from .generate import process_new_podcast, process_all_summaries
+from .filter import get_graph_data
+
+
+def graph_page(request):
+    """渲染知識圖譜互動頁面。"""
+    return render(request, "knowledge_graph/graph.html")
+
+
+def graph_data_api(request):
+    """
+    回傳 D3.js 格式的圖譜資料（JSON）。
+
+    Query params：
+    - industry   (str, optional) : 產業關鍵字，空白表示不限
+    - start_date (str, optional) : 開始日期 YYYY-MM-DD
+    - end_date   (str, optional) : 結束日期 YYYY-MM-DD
+    """
+    industry   = request.GET.get("industry", "").strip() or None
+    start_date = request.GET.get("start_date", "").strip() or None
+    end_date   = request.GET.get("end_date", "").strip() or None
+
+    try:
+        data = get_graph_data(
+            start_date=start_date,
+            end_date=end_date,
+            industry=industry,
+        )
+        return JsonResponse(data, json_dumps_params={"ensure_ascii": False})
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
 
 @csrf_exempt
 def generate_graph(request):
+    """手動傳入單筆摘要 JSON，觸發知識圖譜生成。"""
     if request.method != "POST":
         return JsonResponse({"error": "POST required"}, status=405)
 
@@ -24,13 +55,25 @@ def generate_graph(request):
         return JsonResponse({"error": "summary_data is required"}, status=400)
 
     try:
-        init_db()
         summary_text = json.dumps(summary_data, ensure_ascii=False)
         process_new_podcast(
             summary_text=summary_text,
             summary_date=summary_date,
-            podcast_source=podcast_source
+            podcast_source=podcast_source,
         )
         return JsonResponse({"message": "知識圖譜生成成功", "source": podcast_source})
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+
+@csrf_exempt
+def generate_graph_from_summaries(request):
+    """從 summariesdb 讀取所有摘要，批次生成知識圖譜。"""
+    if request.method != "POST":
+        return JsonResponse({"error": "POST required"}, status=405)
+
+    try:
+        process_all_summaries()
+        return JsonResponse({"message": "批次知識圖譜生成完成"})
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)
