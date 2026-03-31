@@ -17,7 +17,7 @@ import django
 django.setup()
 
 import requests
-import google.generativeai as genai
+from google import genai
 
 # 配置資訊與常數定義
 ITUNES_SEARCH_URL = "https://itunes.apple.com/search"

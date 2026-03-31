@@ -13,7 +13,10 @@ pandas
 sqlalchemy
 
 # --- AI / LLM ---
-google-generativeai
+google-genai
+
+# --- AI assisstant ---
+yfinance
 
 # --- Podcast processing ---
 feedparser==6.0.12
