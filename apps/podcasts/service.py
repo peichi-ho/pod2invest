@@ -31,9 +31,8 @@ def fix_content_with_gemini(batch_text: str, gemini_key: str) -> str:
     將 SRT 文本提交至 Gemini API 進行語意校對
     執行重點：同音錯字修正、財經專業術語校正、保持 SRT 格式結構。
     """
-    genai.configure(api_key=gemini_key)
+    client = genai.Client(api_key=gemini_key)
 
-    model = genai.GenerativeModel("gemini-2.5-flash")
 
     prompt = f"""
     任務：專業逐字稿校對。
@@ -48,7 +47,11 @@ def fix_content_with_gemini(batch_text: str, gemini_key: str) -> str:
     {batch_text}
     """
     try:
-        response = model.generate_content(prompt)
+        response = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=prompt
+)
+
         return response.text.replace("```srt", "").replace("```", "").strip()
     except Exception as e:
         print(f"   [Gemini Warning] 校對程序異常，保留原始文本: {e}")

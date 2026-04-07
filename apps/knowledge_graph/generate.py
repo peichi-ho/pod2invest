@@ -184,6 +184,14 @@ def save_to_db(json_data_str: str, summary_date: str, podcast_source: str):
             reason = link.get("reason", "")
             if not source or not target:
                 continue
+                # 確保 source 和 target 節點存在，否則自動補建
+            for node_name in [source, target]:
+                if not _node_exists(cursor, node_name):
+                    cursor.execute(
+                    "INSERT INTO nodes (name, industry) VALUES (%s, %s)",
+                    [node_name, "未分類"],
+                )
+
             if _link_duplicate_exists(cursor, source, target, reason):
                 print(f"  ⏭️  link 重複，跳過：{source} → {target}")
             else:
