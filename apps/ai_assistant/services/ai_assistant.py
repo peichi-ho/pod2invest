@@ -187,9 +187,9 @@ def get_gemini_client() -> genai.Client:
     if _client is not None:
         return _client
 
-    api_key = getattr(settings, "GEMINI_APIKEY", None) or os.getenv("GEMINI_APIKEY")
+    api_key = getattr(settings, "GEMINI_API_KEY", None) or os.getenv("GEMINI_API_KEY")
     if not api_key:
-        raise RuntimeError("Missing GEMINI_APIKEY. Set it in settings.py or env var.")
+        raise RuntimeError("Missing GEMINI_API_KEY. Set it in settings.py or env var.")
 
     _client = genai.Client(api_key=api_key)
     return _client
