@@ -253,21 +253,39 @@ def insert_to_db(
     srt_path: Path,
     show_name: str,
     episode_title: str,
+    published_at=None,
 ) -> None:
     """
-    透過 Django ORM 將 Podcast 資料寫入資料庫
-    audio_url 直接使用 RSS 原始連結，不上傳到 Supabase Storage
+    透過 Django ORM 將 Podcast 資料寫入資料庫。
+    採正規化三表結構：
+      - Podcast        → 頻道（相同頻道只建一筆）
+      - PodcastEpisode → 單集 metadata（含官方上傳時間）
+      - PodcastTranscript → 逐字稿（重跑校對時更新 srt_content）
     """
-    from apps.podcasts.models import PodcastMetadata
+    from apps.podcasts.models import Podcast, PodcastEpisode, PodcastTranscript
 
     with open(srt_path, "r", encoding="utf-8") as f:
         srt_content = f.read().strip()
 
-    PodcastMetadata.objects.create(
+    # 取得或建立頻道
+    podcast, _ = Podcast.objects.get_or_create(
         show_name=show_name or "未知頻道",
+    )
+
+    # 取得或建立單集
+    episode, _ = PodcastEpisode.objects.get_or_create(
+        podcast=podcast,
         episode_title=episode_title or srt_path.stem,
-        audio_url=audio_url,
-        srt_content=srt_content,
+        defaults={
+            "audio_url": audio_url,
+            "published_at": published_at,
+        },
+    )
+
+    # 建立或更新逐字稿（重跑校對時覆蓋 srt_content）
+    PodcastTranscript.objects.update_or_create(
+        episode=episode,
+        defaults={"srt_content": srt_content},
     )
 
     print(f"   [✓] 資料庫寫入成功 → {audio_url}")

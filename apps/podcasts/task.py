@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sys
 import feedparser
+from datetime import datetime, timezone
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -73,6 +74,11 @@ def main():
             )
             sub_path = show_dir / f"{safe_title}.srt"
 
+            # 從 RSS feed 取得節目官方上傳時間
+            published_at = None
+            if getattr(entry, "published_parsed", None):
+                published_at = datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
+
             # 下載音檔（如果不存在）
             if not audio_path.exists():
                 print(f"下載音檔: {title}")
@@ -94,6 +100,7 @@ def main():
                     srt_path=sub_path,
                     show_name=show_name,
                     episode_title=title,
+                    published_at=published_at,
                 )
             except Exception as db_err:
                 print(f"   [資料庫錯誤] {db_err}")
