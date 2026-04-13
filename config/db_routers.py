@@ -20,8 +20,11 @@ class EtfRouter:
     def allow_migrate(self, db, app_label, model_name=None, **hints):
         if app_label in self.route_app_labels:
             return db == "etfdb"
+        if db == "etfdb":
+            return False
         return None
-    
+
+
 class SummariesRouter:
     route_app_labels = {"summaries"}
 
@@ -44,7 +47,10 @@ class SummariesRouter:
     def allow_migrate(self, db, app_label, model_name=None, **hints):
         if app_label in self.route_app_labels:
             return db == "summariesdb"
+        if db == "summariesdb":
+            return False
         return None
+
 
 class PodcastsRouter:
     route_app_labels = {"podcasts"}
@@ -68,7 +74,11 @@ class PodcastsRouter:
     def allow_migrate(self, db, app_label, model_name=None, **hints):
         if app_label in self.route_app_labels:
             return db == "podcasts"
+        if db == "podcasts":
+            return False
         return None
+
+
 class KnowledgeGraphRouter:
     route_app_labels = {"knowledge_graph"}
 
@@ -91,6 +101,8 @@ class KnowledgeGraphRouter:
     def allow_migrate(self, db, app_label, model_name=None, **hints):
         if app_label in self.route_app_labels:
             return db == "knowledge_graphdb"
+        if db == "knowledge_graphdb":
+            return False
         return None
 
 
@@ -116,4 +128,6 @@ class AiAssistantRouter:
     def allow_migrate(self, db, app_label, model_name=None, **hints):
         if app_label in self.route_app_labels:
             return db == "ai_assistant_db"
+        if db == "ai_assistant_db":
+            return False
         return None
