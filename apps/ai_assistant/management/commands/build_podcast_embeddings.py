@@ -105,19 +105,36 @@ def build_summary_chunk_text(one_sentence_summary: str) -> str:
 # 從一筆 SummaryRecord 產生所有 chunk
 # =============================================================================
 
+def _parse_json_field(value):
+    """psycopg3 讀 jsonb 有時回傳字串，統一解析成 Python 物件"""
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except (json.JSONDecodeError, TypeError):
+            return None
+    return value
+
+
 def build_chunks_from_record(record: Dict) -> List[Dict]:
     """
     回傳 list of chunk dict，每個 dict 包含要寫入 DB 的欄位。
     """
     chunks = []
 
+    # jsonb 欄位統一確保是 Python 物件（不是字串）
+    entities = _parse_json_field(record.get("entities")) or {}
+    tags_raw = _parse_json_field(record.get("tags")) or []
+    arguments_raw = _parse_json_field(record.get("arguments")) or []
+    investment_takeaways_raw = _parse_json_field(record.get("investment_takeaways")) or {}
+    podcaster_raw = _parse_json_field(record.get("podcaster"))
+
     record_id = record["id"]
-    entity_people = json.dumps((record.get("entities") or {}).get("people") or [], ensure_ascii=False)
-    entity_companies = json.dumps((record.get("entities") or {}).get("companies_or_stocks") or [], ensure_ascii=False)
-    entity_regions = json.dumps((record.get("entities") or {}).get("countries_or_regions") or [], ensure_ascii=False)
-    tags = json.dumps(record.get("tags") or [], ensure_ascii=False)
+    entity_people = json.dumps(entities.get("people") or [], ensure_ascii=False)
+    entity_companies = json.dumps(entities.get("companies_or_stocks") or [], ensure_ascii=False)
+    entity_regions = json.dumps(entities.get("countries_or_regions") or [], ensure_ascii=False)
+    tags = json.dumps(tags_raw, ensure_ascii=False)
     source_filename = record.get("source_filename") or None
-    podcaster = json.dumps(record.get("podcaster"), ensure_ascii=False) if record.get("podcaster") is not None else None
+    podcaster = json.dumps(podcaster_raw, ensure_ascii=False) if podcaster_raw is not None else None
     published_at = record.get("published_at") or None
 
     base = dict(
@@ -132,7 +149,7 @@ def build_chunks_from_record(record: Dict) -> List[Dict]:
     )
 
     # --- Chunk Type 1: argument ---
-    arguments = record.get("arguments") or []
+    arguments = arguments_raw
     for arg in arguments:
         if not isinstance(arg, dict):
             continue
@@ -147,7 +164,7 @@ def build_chunks_from_record(record: Dict) -> List[Dict]:
         })
 
     # --- Chunk Type 2: takeaway ---
-    investment_takeaways = record.get("investment_takeaways") or {}
+    investment_takeaways = investment_takeaways_raw
     if investment_takeaways:
         chunk_text = build_takeaway_chunk_text(investment_takeaways)
         if chunk_text.strip() and chunk_text != "投資觀點":
@@ -182,9 +199,9 @@ _embed_model = None
 def get_embed_model():
     global _embed_model
     if _embed_model is None:
-        from FlagEmbedding import BGEM3FlagModel
+        from sentence_transformers import SentenceTransformer
         print("載入 bge-m3 模型中（首次需要下載，約 2~3 GB）...")
-        _embed_model = BGEM3FlagModel("BAAI/bge-m3", use_fp16=True)
+        _embed_model = SentenceTransformer("BAAI/bge-m3")
         print("bge-m3 載入完成")
     return _embed_model
 
@@ -195,16 +212,8 @@ def embed_texts(texts: List[str], batch_size: int = 8) -> List[List[float]]:
     """
     model = get_embed_model()
     prefixed = [f"passage: {t}" for t in texts]
-    output = model.encode(
-        prefixed,
-        batch_size=batch_size,
-        max_length=8192,
-        return_dense=True,
-        return_sparse=False,
-        return_colbert_vecs=False,
-    )
-    dense_vecs = output["dense_vecs"]  # numpy array, shape (n, 1024)
-    return [vec.tolist() for vec in dense_vecs]
+    vecs = model.encode(prefixed, batch_size=batch_size, normalize_embeddings=True)
+    return [vec.tolist() for vec in vecs]
 
 
 # =============================================================================
@@ -272,6 +281,17 @@ class Command(BaseCommand):
         # --- Step 1: 讀取 summariesdb ---
         self.stdout.write("Step 1: 讀取 summaries_summaryrecord ...")
 
+        # 先從 ai_assistant_db 撈已處理的 record_id
+        already_embedded = set()
+        if not only_record_id:
+            with connections["ai_assistant_db"].cursor() as dst_cursor:
+                dst_cursor.execute("""
+                    SELECT DISTINCT record_id
+                    FROM podcast_embedded_chunks
+                    WHERE embedded_at IS NOT NULL
+                """)
+                already_embedded = {row[0] for row in dst_cursor.fetchall()}
+
         with connections["summariesdb"].cursor() as src_cursor:
             if only_record_id:
                 src_cursor.execute("""
@@ -288,18 +308,16 @@ class Command(BaseCommand):
                            tags, entities, arguments, source_filename,
                            podcaster, published_at
                     FROM summaries_summaryrecord
-                    WHERE id NOT IN (
-                        SELECT DISTINCT record_id
-                        FROM podcast_embedded_chunks
-                        WHERE embedded_at IS NOT NULL
-                    )
                     ORDER BY id
                 """)
 
             columns = [col[0] for col in src_cursor.description]
             rows = src_cursor.fetchall()
 
-        records = [dict(zip(columns, row)) for row in rows]
+        records = [
+            dict(zip(columns, row)) for row in rows
+            if row[0] not in already_embedded
+        ]
         self.stdout.write(f"  → 找到 {len(records)} 筆待處理 record")
 
         if not records:

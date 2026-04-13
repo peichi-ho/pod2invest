@@ -88,17 +88,10 @@ class FinanceTool(Tool):
 
 def _embed_query(query: str) -> List[float]:
     """將查詢文字用 bge-m3 轉為 dense vector（query 前綴）"""
-    from FlagEmbedding import BGEM3FlagModel
-    model = BGEM3FlagModel("BAAI/bge-m3", use_fp16=True)
-    output = model.encode(
-        [f"query: {query}"],
-        batch_size=1,
-        max_length=512,
-        return_dense=True,
-        return_sparse=False,
-        return_colbert_vecs=False,
-    )
-    return output["dense_vecs"][0].tolist()
+    from sentence_transformers import SentenceTransformer
+    model = SentenceTransformer("BAAI/bge-m3")
+    vec = model.encode(f"query: {query}", normalize_embeddings=True)
+    return vec.tolist()
 
 
 def search_podcast_transcript(query: str, top_k: int = 5) -> List[PodcastHit]:
