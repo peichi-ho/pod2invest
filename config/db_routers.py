@@ -24,7 +24,6 @@ class EtfRouter:
             return False
         return None
 
-
 class SummariesRouter:
     route_app_labels = {"summaries"}
 
@@ -51,7 +50,6 @@ class SummariesRouter:
             return False
         return None
 
-
 class PodcastsRouter:
     route_app_labels = {"podcasts"}
 
@@ -77,7 +75,6 @@ class PodcastsRouter:
         if db == "podcasts":
             return False
         return None
-
 
 class KnowledgeGraphRouter:
     route_app_labels = {"knowledge_graph"}
