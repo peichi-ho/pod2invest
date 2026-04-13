@@ -20,7 +20,7 @@ ALLOWED_HOSTS = os.getenv("DJANGO_ALLOWED_HOSTS", "127.0.0.1,localhost").split("
 
 # Gemini / AI Assistant settings
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+GEMINI_API_KEY = os.getenv("GEMINI_APIKEY", "").strip()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
 
 # 股票資料快取秒數（避免 yfinance 太慢）
@@ -124,6 +124,17 @@ DATABASES = {
             "sslmode": "require",
         },
     },
+    "ai_assistant_db": {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": os.getenv("AI_ASSISTANT_DB_NAME", "postgres"),
+        "USER": os.getenv("AI_ASSISTANT_DB_USER", ""),
+        "PASSWORD": os.getenv("AI_ASSISTANT_DB_PASSWORD", ""),
+        "HOST": os.getenv("AI_ASSISTANT_DB_HOST", ""),
+        "PORT": os.getenv("AI_ASSISTANT_DB_PORT", "5432"),
+        "OPTIONS": {
+            "sslmode": "require",
+        },
+    },
 
 }
 # 資料庫 routing
@@ -131,7 +142,8 @@ DATABASE_ROUTERS = [
     "config.db_routers.EtfRouter",
     "config.db_routers.SummariesRouter",
     "config.db_routers.PodcastsRouter",
-    "config.db_routers.KnowledgeGraphRouter"
+    "config.db_routers.KnowledgeGraphRouter",
+    "config.db_routers.AiAssistantRouter",
 ]
 
 

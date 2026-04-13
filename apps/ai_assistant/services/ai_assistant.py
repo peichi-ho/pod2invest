@@ -1,4 +1,4 @@
-# apps/ai_assistant/services/llm.py
+# apps/ai_assistant/services/ai_assistant.py
 from __future__ import annotations
 
 import json
@@ -83,35 +83,81 @@ class FinanceTool(Tool):
 
 
 # =============================================================================
-# Example tool implementations (replace with yours)
+# Tool implementations (replace with real ones)
 # =============================================================================
+
+def _embed_query(query: str) -> List[float]:
+    """將查詢文字用 bge-m3 轉為 dense vector（query 前綴）"""
+    from FlagEmbedding import BGEM3FlagModel
+    model = BGEM3FlagModel("BAAI/bge-m3", use_fp16=True)
+    output = model.encode(
+        [f"query: {query}"],
+        batch_size=1,
+        max_length=512,
+        return_dense=True,
+        return_sparse=False,
+        return_colbert_vecs=False,
+    )
+    return output["dense_vecs"][0].tolist()
+
 
 def search_podcast_transcript(query: str, top_k: int = 5) -> List[PodcastHit]:
     """
-    TODO: Replace with Pinecone / vector DB retrieval.
-    Return a list of PodcastHit.
+    對 podcast_embedded_chunks 做 cosine similarity 搜尋，
+    回傳最相關的 top_k chunk 組成的 PodcastHit list。
     """
-    demo_hits: List[PodcastHit] = []
-    if any(k in query.lower() for k in ["巴菲特", "buffett", "fed", "fomc", "利率"]):
-        demo_hits.append(
-            PodcastHit(
-                episode_title="從巴菲特談價值投資：護城河與估值",
-                publish_date="2025-11-18",
-                podcaster="Alpha Finance Podcast",
-                episode_number="EP.128",
-                summary="討論護城河、DCF、以及如何看待市場情緒與長期現金流。",
-                score=0.86,
-            )
-        )
-    return demo_hits[:top_k]
+    from django.db import connections
+
+    try:
+        query_vec = _embed_query(query)
+        vec_str = "[" + ",".join(f"{v:.8f}" for v in query_vec) + "]"
+
+        sql = """
+            SELECT
+                source_filename,
+                published_at,
+                podcaster,
+                topic,
+                chunk_text,
+                1 - (embedding <=> %s::vector) AS score
+            FROM podcast_embedded_chunks
+            ORDER BY embedding <=> %s::vector
+            LIMIT %s
+        """
+
+        with connections["ai_assistant_db"].cursor() as cursor:
+            cursor.execute(sql, [vec_str, vec_str, top_k])
+            rows = cursor.fetchall()
+
+        hits = []
+        for row in rows:
+            source_filename, published_at, podcaster_raw, topic, chunk_text, score = row
+
+            # podcaster 是 jsonb，可能是 list 或 string
+            if isinstance(podcaster_raw, list):
+                podcaster_str = "、".join(str(p) for p in podcaster_raw)
+            elif isinstance(podcaster_raw, str):
+                podcaster_str = podcaster_raw
+            else:
+                podcaster_str = ""
+
+            hits.append(PodcastHit(
+                episode_title=topic or source_filename or "",
+                publish_date=str(published_at) if published_at else "",
+                podcaster=podcaster_str,
+                episode_number=None,
+                summary=chunk_text,
+                score=float(score),
+            ))
+
+        return hits
+
+    except Exception as e:
+        logger.warning(f"pgvector search failed: {e}")
+        return []
 
 
 def get_realtime_stock_data(ticker: str) -> StockData:
-    """
-    yfinance call can be slow / rate-limited.
-    We'll cache for a short time (default 60s) to keep Django responsive.
-    """
-    # 簡單快取：同一 ticker 60 秒內不重打
     ttl = int(getattr(settings, "STOCK_CACHE_TTL_SECONDS", 60))
     cache_key = f"ai_assistant:stock:{ticker.upper()}"
     cached = cache.get(cache_key)
@@ -121,13 +167,10 @@ def get_realtime_stock_data(ticker: str) -> StockData:
     import yfinance as yf
 
     tk = yf.Ticker(ticker)
-
-    # fast_info is quick but fields vary
     info = tk.fast_info or {}
     price = info.get("last_price") or info.get("lastPrice")
     currency = info.get("currency")
 
-    # tk.info can be slow
     full = tk.info or {}
     pe = full.get("trailingPE")
     div_yield = full.get("dividendYield")
@@ -143,12 +186,12 @@ def get_realtime_stock_data(ticker: str) -> StockData:
         timestamp=None,
     )
 
-    cache.set(cache_key, asdict(data), ttl)  # [ADDED]
+    cache.set(cache_key, asdict(data), ttl)
     return data
 
 
 # =============================================================================
-# Gemini adapter (LAZY INIT)
+# Gemini adapter
 # =============================================================================
 
 PLANNER_SCHEMA: Dict[str, Any] = {
@@ -180,9 +223,6 @@ _client: Optional[genai.Client] = None
 
 
 def get_gemini_client() -> genai.Client:
-    """
-    [CHANGED] Lazy init: do NOT create client at import time.
-    """
     global _client
     if _client is not None:
         return _client
@@ -203,19 +243,42 @@ def _get_model_name(explicit: Optional[str] = None) -> str:
     )
 
 
-def call_gemini_json(system_prompt: str, user_prompt: str, model: Optional[str] = None) -> str:
-    """
-    Planner: force JSON output (schema-guided).
-    """
+def _build_history_contents(history: List[Dict[str, str]]) -> List[Dict[str, Any]]:
+    """將對話歷史轉換為 Gemini 多輪格式（user / model 交替）"""
+    contents = []
+    for msg in history:
+        role = "user" if msg["role"] == "user" else "model"
+        contents.append({"role": role, "parts": [{"text": msg["content"]}]})
+    return contents
+
+
+def call_gemini_json(
+    system_prompt: str,
+    user_prompt: str,
+    history: Optional[List[Dict[str, str]]] = None,
+    model: Optional[str] = None,
+) -> str:
+    """Planner：強制 JSON 輸出，將近期歷史摘要注入 system prompt 供指代消解"""
     client = get_gemini_client()
     use_model = _get_model_name(model)
 
+    history_context = ""
+    if history:
+        recent = history[-6:]  # 最近 3 輪（user + assistant 各一）
+        lines = []
+        for msg in recent:
+            prefix = "使用者" if msg["role"] == "user" else "助理"
+            lines.append(f"{prefix}：{msg['content']}")
+        history_context = "\n\n近期對話記錄（供指代消解參考）：\n" + "\n".join(lines)
+
+    contents = [
+        {"role": "user", "parts": [{"text": f"[SYSTEM]\n{system_prompt}{history_context}"}]},
+        {"role": "user", "parts": [{"text": f"[USER]\n{user_prompt}"}]},
+    ]
+
     resp = client.models.generate_content(
         model=use_model,
-        contents=[
-            {"role": "user", "parts": [{"text": f"[SYSTEM]\n{system_prompt}"}]},
-            {"role": "user", "parts": [{"text": f"[USER]\n{user_prompt}"}]},
-        ],
+        contents=contents,
         config={
             "response_mime_type": "application/json",
             "response_schema": PLANNER_SCHEMA,
@@ -225,19 +288,32 @@ def call_gemini_json(system_prompt: str, user_prompt: str, model: Optional[str] 
     return resp.text
 
 
-def call_gemini_text(system_prompt: str, user_prompt: str, model: Optional[str] = None) -> str:
-    """
-    Final/Finance QA: normal text output.
-    """
+def call_gemini_text(
+    system_prompt: str,
+    user_prompt: str,
+    history: Optional[List[Dict[str, str]]] = None,
+    model: Optional[str] = None,
+) -> str:
+    """Final/Finance QA：Gemini 多輪格式，帶入完整對話歷史"""
     client = get_gemini_client()
-    use_model = _get_model_name(model)  # [CHANGED]
+    use_model = _get_model_name(model)
+
+    # system 用 user/model 對話模擬（Gemini 無原生 system role）
+    contents: List[Dict[str, Any]] = [
+        {"role": "user", "parts": [{"text": f"[SYSTEM]\n{system_prompt}"}]},
+        {"role": "model", "parts": [{"text": "Understood."}]},
+    ]
+
+    # 帶入完整歷史
+    if history:
+        contents.extend(_build_history_contents(history))
+
+    # 當前問題
+    contents.append({"role": "user", "parts": [{"text": user_prompt}]})
 
     resp = client.models.generate_content(
         model=use_model,
-        contents=[
-            {"role": "user", "parts": [{"text": f"[SYSTEM]\n{system_prompt}"}]},
-            {"role": "user", "parts": [{"text": f"[USER]\n{user_prompt}"}]},
-        ],
+        contents=contents,
         config={"temperature": 0.2},
     )
     return resp.text
@@ -251,17 +327,17 @@ class Orchestrator:
     def __init__(
         self,
         tools: List[Tool],
-        planner_llm: Callable[[str, str], str],
-        finance_qa_llm: Callable[[str, str], str],
-        final_llm: Callable[[str, str], str],
+        planner_llm: Callable,
+        finance_qa_llm: Callable,
+        final_llm: Callable,
     ):
         self.tool_map = {t.name: t for t in tools}
         self.planner_llm = planner_llm
         self.finance_qa_llm = finance_qa_llm
         self.final_llm = final_llm
 
-    def plan(self, user_input: str) -> Dict[str, Any]:
-        system = system = f"""
+    def plan(self, user_input: str, history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
+        system = f"""
         你是一個財經助理系統中的規劃器，根據使用者問題，判斷：
         1. 是否超出財經領域
         2. 是否需要呼叫工具
@@ -290,9 +366,9 @@ class Orchestrator:
         9. 若問題同時涉及即時資料與投資判斷（如是否值得買），仍應使用工具。
         10. 若問題可用一般知識完整回答，禁止使用工具。
         11. args_json 必須是合法 JSON 字串，且包含必要參數（如 ticker 或 query）。
-
+        12. 若使用者用代名詞（它、這支、剛才那檔），請參考近期對話記錄推斷實際指稱對象。
         """
-        raw = self.planner_llm(system, user_input)
+        raw = self.planner_llm(system, user_input, history)
         return self._safe_json_parse(raw)
 
     def run_tools(self, actions: List[Dict[str, Any]]) -> List[ToolResult]:
@@ -322,8 +398,9 @@ class Orchestrator:
 
         return results
 
-    def answer(self, user_input: str) -> str:
-        plan = self.plan(user_input)
+    def answer(self, user_input: str, history: Optional[List[Dict[str, str]]] = None) -> str:
+        history = history or []
+        plan = self.plan(user_input, history)
 
         if bool(plan.get("out_of_scope")):
             return "我是專注於財經領域的 AI 助理，無法回答這個問題。如果您有股票、基金、投資或財經相關的問題，歡迎隨時提問！"
@@ -343,8 +420,9 @@ class Orchestrator:
             3. 若問題資訊不足，明確指出缺少的關鍵資訊，不要自行虛構。
             4. 若牽涉價格、報酬率、時間點、政策、法規等可能變動資訊，避免假裝精確，改用保守表述。
             5. 不要自稱 AI，不要寫多餘寒暄，不要重述題目。
+            6. 若使用者問的是延續前一個話題的問題，請結合對話歷史作答。
             """
-            return self.finance_qa_llm(system, user_input)
+            return self.finance_qa_llm(system, user_input, history)
 
         tool_results = self.run_tools(actions)
         tool_context = {"user_input": user_input, "tool_results": [asdict(r) for r in tool_results]}
@@ -365,6 +443,7 @@ class Orchestrator:
         4. 不可虛構即時數字、價格、公告、新聞、法規或日期。
         5. 若涉及投資建議，避免保證報酬，應說明主要風險與判斷依據。
         6. 若無法明確回答，要直接說明原因。
+        7. 若使用者問的是延續前一個話題的問題，請結合對話歷史作答。
 
         輸出風格：
         - 一般用 1~3 段短文
@@ -381,18 +460,14 @@ class Orchestrator:
             f"工具結果 JSON：\n"
             + json.dumps(tool_context, ensure_ascii=False, indent=2)
         )
-        return self.final_llm(system, user)
+        return self.final_llm(system, user, history)
 
     @staticmethod
     def _safe_json_parse(raw: str) -> Dict[str, Any]:
-        """
-        Attempt strict JSON parse; if LLM returns extra text, extract the first JSON object.
-        """
         raw = (raw or "").strip()
         try:
             return json.loads(raw)
         except json.JSONDecodeError:
-            # 只取第一段可能的 JSON object
             m = re.search(r"\{.*?\}", raw, flags=re.S)
             if not m:
                 return {
@@ -420,9 +495,6 @@ _agent: Optional[Orchestrator] = None
 
 
 def get_agent() -> Orchestrator:
-    """
-    [CHANGED] Singleton for Django process: avoid rebuilding tools every request.
-    """
     global _agent
     if _agent is not None:
         return _agent
@@ -441,8 +513,9 @@ def get_agent() -> Orchestrator:
     return _agent
 
 
-def answer_user(query: str) -> str:
+def answer_user(query: str, history: Optional[List[Dict[str, str]]] = None) -> str:
     """
     Public entry for Django views.
+    history: [{"role": "user"|"assistant", "content": "..."}]
     """
-    return get_agent().answer(query)
+    return get_agent().answer(query, history or [])
