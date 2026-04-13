@@ -407,7 +407,7 @@ def extract_outlook_payload(
         "}\n\n"
 
         "【抽取流程（務必遵守）】\n"
-        "Step1：完整掃描全文，列出所有出現的單一股票名稱或股票代號到 mentioned_assets。\n"
+        "Step1：完整掃描全文，列出所有出現的股票名稱或股票代號到 mentioned_assets。\n"
         "Step2：同時抽出 entities，其中 companies_or_stocks 只放公司或股票。\n"
         "Step3：逐一檢查每一檔股票附近語句，判斷是否存在未來方向性看法。\n"
         "Step4：只要符合 outlook_call 定義，就全部收錄，不要只選最強訊號的一筆。\n"
@@ -415,11 +415,11 @@ def extract_outlook_payload(
 
         "【合法 asset】\n"
         "只接受：\n"
-        "- 單一上市公司名稱（如 台積電、安森美、HIMS、博通）\n"
+        "- 上市公司名稱（如 台積電、安森美、HIMS、博通）或台股\n"
         "- 股票代號或 ticker（如 2330、NVDA、TSLA）\n\n"
 
         "【以下全部禁止收錄到 outlook_calls】\n"
-        "- 產業或族群（AI、半導體、車用晶片、台股）\n"
+        "- 產業或族群（AI、半導體、車用晶片）\n"
         "- 商品（黃金、白銀、原油、銅）\n"
         "- 指數（S&P500、費半、羅素2000）\n"
         "- 國家或總體經濟（美國經濟、降息、通膨）\n"
@@ -474,7 +474,14 @@ def extract_outlook_payload(
     try:
         obj = json.loads(clean)
     except json.JSONDecodeError:
-        obj = repair_to_valid_json(client, model, clean)
+        try:
+            obj = repair_to_valid_json(client, model, clean)
+        except Exception:
+            return {
+                "mentioned_assets": [],
+                "entities": {"companies_or_stocks": [], "countries_or_regions": [], "people": []},
+                "outlook_calls": [],
+            }
 
     if not isinstance(obj, dict):
         return {

@@ -207,7 +207,10 @@ def consolidate_outlook_payload(
     try:
         obj = json.loads(clean)
     except json.JSONDecodeError:
-        obj = repair_to_valid_json(client, model, clean)
+        try:
+            obj = repair_to_valid_json(client, model, clean)
+        except Exception:
+            return {"valid_calls": []}
 
     if not isinstance(obj, dict):
         return {"valid_calls": []}

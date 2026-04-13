@@ -24,3 +24,10 @@ class SummarizeRequestSerializer(serializers.Serializer):
                 raise serializers.ValidationError("上傳檔案必須是 .srt。")
 
         return attrs
+
+
+class GenerateFromPodcastSerializer(serializers.Serializer):
+    podcast_id = serializers.IntegerField()
+    mode = serializers.ChoiceField(choices=["novice", "pro", "both"], default="novice")
+    model = serializers.CharField(default="models/gemini-2.5-flash-lite", required=False)
+    chunk_threshold_chars = serializers.IntegerField(default=30000, required=False)
