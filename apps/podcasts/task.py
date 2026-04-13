@@ -50,6 +50,12 @@ def main():
     show = itunes_search_first_podcast(podcast_name)
     feed_url = show.get("feedUrl")
     show_name = show.get("collectionName", podcast_name)
+
+    if not feed_url:
+        raise RuntimeError(
+            f"iTunes 找到「{show_name}」但沒有 RSS feed URL，請嘗試其他關鍵字。"
+        )
+
     feed = feedparser.parse(feed_url)
     entries = list(feed.entries or [])
     selected = entries[start : start + n]
