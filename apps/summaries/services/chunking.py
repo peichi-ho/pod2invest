@@ -207,7 +207,11 @@ def map_reduce_summarize(
         try:
             obj = json.loads(clean)
         except json.JSONDecodeError:
-            obj = repair_to_valid_json(client, model, clean)
+            try:
+                obj = repair_to_valid_json(client, model, clean)
+            except Exception:
+                # 單一 chunk 修復失敗就跳過，不讓整個流程 crash
+                continue
 
         cls = normalize_classification_dict(obj.get("classification") or {})
         for k in classification_acc.keys():
@@ -247,7 +251,7 @@ def map_reduce_summarize(
         model=model,
         prompt_text=final_prompt,
         temperature=0.1,
-        max_output_tokens=6000,
+        max_output_tokens=8000,
         max_tries=6,
     )
     t2 = (getattr(resp2, "text", "") or "")
@@ -309,7 +313,34 @@ def map_reduce_summarize(
     try:
         obj = json.loads(clean2)
     except json.JSONDecodeError:
-        obj = repair_to_valid_json(client, model, clean2)
+        try:
+            obj = repair_to_valid_json(client, model, clean2)
+        except Exception:
+            # FINAL reduce 修復失敗，用 merged notes 組出 fallback
+            obj = {
+                "one_sentence_summary": "",
+                "investment_takeaways": {
+                    "bullish": [],
+                    "bearish": [],
+                    "watchlist": [],
+                    "podcaster_stance": "混合/視情況",
+                },
+                "classification": classification_acc,
+                "tags": [],
+                "entities": entities_acc,
+                "arguments": [
+                    {
+                        "topic": n.get("topic", ""),
+                        "position": n.get("position", ""),
+                        "summary": "；".join(n.get("bullets", [])[:6]),
+                        "key_data": n.get("key_data", []),
+                        "related_concepts": n.get("related_concepts", []),
+                        "evidence_timestamps": n.get("evidence_timestamps", []),
+                    }
+                    for n in merged_notes[:10]
+                ],
+                "outlook_calls": [],
+            }
 
     obj = normalize_schema(obj)
 
@@ -346,7 +377,7 @@ def generate_json_summary(
     inline_text: str,
     raw_save_path: Optional[Path] = None,
     temperature: float = 0.2,
-    max_output_tokens: int = 4200,
+    max_output_tokens: int = 6000,
 ) -> dict:
     system_prompt = build_system_instruction(mode)
     schema_prompt = json_schema_description()

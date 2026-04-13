@@ -128,7 +128,7 @@ def repair_to_valid_json(client: genai.Client, model: str, bad_text: str) -> dic
         model=model,
         prompt_text=prompt,
         temperature=0.0,
-        max_output_tokens=4000,
+        max_output_tokens=8000,
         max_tries=6,
     )
 

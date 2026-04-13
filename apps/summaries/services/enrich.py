@@ -153,7 +153,10 @@ def ensure_min_arguments(
     try:
         obj = json.loads(clean)
     except Exception:
-        obj = repair_to_valid_json(client, model, clean)
+        try:
+            obj = repair_to_valid_json(client, model, clean)
+        except Exception:
+            return summary
 
     new_args = obj.get("arguments")
     if isinstance(new_args, list) and len(new_args) >= min_topics:

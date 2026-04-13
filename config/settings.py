@@ -93,6 +93,7 @@ DATABASES = {
         "PASSWORD": os.getenv("ETF_DB_PASSWORD", ""),
         "HOST": os.getenv("ETF_DB_HOST", ""),
         "PORT": os.getenv("ETF_DB_PORT", "5432"),
+        "OPTIONS": {"sslmode": "require"},
     },
     "summariesdb": {
         "ENGINE": "django.db.backends.postgresql",
@@ -112,6 +113,7 @@ DATABASES = {
         "PASSWORD": os.getenv("PODCASTS_DB_PASSWORD"),
         "HOST": os.getenv("PODCASTS_DB_HOST"),
         "PORT": os.getenv("PODCASTS_DB_PORT", "5432"),
+        "OPTIONS": {"sslmode": "require"},
     },
     "knowledge_graphdb": {
         "ENGINE": "django.db.backends.postgresql",
