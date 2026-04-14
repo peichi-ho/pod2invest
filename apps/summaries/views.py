@@ -8,7 +8,7 @@ from rest_framework import status
 from .serializers import SummarizeRequestSerializer, GenerateFromPodcastSerializer
 from .services.engine import summarize_from_srt_text
 from .models import SummaryRecord, BacktestingRecord
-from apps.podcasts.models import PodcastMetadata
+from apps.podcasts.models import PodcastEpisode
 from apps.glossary.services.annotator import annotate
 from apps.mindmap.services.gemini_mindmap import generate_mindmap_json
 
@@ -175,14 +175,17 @@ class GenerateFromPodcastAPIView(APIView):
 
         podcast_id = data["podcast_id"]
         try:
-            podcast = PodcastMetadata.objects.using("podcasts").get(id=podcast_id)
-        except PodcastMetadata.DoesNotExist:
+            episode = PodcastEpisode.objects.using("podcasts").select_related(
+                "podcast", "transcript"
+            ).get(id=podcast_id)
+        except PodcastEpisode.DoesNotExist:
             return Response(
                 {"detail": f"找不到 podcast id={podcast_id}"},
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        if not podcast.srt_content:
+        transcript = getattr(episode, "transcript", None)
+        if not transcript or not transcript.srt_content:
             return Response(
                 {"detail": f"podcast id={podcast_id} 沒有 srt_content，請先完成轉錄。"},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -191,7 +194,7 @@ class GenerateFromPodcastAPIView(APIView):
         try:
             result = summarize_from_srt_text(
                 api_key=api_key,
-                srt_text=podcast.srt_content,
+                srt_text=transcript.srt_content,
                 mode=data["mode"],
                 model=data.get("model", "models/gemini-2.5-flash-lite"),
                 chunk_threshold_chars=data.get("chunk_threshold_chars", 30000),
@@ -202,9 +205,9 @@ class GenerateFromPodcastAPIView(APIView):
                 result,
                 mode=data["mode"],
                 model_name=data.get("model", "models/gemini-2.5-flash-lite"),
-                source_filename=podcast.episode_title,
-                podcaster=podcast.show_name,
-                published_at=podcast.created_at,
+                source_filename=episode.episode_title,
+                podcaster=episode.podcast.show_name,
+                published_at=episode.published_at,
             )
 
             return Response(result | {"summary_id": record.id}, status=status.HTTP_200_OK)
