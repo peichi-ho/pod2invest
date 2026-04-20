@@ -21,7 +21,7 @@ yfinance
 # --- Podcast processing ---
 feedparser==6.0.12
 requests==2.32.5
-openai-whisper==20250625
+faster-whisper
 
 # --- ML / numeric ---
 torch==2.10.0

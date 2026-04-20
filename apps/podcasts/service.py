@@ -161,28 +161,27 @@ def transcribe_and_fix(
     3. 分段提交內容至 Gemini API 進行語意修正。
     4. 整合修正後的內容並產出最終 SRT 檔案。
     """
-    import whisper
     import shutil
+    from faster_whisper import WhisperModel
     if not shutil.which("ffmpeg"):
         raise RuntimeError("找不到 ffmpeg，請先安裝：winget install ffmpeg")
 
-    print(f"   [Step 1] 啟動 Whisper small 模型轉錄程序...")
-    model = whisper.load_model("small")
+    print(f"   [Step 1] 啟動 faster-whisper small 模型轉錄程序...")
+    model = WhisperModel("small", device="cpu", compute_type="int8")
 
-    result = model.transcribe(
+    segments, _ = model.transcribe(
         str(audio_path),
         language=language,
         initial_prompt="這是一段關於財經、指數、市場分析與投資討論的繁體中文內容。",
-        verbose=False,
     )
 
-    # 手動從 segments 產生 SRT，完全避免 Whisper writer 的中文檔名問題
+    # 從 segments 產生 SRT
     temp_srt_path = out_path.with_suffix(".tmp.srt")
     srt_lines = []
-    for i, seg in enumerate(result["segments"], start=1):
-        start = format_timestamp(seg["start"])
-        end = format_timestamp(seg["end"])
-        text = seg["text"].strip()
+    for i, seg in enumerate(segments, start=1):
+        start = format_timestamp(seg.start)
+        end = format_timestamp(seg.end)
+        text = seg.text.strip()
         srt_lines.append(f"{i}\n{start} --> {end}\n{text}\n")
 
     with open(temp_srt_path, "w", encoding="utf-8") as f:
@@ -193,7 +192,7 @@ def transcribe_and_fix(
         srt_content = f.read()
 
     srt_blocks = srt_content.strip().split("\n\n")
-    batch_size = 50
+    batch_size = 100
     final_srt_blocks = []
 
     print(
@@ -227,7 +226,7 @@ def fix_existing_srt_only(srt_path: Path, gemini_key: str) -> None:
         srt_content = f.read()
 
     srt_blocks = srt_content.strip().split("\n\n")
-    batch_size = 50
+    batch_size = 100
     final_srt_blocks = []
 
     print(f"   [Step 2] 開始 Gemini AI 語意校對（共 {len(srt_blocks)} 區塊）...")
