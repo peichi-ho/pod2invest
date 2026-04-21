@@ -24,6 +24,8 @@ requests==2.32.5
 faster-whisper
 
 # --- ML / numeric ---
+# If you have an NVIDIA GPU, install the CUDA version of PyTorch for faster Whisper transcription:
+# pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
 torch==2.10.0
 numpy==2.4.2
 sentence-transformers

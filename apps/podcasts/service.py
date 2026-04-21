@@ -167,7 +167,25 @@ def transcribe_and_fix(
         raise RuntimeError("找不到 ffmpeg，請先安裝：winget install ffmpeg")
 
     print(f"   [Step 1] 啟動 faster-whisper small 模型轉錄程序...")
-    model = WhisperModel("small", device="cpu", compute_type="int8")
+    import torch
+    if torch.cuda.is_available():
+        device, compute_type = "cuda", "float16"
+    else:
+        try:
+            import subprocess
+            result = subprocess.run("nvidia-smi", capture_output=True, text=True)
+            has_nvidia = result.returncode == 0
+        except FileNotFoundError:
+            has_nvidia = False
+
+        if has_nvidia:
+            print("   [!] 偵測到 NVIDIA GPU 但 CUDA 不可用，建議安裝 CUDA 版 PyTorch：")
+            print("       pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128")
+            print("   [!] 本次改用 CPU 繼續執行...")
+        device, compute_type = "cpu", "int8"
+
+    print(f"   [Device] 使用 {device.upper()} 進行轉錄")
+    model = WhisperModel("small", device=device, compute_type=compute_type)
 
     segments, _ = model.transcribe(
         str(audio_path),
