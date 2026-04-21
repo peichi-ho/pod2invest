@@ -181,9 +181,11 @@ def main():
             else:
                 transcribe_and_fix(audio_path, sub_path, language, gemini_key)
 
+            print(f"   [Debug] transcribe_and_fix 已返回")
             print(f"任務成功：{sub_path.name}")
 
             # 寫入資料庫（使用 RSS 原始音檔 URL）
+            print(f"   [Debug] 開始寫入資料庫...")
             try:
                 insert_to_db(
                     audio_url=url,
@@ -205,4 +207,8 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
+        print("\n[!] 使用者中止程式")
         sys.exit(130)
+    except BaseException as e:
+        print(f"\n[!] 未預期錯誤（{type(e).__name__}）: {e}")
+        raise

@@ -30,9 +30,11 @@ def fix_content_with_gemini(batch_text: str, gemini_key: str) -> str:
     """
     將 SRT 文本提交至 Gemini API 進行語意校對
     執行重點：同音錯字修正、財經專業術語校正、保持 SRT 格式結構。
+    失敗時自動 retry，最多 3 次，每次等待時間翻倍（10 → 20 → 40 秒）。
     """
-    client = genai.Client(api_key=gemini_key)
+    import time
 
+    client = genai.Client(api_key=gemini_key)
 
     prompt = f"""
     任務：專業逐字稿校對。
@@ -46,16 +48,25 @@ def fix_content_with_gemini(batch_text: str, gemini_key: str) -> str:
     待校對內容：
     {batch_text}
     """
-    try:
-        response = client.models.generate_content(
-        model="gemini-2.5-flash",
-        contents=prompt
-)
 
-        return response.text.replace("```srt", "").replace("```", "").strip()
-    except Exception as e:
-        print(f"   [Gemini Warning] 校對程序異常，保留原始文本: {e}")
-        return batch_text
+    wait = 10
+    for attempt in range(1, 4):
+        try:
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt,
+            )
+            return response.text.replace("```srt", "").replace("```", "").strip()
+        except KeyboardInterrupt:
+            raise
+        except Exception as e:
+            if attempt < 3:
+                print(f"   [Gemini Warning] 第 {attempt} 次失敗（{e}），{wait} 秒後重試...")
+                time.sleep(wait)
+                wait *= 2
+            else:
+                print(f"   [Gemini Warning] 三次嘗試均失敗，保留原始文本: {e}")
+                return batch_text
 
 
 # --- 通用工具函式 ---
@@ -187,20 +198,27 @@ def transcribe_and_fix(
     print(f"   [Device] 使用 {device.upper()} 進行轉錄")
     model = WhisperModel("small", device=device, compute_type=compute_type)
 
-    segments, _ = model.transcribe(
+    segments, info = model.transcribe(
         str(audio_path),
         language=language,
         initial_prompt="這是一段關於財經、指數、市場分析與投資討論的繁體中文內容。",
     )
 
-    # 從 segments 產生 SRT
+    # 從 segments 產生 SRT（含進度條）
+    from tqdm import tqdm
     temp_srt_path = out_path.with_suffix(".tmp.srt")
     srt_lines = []
-    for i, seg in enumerate(segments, start=1):
-        start = format_timestamp(seg.start)
-        end = format_timestamp(seg.end)
-        text = seg.text.strip()
-        srt_lines.append(f"{i}\n{start} --> {end}\n{text}\n")
+    total_sec = round(info.duration)
+    prev_sec = 0
+    with tqdm(total=total_sec, unit="秒", desc="   轉錄進度") as pbar:
+        for i, seg in enumerate(segments, start=1):
+            current_sec = round(seg.end)
+            pbar.update(current_sec - prev_sec)
+            prev_sec = current_sec
+            start = format_timestamp(seg.start)
+            end = format_timestamp(seg.end)
+            text = seg.text.strip()
+            srt_lines.append(f"{i}\n{start} --> {end}\n{text}\n")
 
     with open(temp_srt_path, "w", encoding="utf-8") as f:
         f.write("\n".join(srt_lines))
@@ -224,11 +242,15 @@ def transcribe_and_fix(
         fixed_batch = fix_content_with_gemini(batch, gemini_key)
         final_srt_blocks.append(fixed_batch)
 
+    print("   [Debug] 寫入最終 SRT 檔案...")
     with open(out_path, "w", encoding="utf-8") as f:
         f.write("\n\n".join(final_srt_blocks))
+    print("   [Debug] SRT 寫入完成")
 
     if temp_srt_path.exists():
+        print("   [Debug] 刪除暫存檔...")
         os.remove(temp_srt_path)
+        print("   [Debug] 暫存檔刪除完成")
 
 
 # --- 只校對現有 SRT（不重跑 Whisper） ---
