@@ -49,14 +49,28 @@ def fix_content_with_gemini(batch_text: str, gemini_key: str) -> str:
     {batch_text}
     """
 
+    import concurrent.futures
+
     wait = 10
     for attempt in range(1, 4):
         try:
-            response = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=prompt,
-            )
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(
+                    client.models.generate_content,
+                    model="gemini-2.5-flash",
+                    contents=prompt,
+                )
+                response = future.result(timeout=120)
             return response.text.replace("```srt", "").replace("```", "").strip()
+        except concurrent.futures.TimeoutError:
+            e = "請求逾時（120 秒無回應）"
+            if attempt < 3:
+                print(f"   [Gemini Warning] 第 {attempt} 次{e}，{wait} 秒後重試...")
+                time.sleep(wait)
+                wait *= 2
+            else:
+                print(f"   [Gemini Warning] 三次嘗試均失敗，保留原始文本")
+                return batch_text
         except KeyboardInterrupt:
             raise
         except Exception as e:
@@ -162,23 +176,22 @@ def download_file(url: str, out_path: Path) -> None:
 # --- 核心轉錄與 AI 校稿流程 ---
 
 
-def transcribe_and_fix(
-    audio_path: Path, out_path: Path, language: str | None, gemini_key: str
-):
-    """
-    轉錄流程管理：
-    1. 調用 Whisper Local 模型進行初步轉錄。
-    2. 手動從 segments 產生 SRT（避免 Windows 中文檔名問題）。
-    3. 分段提交內容至 Gemini API 進行語意修正。
-    4. 整合修正後的內容並產出最終 SRT 檔案。
-    """
+_whisper_model = None  # 模型只載入一次，避免 CUDA 清理 bug
+
+
+def _get_whisper_model():
+    """取得（或初始化）WhisperModel，整個程式執行期間只載入一次"""
+    global _whisper_model
+    if _whisper_model is not None:
+        return _whisper_model
+
     import shutil
+    import torch
     from faster_whisper import WhisperModel
+
     if not shutil.which("ffmpeg"):
         raise RuntimeError("找不到 ffmpeg，請先安裝：winget install ffmpeg")
 
-    print(f"   [Step 1] 啟動 faster-whisper small 模型轉錄程序...")
-    import torch
     if torch.cuda.is_available():
         device, compute_type = "cuda", "float16"
     else:
@@ -195,8 +208,23 @@ def transcribe_and_fix(
             print("   [!] 本次改用 CPU 繼續執行...")
         device, compute_type = "cpu", "int8"
 
-    print(f"   [Device] 使用 {device.upper()} 進行轉錄")
-    model = WhisperModel("small", device=device, compute_type=compute_type)
+    print(f"   [Device] 使用 {device.upper()} 進行轉錄（模型載入中...）")
+    _whisper_model = WhisperModel("small", device=device, compute_type=compute_type)
+    return _whisper_model
+
+
+def transcribe_and_fix(
+    audio_path: Path, out_path: Path, language: str | None, gemini_key: str
+):
+    """
+    轉錄流程管理：
+    1. 調用 Whisper Local 模型進行初步轉錄。
+    2. 手動從 segments 產生 SRT（避免 Windows 中文檔名問題）。
+    3. 分段提交內容至 Gemini API 進行語意修正。
+    4. 整合修正後的內容並產出最終 SRT 檔案。
+    """
+    print(f"   [Step 1] 啟動 faster-whisper small 模型轉錄程序...")
+    model = _get_whisper_model()
 
     segments, info = model.transcribe(
         str(audio_path),
