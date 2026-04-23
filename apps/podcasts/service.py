@@ -23,6 +23,13 @@ from google import genai
 ITUNES_SEARCH_URL = "https://itunes.apple.com/search"
 
 
+# --- 自訂例外 ---
+
+class GeminiCorrectionError(Exception):
+    """Gemini 校對三次均失敗時拋出，通知上層略過資料庫寫入"""
+    pass
+
+
 # --- Gemini 語意校對模組 ---
 
 
@@ -60,7 +67,7 @@ def fix_content_with_gemini(batch_text: str, gemini_key: str) -> str:
                     model="gemini-2.5-flash",
                     contents=prompt,
                 )
-                response = future.result(timeout=120)
+                response = future.result(timeout=300)
             return response.text.replace("```srt", "").replace("```", "").strip()
         except concurrent.futures.TimeoutError:
             e = "請求逾時（120 秒無回應）"
@@ -69,8 +76,7 @@ def fix_content_with_gemini(batch_text: str, gemini_key: str) -> str:
                 time.sleep(wait)
                 wait *= 2
             else:
-                print(f"   [Gemini Warning] 三次嘗試均失敗，保留原始文本")
-                return batch_text
+                raise GeminiCorrectionError("請求逾時，三次嘗試均失敗")
         except KeyboardInterrupt:
             raise
         except Exception as e:
@@ -79,8 +85,7 @@ def fix_content_with_gemini(batch_text: str, gemini_key: str) -> str:
                 time.sleep(wait)
                 wait *= 2
             else:
-                print(f"   [Gemini Warning] 三次嘗試均失敗，保留原始文本: {e}")
-                return batch_text
+                raise GeminiCorrectionError(str(e))
 
 
 # --- 通用工具函式 ---

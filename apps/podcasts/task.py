@@ -64,6 +64,7 @@ from service import (
     download_file,
     transcribe_and_fix,
     fix_existing_srt_only,
+    GeminiCorrectionError,
     insert_to_db,
 )
 
@@ -152,6 +153,8 @@ def main():
 
     print(f"[輸出路徑] {show_dir}\n")
 
+    correction_failed = []  # 收集校正失敗的集數
+
     for i, entry in enumerate(selected):
         title = entry.get("title", f"episode_{i}")
         safe_title = sanitize_filename(title)
@@ -175,17 +178,20 @@ def main():
                 download_file(url, audio_path)
 
             # 轉錄 + 校對
-            if sub_path.exists():
-                print(f"   [Smart Skip] SRT 已存在，直接校對...")
-                fix_existing_srt_only(sub_path, gemini_key)
-            else:
-                transcribe_and_fix(audio_path, sub_path, language, gemini_key)
+            try:
+                if sub_path.exists():
+                    print(f"   [Smart Skip] SRT 已存在，直接校對...")
+                    fix_existing_srt_only(sub_path, gemini_key)
+                else:
+                    transcribe_and_fix(audio_path, sub_path, language, gemini_key)
+            except GeminiCorrectionError as e:
+                print(f"   [!] Gemini 校正失敗，略過資料庫寫入：{title}")
+                correction_failed.append(title)
+                continue
 
-            print(f"   [Debug] transcribe_and_fix 已返回")
             print(f"任務成功：{sub_path.name}")
 
             # 寫入資料庫（使用 RSS 原始音檔 URL）
-            print(f"   [Debug] 開始寫入資料庫...")
             try:
                 insert_to_db(
                     audio_url=url,
@@ -201,6 +207,13 @@ def main():
             import traceback
             traceback.print_exc()
             print(f"任務失敗：{title} | 原因：{e}")
+
+    if correction_failed:
+        print(f"\n{'='*50}")
+        print(f"以下 {len(correction_failed)} 集 Gemini 校正失敗，SRT 已存在本地，請用 fix_insert.py 補跑：")
+        for t in correction_failed:
+            print(f"  - {t}")
+        print(f"{'='*50}")
 
 
 if __name__ == "__main__":
