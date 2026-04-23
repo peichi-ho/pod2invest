@@ -289,7 +289,10 @@ def review_outlook_payload(
     try:
         obj = json.loads(clean)
     except json.JSONDecodeError:
-        obj = repair_to_valid_json(client, model, clean)
+        try:
+            obj = repair_to_valid_json(client, model, clean)
+        except Exception:
+            return {"reviewed_calls": [], "rejected_calls": []}
 
     if not isinstance(obj, dict):
         return {"reviewed_calls": [], "rejected_calls": []}

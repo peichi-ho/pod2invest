@@ -17,10 +17,17 @@ import django
 django.setup()
 
 import requests
-import google.generativeai as genai
+from google import genai
 
 # 配置資訊與常數定義
 ITUNES_SEARCH_URL = "https://itunes.apple.com/search"
+
+
+# --- 自訂例外 ---
+
+class GeminiCorrectionError(Exception):
+    """Gemini 校對三次均失敗時拋出，通知上層略過資料庫寫入"""
+    pass
 
 
 # --- Gemini 語意校對模組 ---
@@ -30,10 +37,11 @@ def fix_content_with_gemini(batch_text: str, gemini_key: str) -> str:
     """
     將 SRT 文本提交至 Gemini API 進行語意校對
     執行重點：同音錯字修正、財經專業術語校正、保持 SRT 格式結構。
+    失敗時自動 retry，最多 3 次，每次等待時間翻倍（10 → 20 → 40 秒）。
     """
-    genai.configure(api_key=gemini_key)
+    import time
 
-    model = genai.GenerativeModel("gemini-2.5-flash")
+    client = genai.Client(api_key=gemini_key)
 
     prompt = f"""
     任務：專業逐字稿校對。
@@ -47,12 +55,37 @@ def fix_content_with_gemini(batch_text: str, gemini_key: str) -> str:
     待校對內容：
     {batch_text}
     """
-    try:
-        response = model.generate_content(prompt)
-        return response.text.replace("```srt", "").replace("```", "").strip()
-    except Exception as e:
-        print(f"   [Gemini Warning] 校對程序異常，保留原始文本: {e}")
-        return batch_text
+
+    import concurrent.futures
+
+    wait = 10
+    for attempt in range(1, 4):
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(
+                    client.models.generate_content,
+                    model="gemini-2.5-flash",
+                    contents=prompt,
+                )
+                response = future.result(timeout=300)
+            return response.text.replace("```srt", "").replace("```", "").strip()
+        except concurrent.futures.TimeoutError:
+            e = "請求逾時（120 秒無回應）"
+            if attempt < 3:
+                print(f"   [Gemini Warning] 第 {attempt} 次{e}，{wait} 秒後重試...")
+                time.sleep(wait)
+                wait *= 2
+            else:
+                raise GeminiCorrectionError("請求逾時，三次嘗試均失敗")
+        except KeyboardInterrupt:
+            raise
+        except Exception as e:
+            if attempt < 3:
+                print(f"   [Gemini Warning] 第 {attempt} 次失敗（{e}），{wait} 秒後重試...")
+                time.sleep(wait)
+                wait *= 2
+            else:
+                raise GeminiCorrectionError(str(e))
 
 
 # --- 通用工具函式 ---
@@ -148,6 +181,43 @@ def download_file(url: str, out_path: Path) -> None:
 # --- 核心轉錄與 AI 校稿流程 ---
 
 
+_whisper_model = None  # 模型只載入一次，避免 CUDA 清理 bug
+
+
+def _get_whisper_model():
+    """取得（或初始化）WhisperModel，整個程式執行期間只載入一次"""
+    global _whisper_model
+    if _whisper_model is not None:
+        return _whisper_model
+
+    import shutil
+    import torch
+    from faster_whisper import WhisperModel
+
+    if not shutil.which("ffmpeg"):
+        raise RuntimeError("找不到 ffmpeg，請先安裝：winget install ffmpeg")
+
+    if torch.cuda.is_available():
+        device, compute_type = "cuda", "float16"
+    else:
+        try:
+            import subprocess
+            result = subprocess.run("nvidia-smi", capture_output=True, text=True)
+            has_nvidia = result.returncode == 0
+        except FileNotFoundError:
+            has_nvidia = False
+
+        if has_nvidia:
+            print("   [!] 偵測到 NVIDIA GPU 但 CUDA 不可用，建議安裝 CUDA 版 PyTorch：")
+            print("       pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128")
+            print("   [!] 本次改用 CPU 繼續執行...")
+        device, compute_type = "cpu", "int8"
+
+    print(f"   [Device] 使用 {device.upper()} 進行轉錄（模型載入中...）")
+    _whisper_model = WhisperModel("small", device=device, compute_type=compute_type)
+    return _whisper_model
+
+
 def transcribe_and_fix(
     audio_path: Path, out_path: Path, language: str | None, gemini_key: str
 ):
@@ -158,29 +228,30 @@ def transcribe_and_fix(
     3. 分段提交內容至 Gemini API 進行語意修正。
     4. 整合修正後的內容並產出最終 SRT 檔案。
     """
-    import whisper
-    import shutil
-    if not shutil.which("ffmpeg"):
-        raise RuntimeError("找不到 ffmpeg，請先安裝：winget install ffmpeg")
+    print(f"   [Step 1] 啟動 faster-whisper small 模型轉錄程序...")
+    model = _get_whisper_model()
 
-    print(f"   [Step 1] 啟動 Whisper small 模型轉錄程序...")
-    model = whisper.load_model("small")
-
-    result = model.transcribe(
+    segments, info = model.transcribe(
         str(audio_path),
         language=language,
         initial_prompt="這是一段關於財經、指數、市場分析與投資討論的繁體中文內容。",
-        verbose=False,
     )
 
-    # 手動從 segments 產生 SRT，完全避免 Whisper writer 的中文檔名問題
+    # 從 segments 產生 SRT（含進度條）
+    from tqdm import tqdm
     temp_srt_path = out_path.with_suffix(".tmp.srt")
     srt_lines = []
-    for i, seg in enumerate(result["segments"], start=1):
-        start = format_timestamp(seg["start"])
-        end = format_timestamp(seg["end"])
-        text = seg["text"].strip()
-        srt_lines.append(f"{i}\n{start} --> {end}\n{text}\n")
+    total_sec = round(info.duration)
+    prev_sec = 0
+    with tqdm(total=total_sec, unit="秒", desc="   轉錄進度") as pbar:
+        for i, seg in enumerate(segments, start=1):
+            current_sec = round(seg.end)
+            pbar.update(current_sec - prev_sec)
+            prev_sec = current_sec
+            start = format_timestamp(seg.start)
+            end = format_timestamp(seg.end)
+            text = seg.text.strip()
+            srt_lines.append(f"{i}\n{start} --> {end}\n{text}\n")
 
     with open(temp_srt_path, "w", encoding="utf-8") as f:
         f.write("\n".join(srt_lines))
@@ -190,7 +261,7 @@ def transcribe_and_fix(
         srt_content = f.read()
 
     srt_blocks = srt_content.strip().split("\n\n")
-    batch_size = 50
+    batch_size = 100
     final_srt_blocks = []
 
     print(
@@ -204,11 +275,15 @@ def transcribe_and_fix(
         fixed_batch = fix_content_with_gemini(batch, gemini_key)
         final_srt_blocks.append(fixed_batch)
 
+    print("   [Debug] 寫入最終 SRT 檔案...")
     with open(out_path, "w", encoding="utf-8") as f:
         f.write("\n\n".join(final_srt_blocks))
+    print("   [Debug] SRT 寫入完成")
 
     if temp_srt_path.exists():
+        print("   [Debug] 刪除暫存檔...")
         os.remove(temp_srt_path)
+        print("   [Debug] 暫存檔刪除完成")
 
 
 # --- 只校對現有 SRT（不重跑 Whisper） ---
@@ -224,7 +299,7 @@ def fix_existing_srt_only(srt_path: Path, gemini_key: str) -> None:
         srt_content = f.read()
 
     srt_blocks = srt_content.strip().split("\n\n")
-    batch_size = 50
+    batch_size = 100
     final_srt_blocks = []
 
     print(f"   [Step 2] 開始 Gemini AI 語意校對（共 {len(srt_blocks)} 區塊）...")
@@ -250,21 +325,39 @@ def insert_to_db(
     srt_path: Path,
     show_name: str,
     episode_title: str,
+    published_at=None,
 ) -> None:
     """
-    透過 Django ORM 將 Podcast 資料寫入資料庫
-    audio_url 直接使用 RSS 原始連結，不上傳到 Supabase Storage
+    透過 Django ORM 將 Podcast 資料寫入資料庫。
+    採正規化三表結構：
+      - Podcast        → 頻道（相同頻道只建一筆）
+      - PodcastEpisode → 單集 metadata（含官方上傳時間）
+      - PodcastTranscript → 逐字稿（重跑校對時更新 srt_content）
     """
-    from apps.podcasts.models import PodcastMetadata
+    from apps.podcasts.models import Podcast, PodcastEpisode, PodcastTranscript
 
     with open(srt_path, "r", encoding="utf-8") as f:
         srt_content = f.read().strip()
 
-    PodcastMetadata.objects.create(
+    # 取得或建立頻道
+    podcast, _ = Podcast.objects.get_or_create(
         show_name=show_name or "未知頻道",
+    )
+
+    # 取得或建立單集
+    episode, _ = PodcastEpisode.objects.get_or_create(
+        podcast=podcast,
         episode_title=episode_title or srt_path.stem,
-        audio_url=audio_url,
-        srt_content=srt_content,
+        defaults={
+            "audio_url": audio_url,
+            "published_at": published_at,
+        },
+    )
+
+    # 建立或更新逐字稿（重跑校對時覆蓋 srt_content）
+    PodcastTranscript.objects.update_or_create(
+        episode=episode,
+        defaults={"srt_content": srt_content},
     )
 
     print(f"   [✓] 資料庫寫入成功 → {audio_url}")
