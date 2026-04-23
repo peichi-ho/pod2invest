@@ -106,7 +106,10 @@ def get_graph_data(
         if industry:
             source_ind = node_info.get(source, "")
             target_ind = node_info.get(target, "")
-            if industry not in source_ind and industry not in target_ind:
+            keyword_lower = industry.lower()
+            source_match = (keyword_lower in source_ind.lower()) or (keyword_lower in source.lower())
+            target_match = (keyword_lower in target_ind.lower()) or (keyword_lower in target.lower())
+            if not source_match and not target_match:
                 continue
 
         connected_nodes.add(source)
@@ -135,3 +138,55 @@ def get_graph_data(
 
     print(f"✅ 查詢完成：{len(final_nodes)} 個節點，{len(final_links)} 條連線")
     return {"nodes": final_nodes, "links": final_links}
+
+
+# ==========================================
+# 模組 3: 圖譜 AI 解讀
+# ==========================================
+def generate_graph_narrative(nodes: list, links: list, filters: dict) -> str:
+    """
+    根據 D3.js 圖譜資料，用 Gemini 生成投資人視角的圖譜解讀。
+    """
+    # 計算每個節點的連線數（degree）
+    degree_map = {n["id"]: 0 for n in nodes}
+    for link in links:
+        src = link.get("source", "")
+        tgt = link.get("target", "")
+        if src in degree_map:
+            degree_map[src] += 1
+        if tgt in degree_map:
+            degree_map[tgt] += 1
+
+    industry   = filters.get("industry")   or "不限"
+    start_date = filters.get("start_date") or "最早"
+    end_date   = filters.get("end_date")   or "最新"
+
+    nodes_text = json.dumps(
+        [{"名稱": n["id"], "產業": n.get("industry", ""), "連線數": degree_map.get(n["id"], 0)}
+         for n in nodes],
+        ensure_ascii=False, indent=2,
+    )
+    links_text = json.dumps(
+        [{"來源": l["source"], "目標": l["target"], "關係": l.get("relation_type", ""),
+          "提及次數": l.get("weight", 1), "原因摘要": (l.get("reasons") or [])}
+         for l in links],
+        ensure_ascii=False, indent=2,
+    )
+
+    prompt = (
+        "你是一位財經分析師，正在解讀一張從財經 Podcast 摘要中萃取的產業關聯知識圖譜。\n\n"
+        f"【所有節點】\n{nodes_text}\n\n"
+        f"【所有連線】\n{links_text}\n\n"
+        "請用繁體中文，以專業投資人的角度，撰寫圖譜解讀：\n"
+        "1. 以最關鍵的節點是誰、為何連線最多，去解釋這張圖譜值得注意的訊號\n"
+        "2. 對投資人最重要的啟示\n"
+        "語氣：專業但簡潔易讀，用連貫段落，不要用條列，字數不要太多。"
+    )
+
+    try:
+        client = _get_client()
+        model_name = getattr(settings, "GEMINI_MODEL", "gemini-1.5-flash")
+        response = client.models.generate_content(model=model_name, contents=prompt)
+        return response.text.strip()
+    except Exception as e:
+        raise RuntimeError(f"圖譜解讀生成失敗: {e}")
