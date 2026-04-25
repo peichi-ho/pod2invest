@@ -6,7 +6,9 @@ from typing import Any, Dict, List
 import requests
 
 GEMINI_API_KEY_ENV = "GEMINI_API_KEY"
-GEMINI_MODEL = "gemini-2.5-flash"
+from django.conf import settings
+GEMINI_MODEL = settings.GEMINI_MODEL
+
 MAX_ARGUMENTS = 8
 
 
@@ -104,10 +106,11 @@ def build_prompt_for_mindmap(data: Dict[str, Any]) -> str:
 
 【摘要處理規則】
 
-1. arguments 內的 summary 不得為長段落
-2. summary 若超過 20 字，必須拆成多個短句
-3. key_data 若資訊過多，保留最關鍵 3-4 筆
-4. 每筆 key_data 亦須 ≤ 20 字
+1. arguments 最多保留 5 個，選最重要的
+2. 每個 argument 的 summary 最多 3 個元素，不可更多
+3. 每個 summary 元素 ≤ 15 個中文字，只講一件事
+4. key_data 完全不需要輸出，從 JSON 格式中移除
+5. position 完全不需要輸出，從 JSON 格式中移除
 
 【語言要求】
 
@@ -121,29 +124,18 @@ def build_prompt_for_mindmap(data: Dict[str, Any]) -> str:
 
 {{
   "title": ".",
-  "one_sentence_summary": ".",
-  "investment_takeaways": {{
-    "bullish": ["."],
-    "bearish": ["."],
-    "watchlist": ["."],
-    "podcaster_stance": "."
-  }},
   "arguments": [
     {{
       "topic": ".",
-      "position": ".",
-      "summary": [".", "."],
-      "key_data": [
-        {{"label": ".", "value": ".", "context": "."}}
-      ]
+      "summary": [".", "."]
     }}
   ]
 }}
 
 重要：
-summary 必須為字串陣列
-每一個元素為一個短節點
-不得為單一長段落字串
+- summary 每個最多 3 個元素
+- 每個元素 ≤ 20 字
+- 不需要 investment_takeaways、key_data、position、one_sentence_summary
 
 請開始轉換以下資料：
 {json.dumps(source, ensure_ascii=False)}

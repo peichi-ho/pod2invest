@@ -1,0 +1,2317 @@
+<!DOCTYPE html>
+<html class="light" lang="zh-TW">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Pod2Invest</title>
+<link href="https://fonts.googleapis.com/css2?family=Epilogue:wght@400;500;700;800&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+<script id="tailwind-config">
+  tailwind.config = {
+    darkMode: "class",
+    theme: {
+      extend: {
+        colors: {
+          "on-error-container": "#93000a","on-error": "#ffffff","surface-tint": "#8d4f00",
+          "tertiary-fixed-dim": "#abccd1","on-primary-fixed": "#2d1600","on-tertiary-fixed-variant": "#2c4c50",
+          "on-primary-fixed-variant": "#6b3b00","on-secondary": "#ffffff","secondary": "#286671",
+          "on-tertiary-container": "#7a9b9f","on-primary-container": "#d97f12","error": "#ba1a1a",
+          "surface-dim": "#dcdad1","surface-container-highest": "#e5e3d9","surface-container-high": "#eae8df",
+          "inverse-surface": "#31312b","on-tertiary-fixed": "#001f23","on-surface-variant": "#414849",
+          "surface-container": "#f0eee5","inverse-primary": "#ffb875","tertiary-fixed": "#c7e9ed",
+          "secondary-fixed": "#b0ecf9","on-surface": "#1c1c16","surface-variant": "#e5e3d9",
+          "outline": "#717879","tertiary-container": "#113236","inverse-on-surface": "#f3f1e7",
+          "surface-container-lowest": "#ffffff","on-secondary-container": "#2f6d78","on-primary": "#ffffff",
+          "secondary-container": "#b0ecf9","error-container": "#ffdad6","on-secondary-fixed": "#001f25",
+          "on-secondary-fixed-variant": "#024e59","background": "#fcf9f0","on-tertiary": "#ffffff",
+          "primary": "#291300","primary-fixed": "#ffdcc0","surface-container-low": "#f6f4ea",
+          "surface-bright": "#fcf9f0","primary-fixed-dim": "#ffb875","surface": "#fcf9f0",
+          "tertiary": "#001d20","on-background": "#1c1c16","primary-container": "#472500",
+          "outline-variant": "#c1c8c9","secondary-fixed-dim": "#95d0dc"
+        },
+        fontFamily: { "headline": ["Epilogue"], "body": ["Manrope"], "label": ["Manrope"] },
+        borderRadius: {"DEFAULT": "1rem", "lg": "2rem", "xl": "3rem", "full": "9999px"},
+      },
+    },
+  }
+</script>
+<style>
+  .material-symbols-outlined {
+    font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+  }
+  body { min-height: 100dvh; font-family: 'Manrope', sans-serif; background: #fcf9f0; }
+  .page { display: none; animation: fadeIn 0.25s ease; }
+  .page.active { display: block; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes slideUp { from { opacity: 0; transform: translateY(40px); } to { opacity: 1; transform: translateY(0); } }
+  .animate-slide-up { animation: slideUp 0.25s ease; }
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+  .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+  .asymmetric-grid { display: grid; grid-template-columns: 1.2fr 0.8fr; gap: 2rem; }
+  @media (max-width: 768px) { .asymmetric-grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body class="bg-surface text-on-surface pb-28">
+
+<!-- Top Navigation -->
+<header class="fixed top-0 w-full flex justify-between items-center px-6 h-16 bg-[#fcf9f0]/80 backdrop-blur-xl z-50 shadow-[0px_10px_30px_rgba(28,28,22,0.06)] relative">
+  <div class="w-10"></div>
+  <h1 class="font-['Epilogue'] font-bold tracking-[-0.02em] text-2xl text-[#113236] absolute left-1/2 -translate-x-1/2">Pod2Invest</h1>
+  <button onclick="showPage('profile')" class="w-10 h-10 rounded-full overflow-hidden bg-surface-container-highest hover:opacity-80 transition-opacity">
+    <div class="w-full h-full flex flex-col items-center justify-center gap-1" style="background:#e5e3d9"><span class="material-symbols-outlined text-white/70 text-3xl" style="font-variation-settings:'FILL' 1">person</span><span class="text-white/60 text-[10px] font-bold uppercase tracking-widest">User</span></div>
+  </button>
+</header>
+
+<audio id="disc-audio"></audio>
+<!-- ═══════════════════════════════════════════════ PAGE: DISCOVER ═══ -->
+<div id="page-discover" class="page active pt-24 px-6 max-w-5xl mx-auto space-y-10">
+  <section>
+    <div class="relative">
+      <input class="w-full h-14 pl-14 pr-6 bg-surface-container-high rounded-full border-none focus:ring-2 focus:ring-secondary font-body text-on-surface-variant" placeholder="Search insights, podcasts, or tickers..." type="text"/>
+      <span class="material-symbols-outlined absolute left-5 top-1/2 -translate-y-1/2 text-outline">search</span>
+    </div>
+    <div id="discover-tags" class="flex gap-3 mt-6 overflow-x-auto pb-2 no-scrollbar">
+      <span class="text-outline text-sm self-center">載入中...</span>
+    </div>
+  </section>
+
+  <!-- 標籤搜尋結果（預設隱藏） -->
+  <section id="tag-results-section" class="hidden">
+    <div class="flex justify-between items-end mb-5">
+      <h2 id="tag-results-title" class="text-2xl font-bold tracking-tight text-tertiary-container font-['Epilogue']">關鍵字結果</h2>
+      <button onclick="filterDiscoverByTag(null)" class="flex items-center gap-1 text-secondary text-sm font-semibold hover:opacity-70 transition-opacity">
+        <span class="material-symbols-outlined text-base">close</span>清除
+      </button>
+    </div>
+    <div id="tag-results-list" class="space-y-3"></div>
+  </section>
+
+  <section id="continue-listening-section">
+    <div class="flex justify-between items-end mb-6">
+      <h2 class="text-3xl font-bold tracking-tight text-tertiary-container font-['Epilogue']">Continue Listening</h2>
+      <span class="text-secondary text-sm font-semibold cursor-pointer underline decoration-2 underline-offset-4">View History</span>
+    </div>
+    <div id="continue-listening-card"><p class="text-outline text-sm">載入中...</p></div>
+  </section>
+
+  <section id="verified-insights-section">
+    <div class="flex justify-between items-end mb-6">
+      <h2 class="text-3xl font-bold tracking-tight text-tertiary-container font-['Epilogue']">Verified Insights</h2>
+      <div class="flex items-center gap-2 text-on-primary-container font-bold text-sm">
+        <span class="material-symbols-outlined text-sm" style="font-variation-settings: 'FILL' 1;">verified</span>Backtest Wall
+      </div>
+    </div>
+          <div id="insights-grid" class="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <p class="text-outline text-sm col-span-2">載入中...</p>
+      </div>
+
+  </section>
+
+  <!-- ── Recommended For You ── -->
+  <section id="recommended-section" class="pb-6">
+    <div class="flex justify-between items-end mb-6">
+      <h2 class="text-3xl font-bold tracking-tight text-tertiary-container font-['Epilogue']">Recommended For You</h2>
+      <span class="text-secondary text-sm font-semibold cursor-pointer underline decoration-2 underline-offset-4">See All</span>
+    </div>
+
+    <div id="recommended-cards" class="flex gap-4 overflow-x-auto pb-4 no-scrollbar -mx-2 px-2">
+      <p class="text-outline text-sm">載入中...</p>
+    </div>
+  </section>
+
+</div>
+
+<!-- ═══════════════════════════════════════════════ PAGE: RANKINGS ═══ -->
+<div id="page-rankings" class="page pt-24 px-6 max-w-5xl mx-auto pb-8">
+
+  <!-- Hero -->
+  <section class="mb-10">
+    <div class="inline-block px-3 py-1 rounded-full bg-secondary-container/30 text-secondary font-label text-xs font-bold tracking-widest uppercase mb-4">This Month</div>
+    <h2 class="font-['Epilogue'] text-5xl font-bold tracking-tight text-tertiary-container mb-2">Creator Rankings</h2>
+    <p class="text-secondary font-medium">Ranked by listener count, accuracy score & engagement.</p>
+  </section>
+
+  <!-- Top 3 Podium -->
+  <section class="mb-10">
+    <div id="rankings-podium" class="grid grid-cols-3 gap-4 items-end min-h-[200px]">
+      <div class="col-span-3 flex items-center justify-center text-outline text-sm py-12">載入中...</div>
+    </div>
+  </section>
+
+  <!-- Full List #4 onwards -->
+  <section class="space-y-3">
+    <h3 class="font-['Epilogue'] font-bold text-lg text-tertiary-container mb-4">Full Rankings</h3>
+    <div id="rankings-full-list" class="space-y-3"></div>
+  </section>
+</div>
+
+<!-- ═══════════════════════════════════════════════ PAGE: PODCASTER ═══ -->
+<div id="page-podcaster" class="page pt-20 pb-32 px-6 max-w-5xl mx-auto">
+
+  <!-- Back button -->
+  <button onclick="showPage('rankings')" class="flex items-center gap-1 text-secondary font-label text-sm font-semibold mb-6 hover:opacity-70 transition-opacity">
+    <span class="material-symbols-outlined text-base">arrow_back_ios</span>
+    Rankings
+  </button>
+
+  <!-- Header -->
+  <section class="flex flex-col items-center text-center mb-8">
+    <div id="podcaster-avatar" class="w-20 h-20 rounded-full overflow-hidden mb-4 shadow-lg">
+      <div id="podcaster-avatar-inner" class="w-full h-full flex items-center justify-center">
+        <span id="podcaster-avatar-icon" class="material-symbols-outlined text-white/80 text-4xl" style="font-variation-settings:'FILL' 1">podcasts</span>
+      </div>
+    </div>
+    <h2 id="podcaster-name" class="font-['Epilogue'] text-3xl font-bold tracking-tight text-tertiary-container mb-1">節目名稱</h2>
+    <p id="podcaster-host" class="text-sm text-outline font-medium mb-5">節目主持人</p>
+
+    <!-- Stats pills -->
+    <div class="flex gap-3 mb-6">
+      <div class="px-4 py-1.5 bg-surface-container-low rounded-full text-xs font-bold text-secondary border border-outline-variant/20">
+        <span id="podcaster-listeners">—</span> Listeners
+      </div>
+      <div class="px-4 py-1.5 bg-surface-container-low rounded-full text-xs font-bold text-on-primary-container border border-outline-variant/20">
+        <span id="podcaster-accuracy">—</span>% Accuracy
+      </div>
+    </div>
+
+    <!-- Two oval action buttons -->
+    <div class="flex gap-4">
+      <button id="btn-all-episodes" onclick="switchPodcasterTab('episodes')" class="px-6 py-2.5 bg-tertiary-container text-white rounded-full font-label text-sm font-bold tracking-wide shadow-md transition-all">所有集數</button>
+      <button id="btn-all-views" onclick="switchPodcasterTab('views')" class="px-6 py-2.5 bg-surface-container-low text-secondary rounded-full font-label text-sm font-bold tracking-wide border border-secondary/30 transition-all">所有觀點</button>
+    </div>
+  </section>
+
+  <!-- Episodes tab -->
+  <section id="tab-episodes" class="space-y-3">
+    <div id="podcaster-episodes-list" class="space-y-3"></div>
+  </section>
+
+  <!-- Views tab -->
+  <section id="tab-views" class="space-y-3 hidden">
+    <div id="podcaster-views-list" class="space-y-3"></div>
+  </section>
+
+</div>
+
+<!-- ═══════════════════════════════════════════════ PAGE: DEEP DIVE ═══ -->
+<div id="page-deep-dive" class="page pt-24 pb-32 px-6 max-w-7xl mx-auto">
+  <header class="mb-12">
+  <button onclick="goBack()" class="flex items-center gap-1 text-secondary font-label text-sm font-semibold mb-6 hover:opacity-70 transition-opacity">
+    <span class="material-symbols-outlined text-base">arrow_back_ios</span>
+    返回
+  </button>
+  <div class="inline-block px-3 py-1 rounded-full bg-secondary-container/30 text-secondary font-label text-xs font-bold tracking-widest uppercase mb-4">Deep Dive Series</div>
+  <h1 id="dd-title" class="font-['Epilogue'] text-2xl md:text-3xl font-bold text-tertiary-container tracking-[-0.02em] leading-snug mb-3">載入中...</h1>
+  <p id="dd-podcaster" class="text-sm text-on-surface-variant font-body mb-8">Extracted from <span class="font-semibold"></span></p>
+  <audio id="dd-audio"></audio></audio>
+  <div class="p-8 md:p-12 rounded-lg bg-tertiary-container text-surface relative overflow-hidden shadow-2xl">
+    <div class="absolute top-0 right-0 w-64 h-64 bg-on-primary-container/10 blur-3xl -mr-20 -mt-20"></div>
+    <p id="dd-one-sentence" class="font-['Epilogue'] text-2xl md:text-3xl font-medium leading-relaxed relative z-10 italic"></p>
+  </div>
+</header>
+
+
+  <!-- ── Viewpoint Verification ── -->
+  <section class="space-y-6 mb-12">
+    <div class="flex justify-between items-end">
+      <h2 class="font-['Epilogue'] text-3xl font-bold text-tertiary-container">Viewpoint Verification</h2>
+      <div class="flex items-center gap-1.5 text-on-primary-container font-bold text-sm">
+        <span class="material-symbols-outlined text-sm" style="font-variation-settings:'FILL' 1">verified</span>
+        Backtest Wall
+      </div>
+    </div>
+    <div id="dd-viewpoints" class="space-y-4">
+      <p class="text-outline text-sm">載入中...</p>
+    </div>
+  </section>
+
+  <div class="space-y-12 mb-20">
+    <section class="space-y-6">
+      <div class="flex justify-between items-end">
+        <h2 class="font-['Epilogue'] text-3xl font-bold text-tertiary-container">Mind Map</h2>
+        <span class="text-secondary font-label text-sm font-semibold">Visualizing Moats</span>
+      </div>
+      <div id="mindmap-container" class="w-full rounded-lg bg-surface-container-low border border-outline-variant/20 overflow-x-auto" style="height: 500px;">
+        <p class="text-outline text-sm p-4">心智圖載入中...</p>
+      </div>
+
+
+
+  
+    </section>
+    <section class="space-y-6">
+      <div class="flex items-center justify-between">
+        <h2 class="font-['Epilogue'] text-3xl font-bold text-tertiary-container">Investment Takeaways</h2>
+        <div class="flex gap-2 bg-surface-container-low rounded-full p-1 border border-outline-variant/20">
+          <button id="btn-mode-novice" onclick="switchDdMode('novice')" class="px-5 py-1.5 rounded-full font-label text-xs font-bold tracking-wide transition-all bg-tertiary-container text-white">Novice</button>
+          <button id="btn-mode-pro" onclick="switchDdMode('pro')" class="px-5 py-1.5 rounded-full font-label text-xs font-bold tracking-wide transition-all text-secondary">Pro</button>
+        </div>
+      </div>
+      <div id="dd-takeaways" class="space-y-4">
+        <p class="text-outline text-sm">載入中...</p>
+      </div>
+
+        
+     
+    </section>
+  </div>
+
+  <section class="mb-20">
+    <div class="mb-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <h2 class="font-['Epilogue'] text-4xl font-bold text-tertiary-container">Critical Thesis Points</h2>
+    </div>
+    <!-- Audio Player -->
+    <div id="dd-audio-player" class="hidden mb-8 p-5 rounded-2xl bg-surface-container-low border border-outline-variant/20">
+      <div class="flex items-center gap-4">
+        <button id="dd-play-btn" onclick="toggleAudioPlay()"
+          class="w-11 h-11 rounded-full bg-on-primary-container text-white flex items-center justify-center flex-shrink-0 hover:scale-105 transition-transform shadow">
+          <span id="dd-play-icon" class="material-symbols-outlined text-xl" style="font-variation-settings:'FILL' 1">play_arrow</span>
+        </button>
+        <div class="flex-1 min-w-0">
+          <p class="text-[11px] font-bold text-outline uppercase tracking-widest mb-1.5">Play Summary Audio</p>
+          <div class="flex justify-between text-[11px] font-bold text-outline mb-1.5">
+            <span id="dd-current-time">0:00</span>
+            <span id="dd-duration">--:--</span>
+          </div>
+          <div id="dd-progress-bar" onclick="seekAudio(event)"
+            class="relative h-2 bg-surface-container-highest rounded-full cursor-pointer group">
+            <div id="dd-progress-fill" class="h-full bg-on-primary-container rounded-full transition-none" style="width:0%"></div>
+            <div id="dd-progress-thumb" class="absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-on-primary-container rounded-full shadow opacity-0 group-hover:opacity-100 transition-opacity" style="left:0%"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="space-y-0">
+
+      <!-- Thesis Item 1 -->
+      <div id="dd-arguments" class="space-y-0">
+        <p class="text-outline text-sm">載入中...</p>
+      </div>
+
+     
+          
+    
+    
+      
+
+    </div>
+  </section>
+
+  <!-- ── Ticker Targets ── -->
+  <section id="dd-ticker-section" class="mb-20 hidden">
+    <div class="flex items-center gap-3 mb-6">
+      <h2 class="font-['Epilogue'] text-3xl font-bold text-tertiary-container">本集試算標的</h2>
+      <span class="px-3 py-1 rounded-full bg-on-primary-container/10 text-on-primary-container text-[10px] font-bold uppercase tracking-widest">節目提及</span>
+    </div>
+    <div id="dd-ticker-list" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"></div>
+  </section>
+
+  <section>
+    <h2 class="font-['Epilogue'] text-3xl font-bold text-tertiary-container mb-8">Related Recommendations</h2>
+    <div id="dd-related-grid" class="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <p class="text-outline text-sm">載入中...</p>
+    </div>
+  </section>
+</div>
+
+<!-- ═══════════════════════════════════════════════ PAGE: CALCULATOR ═══ -->
+<div id="page-calculator" class="page pt-24 px-6 max-w-7xl mx-auto">
+  <section class="mb-12">
+    <h2 class="font-['Epilogue'] text-5xl md:text-7xl font-bold text-tertiary-container tracking-[-0.04em] mb-4">Wealth Simulator</h2>
+    <p class="text-secondary font-medium max-w-xl text-lg leading-relaxed">Precision-engineered modeling for your financial future.</p>
+  </section>
+  <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+    <div class="lg:col-span-4 space-y-6">
+      <div class="bg-surface-container-low p-8 rounded-lg space-y-8">
+        <h3 class="font-['Epilogue'] text-xl font-bold text-tertiary-container border-b border-outline-variant/20 pb-4">Simulation Parameters</h3>
+        <div class="space-y-6">
+          <div class="space-y-2">
+            <label class="font-label text-xs font-bold uppercase tracking-widest text-outline">Initial Capital</label>
+            <div class="relative">
+              <span class="absolute left-4 top-1/2 -translate-y-1/2 text-tertiary-container font-bold">$</span>
+              <input id="sim-capital" class="w-full pl-8 pr-4 py-4 bg-surface-container-lowest border-none rounded-DEFAULT focus:ring-2 focus:ring-secondary text-tertiary-container font-['Epilogue'] font-semibold" type="number" value="50000" oninput="calcWealth()"/>
+            </div>
+          </div>
+          <div class="space-y-2">
+            <label class="font-label text-xs font-bold uppercase tracking-widest text-outline">Monthly Deposit</label>
+            <div class="relative">
+              <span class="absolute left-4 top-1/2 -translate-y-1/2 text-tertiary-container font-bold">$</span>
+              <input id="sim-monthly" class="w-full pl-8 pr-4 py-4 bg-surface-container-lowest border-none rounded-DEFAULT focus:ring-2 focus:ring-secondary text-tertiary-container font-['Epilogue'] font-semibold" type="number" value="2000" oninput="calcWealth()"/>
+            </div>
+          </div>
+          <div class="grid grid-cols-2 gap-4">
+            <div class="space-y-2">
+              <label class="font-label text-xs font-bold uppercase tracking-widest text-outline">Annual Yield</label>
+              <div class="relative">
+                <input id="sim-yield" class="w-full px-4 py-4 bg-surface-container-lowest border-none rounded-DEFAULT focus:ring-2 focus:ring-secondary text-tertiary-container font-['Epilogue'] font-semibold" type="number" value="7.5" oninput="calcWealth()"/>
+                <span class="absolute right-4 top-1/2 -translate-y-1/2 text-tertiary-container font-bold">%</span>
+              </div>
+            </div>
+            <div class="space-y-2">
+              <label class="font-label text-xs font-bold uppercase tracking-widest text-outline">Period</label>
+              <div class="relative">
+                <input id="sim-years" class="w-full px-4 py-4 bg-surface-container-lowest border-none rounded-DEFAULT focus:ring-2 focus:ring-secondary text-tertiary-container font-['Epilogue'] font-semibold" type="number" value="25" oninput="calcWealth()"/>
+                <span class="absolute right-4 top-1/2 -translate-y-1/2 text-tertiary-container font-bold">Yrs</span>
+              </div>
+            </div>
+          </div>
+          <div class="space-y-4 pt-4">
+            <label class="font-label text-xs font-bold uppercase tracking-widest text-outline">Risk Strategy</label>
+            <div class="flex flex-wrap gap-2">
+              <button onclick="setRisk(0.85)" class="risk-btn px-5 py-2 rounded-full bg-surface-container-high text-tertiary-container font-label text-sm font-semibold hover:bg-tertiary-container hover:text-white transition-all">Conservative</button>
+              <button onclick="setRisk(1.0)" class="risk-btn px-5 py-2 rounded-full bg-tertiary-container text-white font-label text-sm font-semibold transition-all shadow-md">Moderate</button>
+              <button onclick="setRisk(1.15)" class="risk-btn px-5 py-2 rounded-full bg-surface-container-high text-tertiary-container font-label text-sm font-semibold hover:bg-tertiary-container hover:text-white transition-all">Aggressive</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="bg-tertiary-container text-white p-8 rounded-lg shadow-xl relative overflow-hidden">
+        <div class="absolute top-0 right-0 p-4 opacity-10">
+          <span class="material-symbols-outlined text-9xl">trending_up</span>
+        </div>
+        <div class="relative z-10 space-y-6">
+          <label class="font-label text-xs font-bold uppercase tracking-[0.2em] text-secondary-fixed">Estimated Future Value</label>
+          <div id="sim-result" class="font-['Epilogue'] text-4xl md:text-5xl font-extrabold tracking-tight">$2,348,390</div>
+          <p class="text-tertiary-fixed-dim text-sm font-medium leading-snug">Based on current parameters over your selected period.</p>
+          <button class="w-full py-4 bg-on-primary-container text-white font-label font-bold uppercase tracking-widest rounded-full hover:scale-[1.02] active:scale-95 transition-all shadow-lg flex items-center justify-center gap-2">
+            <span>Save Projection</span>
+            <span class="material-symbols-outlined text-sm">bookmark</span>
+          </button>
+        </div>
+      </div>
+    </div>
+    <div class="lg:col-span-8 space-y-6">
+      <div class="bg-surface-container-lowest rounded-lg p-8 h-full flex flex-col">
+        <div class="flex justify-between items-center mb-12">
+          <div>
+            <h3 class="font-['Epilogue'] text-2xl font-bold text-tertiary-container">Growth Trajectory</h3>
+            <p class="text-outline font-medium">Principal vs. Market Growth Over Time</p>
+          </div>
+          <div class="flex gap-6">
+            <div class="flex items-center gap-2"><div class="w-3 h-3 rounded-full bg-tertiary-container"></div><span class="text-xs font-bold uppercase text-outline">Principal</span></div>
+            <div class="flex items-center gap-2"><div class="w-3 h-3 rounded-full bg-on-primary-container"></div><span class="text-xs font-bold uppercase text-outline">Total Value</span></div>
+          </div>
+        </div>
+        <div class="flex-grow relative min-h-[300px]">
+          <svg id="sim-chart" class="w-full h-full overflow-visible" viewBox="0 0 800 400">
+            <line stroke="#f0eee5" stroke-width="1" x1="0" x2="800" y1="350" y2="350"/>
+            <line stroke="#f0eee5" stroke-width="1" x1="0" x2="800" y1="250" y2="250"/>
+            <line stroke="#f0eee5" stroke-width="1" x1="0" x2="800" y1="150" y2="150"/>
+            <line stroke="#f0eee5" stroke-width="1" x1="0" x2="800" y1="50" y2="50"/>
+            <path id="principal-line" d="M0 350 L800 190" fill="none" opacity="0.4" stroke="#286671" stroke-dasharray="8 4" stroke-width="4"/>
+            <path id="growth-curve" d="M0 350 C 100 340, 300 300, 400 200 S 700 80, 800 20" fill="none" stroke="#113236" stroke-linecap="round" stroke-width="6"/>
+            <circle id="mid-dot" cx="400" cy="200" fill="#d97f12" r="8"/>
+            <circle id="end-dot" cx="800" cy="20" fill="#d97f12" r="10" stroke="white" stroke-width="4"/>
+            <text fill="#717879" font-family="Manrope" font-size="12" font-weight="600" x="0" y="380">YEAR 0</text>
+            <text id="mid-label" fill="#717879" font-family="Manrope" font-size="12" font-weight="600" x="360" y="380">YEAR 12</text>
+            <text id="end-label" fill="#717879" font-family="Manrope" font-size="12" font-weight="600" x="750" y="380">YEAR 25</text>
+          </svg>
+          <div class="absolute top-1/4 right-[10%] bg-surface-container-lowest/90 backdrop-blur-md p-4 rounded-lg shadow-2xl border border-outline-variant/10">
+            <div class="text-xs font-bold text-outline uppercase tracking-widest mb-1" id="tooltip-label">Year 25 Milestone</div>
+            <div id="tooltip-value" class="text-xl font-['Epilogue'] font-bold text-tertiary-container">$2,348,390</div>
+            <div id="tooltip-growth" class="text-[10px] text-on-primary-container font-bold mt-2 flex items-center gap-1">
+              <span class="material-symbols-outlined text-xs">auto_awesome</span>234% TOTAL GROWTH
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <section class="mt-20 grid grid-cols-1 md:grid-cols-3 gap-8 pb-8">
+    <div class="space-y-4">
+      <span class="text-secondary-container bg-secondary px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest">Asset Allocation</span>
+      <h4 class="font-['Epilogue'] text-xl font-bold text-tertiary-container leading-tight">Diversified Market Entry Strategy</h4>
+      <p class="text-outline text-sm leading-relaxed">Our model assumes a balanced weighting of 60% global equities and 40% precision fixed-income instruments to weather volatility while maintaining yield.</p>
+    </div>
+    <div class="space-y-4">
+      <span class="text-secondary-container bg-secondary px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest">Compounding</span>
+      <h4 class="font-['Epilogue'] text-xl font-bold text-tertiary-container leading-tight">The Velocity of Reinvested Dividends</h4>
+      <p class="text-outline text-sm leading-relaxed">By prioritizing high-dividend yield assets, the simulator projects a "snowball effect" that accelerates capital growth after the 15-year mark.</p>
+    </div>
+    <div class="space-y-4">
+      <span class="text-secondary-container bg-secondary px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest">Risk Mitigation</span>
+      <h4 class="font-['Epilogue'] text-xl font-bold text-tertiary-container leading-tight">Automated Rebalancing Engine</h4>
+      <p class="text-outline text-sm leading-relaxed">Simulation includes a theoretical quarterly rebalance to ensure your risk profile stays within the target corridor as markets shift.</p>
+    </div>
+  </section>
+</div>
+
+<!-- ═══════════════════════════════════════════════ PAGE: AI ASSISTANT ═══ -->
+<!-- Conversation History Drawer -->
+<div id="ai-history-overlay" class="hidden fixed inset-0 z-[60] bg-black/40 backdrop-blur-sm" onclick="closeHistoryDrawer()"></div>
+<div id="ai-history-drawer" class="fixed top-0 left-0 h-full w-80 max-w-[85vw] z-[61] bg-[#fcf9f0] shadow-2xl transform -translate-x-full transition-transform duration-300 flex flex-col">
+  <div class="flex items-center justify-between px-5 py-4 border-b border-outline-variant/30">
+    <h2 class="font-['Epilogue'] font-bold text-lg text-tertiary-container">對話記錄</h2>
+    <button onclick="closeHistoryDrawer()" class="w-8 h-8 flex items-center justify-center rounded-full hover:bg-surface-container transition-colors">
+      <span class="material-symbols-outlined text-outline text-xl">close</span>
+    </button>
+  </div>
+  <div class="px-4 py-3 border-b border-outline-variant/20">
+    <button onclick="startNewConversation()" class="w-full flex items-center gap-3 px-4 py-3 rounded-xl bg-tertiary-container text-on-tertiary font-['Epilogue'] font-semibold text-sm hover:opacity-90 transition-all active:scale-95">
+      <span class="material-symbols-outlined text-sm">add</span>新對話
+    </button>
+  </div>
+  <div id="ai-history-list" class="flex-1 overflow-y-auto px-3 py-2 space-y-1">
+    <p class="text-outline text-xs text-center py-6">載入中...</p>
+  </div>
+</div>
+
+<div id="page-ai" class="page pt-20 pb-40 min-h-screen max-w-4xl mx-auto px-4">
+  <!-- AI Page Top Bar -->
+  <div class="flex items-center justify-between mb-6">
+    <button onclick="openHistoryDrawer()" class="flex items-center gap-2 px-4 py-2 rounded-full bg-surface-container-low text-on-surface-variant text-sm font-semibold hover:bg-surface-container transition-colors">
+      <span class="material-symbols-outlined text-base">history</span>對話記錄
+    </button>
+    <button onclick="startNewConversation()" class="flex items-center gap-2 px-4 py-2 rounded-full bg-surface-container-low text-on-surface-variant text-sm font-semibold hover:bg-surface-container transition-colors">
+      <span class="material-symbols-outlined text-base">add</span>新對話
+    </button>
+  </div>
+
+  <!-- Chat Messages -->
+  <div class="flex flex-col space-y-6" id="chat-messages">
+    <!-- Empty state -->
+    <div id="chat-empty-state" class="flex flex-col items-center justify-center py-16 space-y-4">
+      <div class="w-16 h-16 rounded-full bg-secondary-container flex items-center justify-center">
+        <span class="material-symbols-outlined text-on-secondary-container text-3xl">psychology</span>
+      </div>
+      <div class="text-center space-y-1">
+        <h3 class="font-['Epilogue'] font-bold text-xl text-tertiary-container">AI 投資助理</h3>
+        <p class="text-on-surface-variant text-sm">詢問股票、Podcast 重點或投資觀點</p>
+      </div>
+      <div class="flex flex-wrap gap-2 justify-center pt-2">
+        <button onclick="sendQuickAction('台積電最新股價與本益比？')" class="px-4 py-2 rounded-full border border-outline-variant bg-surface-container-lowest text-secondary font-label text-xs font-semibold hover:bg-secondary-container/30 transition-all">台積電股價與本益比</button>
+        <button onclick="sendQuickAction('最新一集Podcast重點摘要')" class="px-4 py-2 rounded-full border border-outline-variant bg-surface-container-lowest text-secondary font-label text-xs font-semibold hover:bg-secondary-container/30 transition-all">最新Podcast摘要</button>
+        <button onclick="sendQuickAction('現在有什麼值得關注的投資機會？')" class="px-4 py-2 rounded-full border border-outline-variant bg-surface-container-lowest text-secondary font-label text-xs font-semibold hover:bg-secondary-container/30 transition-all">近期投資機會</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════ PAGE: PROFILE ═══ -->
+<div id="page-profile" class="page pt-24 px-6 max-w-5xl mx-auto space-y-12 pb-8">
+  <section class="flex flex-col md:flex-row items-center md:items-start gap-8 md:gap-12">
+    <div class="relative">
+      <div class="w-32 h-32 md:w-44 md:h-44 rounded-full p-1 bg-gradient-to-br from-on-primary-container to-secondary">
+        <div class="w-full h-full rounded-full overflow-hidden bg-surface-container-lowest">
+          <div class="w-full h-full flex flex-col items-center justify-center gap-1 " style="background:#d97f12"><span class="material-symbols-outlined text-white/70 text-3xl" style="font-variation-settings:'FILL' 1">person</span></div>
+        </div>
+      </div>
+      <div class="absolute -bottom-2 left-1/2 -translate-x-1/2 bg-tertiary-container text-on-tertiary px-4 py-1.5 rounded-full text-[10px] font-['Epilogue'] font-bold uppercase tracking-widest whitespace-nowrap shadow-lg">Premium Curator</div>
+    </div>
+    <div class="flex-1 text-center md:text-left space-y-4">
+      <h2 class="font-['Epilogue'] font-extrabold text-4xl md:text-6xl text-tertiary-container tracking-tight">Smart Investor</h2>
+      <p class="text-secondary font-medium text-lg max-w-md">Curating intelligence through deep-dive podcast summaries and predictive modeling.</p>
+      <div class="flex flex-wrap justify-center md:justify-start gap-3 pt-2">
+        <span class="px-4 py-2 rounded-full bg-surface-container-low text-on-surface-variant text-sm font-semibold">Joined Oct 2023</span>
+        <button class="px-6 py-2 rounded-full bg-on-primary-container text-white font-['Epilogue'] text-xs font-bold uppercase tracking-widest hover:opacity-90 transition-all active:scale-95">Edit Profile</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="grid grid-cols-1 md:grid-cols-3 gap-4">
+    <div class="bg-surface-container-lowest p-8 rounded-lg shadow-[0px_20px_40px_rgba(28,28,22,0.04)] flex flex-col justify-between h-48 border border-outline-variant/10">
+      <span class="text-secondary font-['Epilogue'] text-xs font-bold uppercase tracking-widest">Total Listen Time</span>
+      <div class="flex items-baseline gap-2"><span class="text-5xl font-['Epilogue'] font-bold text-tertiary-container">142.5</span><span class="text-xl font-['Epilogue'] text-on-surface-variant">h</span></div>
+      <div class="w-full h-1 bg-surface-container rounded-full overflow-hidden"><div class="w-3/4 h-full bg-on-primary-container"></div></div>
+    </div>
+    <div class="bg-tertiary-container p-8 rounded-lg shadow-xl flex flex-col justify-between h-48">
+      <span class="text-on-tertiary-container font-['Epilogue'] text-xs font-bold uppercase tracking-widest">Summaries Read</span>
+      <div class="flex items-baseline gap-2 text-white"><span class="text-6xl font-['Epilogue'] font-bold">84</span><span class="material-symbols-outlined text-on-primary-container" style="font-variation-settings: 'FILL' 1;">auto_awesome</span></div>
+      <p class="text-on-tertiary-container text-sm">Top 5% of active readers this month</p>
+    </div>
+    <div class="bg-surface-container-low p-8 rounded-lg flex flex-col justify-between h-48">
+      <span class="text-secondary font-['Epilogue'] text-xs font-bold uppercase tracking-widest">Global Rank</span>
+      <div class="space-y-1">
+        <h3 class="text-2xl font-['Epilogue'] font-extrabold text-tertiary-container">Top 1% Global Leader</h3>
+        <p class="text-on-surface-variant text-sm">Tier: Diamond Investor</p>
+      </div>
+      <div class="flex -space-x-2">
+        <div class="w-8 h-8 rounded-full border-2 border-surface bg-surface-container-high"></div>
+        <div class="w-8 h-8 rounded-full border-2 border-surface bg-surface-container-highest"></div>
+        <div class="w-8 h-8 rounded-full border-2 border-surface flex items-center justify-center bg-on-primary-container text-[10px] text-white font-bold">+12</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── 個人偏好設定 ── -->
+  <section class="space-y-6">
+    <div class="flex justify-between items-end">
+      <h3 class="font-['Epilogue'] font-bold text-2xl text-tertiary-container">個人偏好設定</h3>
+      <button onclick="savePreferences()" class="px-5 py-2 rounded-full bg-on-primary-container text-white font-label text-xs font-bold uppercase tracking-widest hover:opacity-90 transition-all active:scale-95">儲存</button>
+    </div>
+
+    <!-- 投資風格 -->
+    <div class="bg-surface-container-lowest rounded-lg p-6 border border-outline-variant/10 space-y-4">
+      <div class="flex items-center gap-2 mb-1">
+        <span class="material-symbols-outlined text-secondary text-lg" style="font-variation-settings:'FILL' 1">tune</span>
+        <h4 class="font-['Epilogue'] font-bold text-base text-tertiary-container">投資風格</h4>
+      </div>
+      <div class="flex gap-3 flex-wrap" id="pref-style">
+        <button data-val="conservative" onclick="togglePref('pref-style',this,'single')" class="pref-chip px-5 py-2 rounded-full border border-outline-variant/40 bg-surface-container text-on-surface-variant font-label text-sm font-semibold transition-all hover:border-secondary/40">保守穩健</button>
+        <button data-val="balanced"     onclick="togglePref('pref-style',this,'single')" class="pref-chip px-5 py-2 rounded-full border border-outline-variant/40 bg-surface-container text-on-surface-variant font-label text-sm font-semibold transition-all hover:border-secondary/40">平衡配置</button>
+        <button data-val="aggressive"   onclick="togglePref('pref-style',this,'single')" class="pref-chip px-5 py-2 rounded-full border border-outline-variant/40 bg-surface-container text-on-surface-variant font-label text-sm font-semibold transition-all hover:border-secondary/40">積極成長</button>
+      </div>
+    </div>
+
+    <!-- 偏好主題 -->
+    <div class="bg-surface-container-lowest rounded-lg p-6 border border-outline-variant/10 space-y-4">
+      <div class="flex items-center gap-2 mb-1">
+        <span class="material-symbols-outlined text-secondary text-lg" style="font-variation-settings:'FILL' 1">category</span>
+        <h4 class="font-['Epilogue'] font-bold text-base text-tertiary-container">偏好主題 <span class="text-xs text-outline font-normal">（可多選）</span></h4>
+      </div>
+      <div class="flex gap-3 flex-wrap" id="pref-topics">
+        <button data-val="macro"   onclick="togglePref('pref-topics',this,'multi')" class="pref-chip px-5 py-2 rounded-full border border-outline-variant/40 bg-surface-container text-on-surface-variant font-label text-sm font-semibold transition-all hover:border-secondary/40">總體經濟</button>
+        <button data-val="tech"    onclick="togglePref('pref-topics',this,'multi')" class="pref-chip px-5 py-2 rounded-full border border-outline-variant/40 bg-surface-container text-on-surface-variant font-label text-sm font-semibold transition-all hover:border-secondary/40">科技產業</button>
+        <button data-val="crypto"  onclick="togglePref('pref-topics',this,'multi')" class="pref-chip px-5 py-2 rounded-full border border-outline-variant/40 bg-surface-container text-on-surface-variant font-label text-sm font-semibold transition-all hover:border-secondary/40">加密貨幣</button>
+        <button data-val="stocks"  onclick="togglePref('pref-topics',this,'multi')" class="pref-chip px-5 py-2 rounded-full border border-outline-variant/40 bg-surface-container text-on-surface-variant font-label text-sm font-semibold transition-all hover:border-secondary/40">個股分析</button>
+        <button data-val="realestate" onclick="togglePref('pref-topics',this,'multi')" class="pref-chip px-5 py-2 rounded-full border border-outline-variant/40 bg-surface-container text-on-surface-variant font-label text-sm font-semibold transition-all hover:border-secondary/40">房地產</button>
+        <button data-val="forex"   onclick="togglePref('pref-topics',this,'multi')" class="pref-chip px-5 py-2 rounded-full border border-outline-variant/40 bg-surface-container text-on-surface-variant font-label text-sm font-semibold transition-all hover:border-secondary/40">外匯原物料</button>
+        <button data-val="etf"     onclick="togglePref('pref-topics',this,'multi')" class="pref-chip px-5 py-2 rounded-full border border-outline-variant/40 bg-surface-container text-on-surface-variant font-label text-sm font-semibold transition-all hover:border-secondary/40">ETF 被動投資</button>
+      </div>
+    </div>
+
+    <!-- 收聽習慣 -->
+    <div class="bg-surface-container-lowest rounded-lg p-6 border border-outline-variant/10 space-y-4">
+      <div class="flex items-center gap-2 mb-1">
+        <span class="material-symbols-outlined text-secondary text-lg" style="font-variation-settings:'FILL' 1">headphones</span>
+        <h4 class="font-['Epilogue'] font-bold text-base text-tertiary-container">摘要深度偏好</h4>
+      </div>
+      <div class="flex gap-3 flex-wrap" id="pref-depth">
+        <button data-val="novice" onclick="togglePref('pref-depth',this,'single')" class="pref-chip px-5 py-2 rounded-full border border-outline-variant/40 bg-surface-container text-on-surface-variant font-label text-sm font-semibold transition-all hover:border-secondary/40">新手模式</button>
+        <button data-val="pro"    onclick="togglePref('pref-depth',this,'single')" class="pref-chip px-5 py-2 rounded-full border border-outline-variant/40 bg-surface-container text-on-surface-variant font-label text-sm font-semibold transition-all hover:border-secondary/40">專業模式</button>
+      </div>
+    </div>
+
+    <p id="pref-saved-msg" class="text-secondary text-sm font-semibold hidden text-center">✓ 偏好已儲存，下次推薦將依此調整</p>
+  </section>
+
+  <section class="grid grid-cols-1 lg:grid-cols-2 gap-12">
+    <div class="space-y-6">
+      <div class="flex justify-between items-end">
+        <h3 class="font-['Epilogue'] font-bold text-2xl text-tertiary-container">Saved Insights</h3>
+        <button class="text-secondary font-bold text-sm hover:underline">View All</button>
+      </div>
+      <div class="space-y-4">
+        <div onclick="showPage('deep-dive')" class="group flex gap-4 p-4 rounded-lg bg-surface-container-lowest hover:bg-surface-container-low transition-colors cursor-pointer border border-transparent hover:border-outline-variant/20">
+          <div class="w-20 h-20 rounded bg-surface-container overflow-hidden shrink-0">
+            <div class="w-full h-full flex flex-col items-center justify-center gap-1 " style="background:#113236"><span class="material-symbols-outlined text-white/70 text-3xl" style="font-variation-settings:'FILL' 1">psychology</span><span class="text-white/60 text-[10px] font-bold uppercase tracking-widest">Tech Trends</span></div>
+          </div>
+          <div class="flex flex-col justify-center">
+            <span class="text-[10px] font-['Epilogue'] font-bold text-on-primary-container uppercase tracking-widest">Tech Trends</span>
+            <h4 class="font-['Epilogue'] font-bold text-tertiary-container group-hover:text-secondary transition-colors">The Future of Generative AI in FinTech</h4>
+            <p class="text-sm text-on-surface-variant line-clamp-1">12 min read • Saved 2 days ago</p>
+          </div>
+        </div>
+        <div class="group flex gap-4 p-4 rounded-lg bg-surface-container-lowest hover:bg-surface-container-low transition-colors cursor-pointer">
+          <div class="w-20 h-20 rounded bg-surface-container overflow-hidden shrink-0">
+            <div class="w-full h-full flex flex-col items-center justify-center gap-1 " style="background:#286671"><span class="material-symbols-outlined text-white/70 text-3xl" style="font-variation-settings:'FILL' 1">show_chart</span><span class="text-white/60 text-[10px] font-bold uppercase tracking-widest">Markets</span></div>
+          </div>
+          <div class="flex flex-col justify-center">
+            <span class="text-[10px] font-['Epilogue'] font-bold text-on-primary-container uppercase tracking-widest">Markets</span>
+            <h4 class="font-['Epilogue'] font-bold text-tertiary-container group-hover:text-secondary transition-colors">Macro Economics: 2024 Interest Rate Pivot</h4>
+            <p class="text-sm text-on-surface-variant line-clamp-1">18 min read • Saved 1 week ago</p>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="space-y-6">
+      <div class="flex justify-between items-end">
+        <h3 class="font-['Epilogue'] font-bold text-2xl text-tertiary-container">Calculation History</h3>
+        <button onclick="showPage('calculator')" class="text-secondary font-bold text-sm hover:underline">New Sim</button>
+      </div>
+      <div class="bg-surface-container-low rounded-lg overflow-hidden">
+        <table class="w-full text-left">
+          <thead class="bg-surface-container-high/50">
+            <tr>
+              <th class="px-6 py-4 font-['Epilogue'] text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">Strategy</th>
+              <th class="px-6 py-4 font-['Epilogue'] text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">Yield</th>
+              <th class="px-6 py-4 text-right"></th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-outline-variant/10">
+            <tr class="hover:bg-surface-container-lowest transition-colors cursor-pointer" onclick="showPage('calculator')">
+              <td class="px-6 py-5"><p class="font-bold text-tertiary-container">Aggressive Growth</p><p class="text-[10px] text-on-surface-variant">10yr Compound • $50k Base</p></td>
+              <td class="px-6 py-5"><span class="text-on-primary-container font-['Epilogue'] font-bold">+14.2%</span></td>
+              <td class="px-6 py-5 text-right"><span class="material-symbols-outlined text-secondary text-sm">chevron_right</span></td>
+            </tr>
+            <tr class="hover:bg-surface-container-lowest transition-colors cursor-pointer" onclick="showPage('calculator')">
+              <td class="px-6 py-5"><p class="font-bold text-tertiary-container">Dividend Shield</p><p class="text-[10px] text-on-surface-variant">5yr Income • $120k Base</p></td>
+              <td class="px-6 py-5"><span class="text-secondary font-['Epilogue'] font-bold">+6.8%</span></td>
+              <td class="px-6 py-5 text-right"><span class="material-symbols-outlined text-secondary text-sm">chevron_right</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="space-y-6 pb-12">
+    <h3 class="font-['Epilogue'] font-bold text-2xl text-tertiary-container">Settings</h3>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <button class="flex items-center justify-between p-6 bg-surface-container-lowest rounded-lg border border-outline-variant/10 hover:border-secondary/30 transition-all group">
+        <div class="flex items-center gap-4"><span class="material-symbols-outlined text-secondary">person_outline</span><span class="font-['Epilogue'] font-bold text-tertiary-container">Personal Info</span></div>
+        <span class="material-symbols-outlined text-outline-variant group-hover:text-secondary transition-colors">arrow_forward</span>
+      </button>
+      <button class="flex items-center justify-between p-6 bg-surface-container-lowest rounded-lg border border-outline-variant/10 hover:border-secondary/30 transition-all group">
+        <div class="flex items-center gap-4"><span class="material-symbols-outlined text-secondary">security</span><span class="font-['Epilogue'] font-bold text-tertiary-container">Security</span></div>
+        <span class="material-symbols-outlined text-outline-variant group-hover:text-secondary transition-colors">arrow_forward</span>
+      </button>
+      <button class="flex items-center justify-between p-6 bg-surface-container-lowest rounded-lg border border-outline-variant/10 hover:border-secondary/30 transition-all group">
+        <div class="flex items-center gap-4"><span class="material-symbols-outlined text-secondary">notifications_active</span><span class="font-['Epilogue'] font-bold text-tertiary-container">Notifications</span></div>
+        <span class="material-symbols-outlined text-outline-variant group-hover:text-secondary transition-colors">arrow_forward</span>
+      </button>
+      <button class="flex items-center justify-between p-6 bg-surface-container-lowest rounded-lg border border-outline-variant/10 hover:bg-error-container/20 transition-all group">
+        <div class="flex items-center gap-4"><span class="material-symbols-outlined text-error">logout</span><span class="font-['Epilogue'] font-bold text-error">Logout</span></div>
+        <span class="material-symbols-outlined text-error opacity-0 group-hover:opacity-100 transition-all">power_settings_new</span>
+      </button>
+    </div>
+  </section>
+</div>
+
+<!-- ═══════════════════════════════════════════════ BOTTOM NAV ═══ -->
+<nav class="fixed bottom-0 w-full z-50 flex justify-around items-center px-4 pb-6 pt-3 bg-[#fcf9f0]/80 backdrop-blur-xl rounded-t-[32px] shadow-[0px_-10px_30px_rgba(28,28,22,0.06)]">
+  <button onclick="showPage('discover')" id="nav-discover" class="nav-btn flex flex-col items-center justify-center transition-all">
+    <span class="material-symbols-outlined nav-icon" style="font-variation-settings: 'FILL' 1;">explore</span>
+    <span class="font-['Manrope'] font-medium text-[10px] uppercase tracking-[0.05em] mt-1">Discover</span>
+  </button>
+  <button onclick="showPage('rankings')" id="nav-rankings" class="nav-btn flex flex-col items-center justify-center transition-all opacity-60">
+    <span class="material-symbols-outlined nav-icon">leaderboard</span>
+    <span class="font-['Manrope'] font-medium text-[10px] uppercase tracking-[0.05em] mt-1">Rankings</span>
+  </button>
+  <button onclick="showPage('ai')" id="nav-ai" class="nav-btn flex flex-col items-center justify-center transition-all opacity-60">
+    <span class="material-symbols-outlined nav-icon">psychology</span>
+    <span class="font-['Manrope'] font-medium text-[10px] uppercase tracking-[0.05em] mt-1">AI Assistant</span>
+  </button>
+  <button onclick="showPage('calculator')" id="nav-calculator" class="nav-btn flex flex-col items-center justify-center transition-all opacity-60">
+    <span class="material-symbols-outlined nav-icon">calculate</span>
+    <span class="font-['Manrope'] font-medium text-[10px] uppercase tracking-[0.05em] mt-1">Calculator</span>
+  </button>
+  <button onclick="window.location.href='/api/knowledge-graph/graph/'" id="nav-knowledge-graph" class="nav-btn flex flex-col items-center justify-center transition-all opacity-60">
+    <span class="material-symbols-outlined nav-icon">hub</span>
+    <span class="font-['Manrope'] font-medium text-[10px] uppercase tracking-[0.05em] mt-1">Graph</span>
+  </button>
+</nav>
+
+<!-- ═══════════════════════════════════════════════ TICKER MODAL ═══ -->
+<div id="ticker-modal" class="hidden fixed inset-0 z-[200] flex items-end md:items-center justify-center">
+  <!-- Backdrop -->
+  <div onclick="closeTickerModal()" class="absolute inset-0 bg-black/40 backdrop-blur-sm"></div>
+  <!-- Panel -->
+  <div class="relative w-full max-w-md mx-4 mb-4 md:mb-0 bg-[#fcf9f0] rounded-2xl shadow-2xl overflow-hidden animate-slide-up">
+    <!-- Header -->
+    <div id="tm-header" class="px-6 pt-6 pb-4 flex items-start justify-between">
+      <div>
+        <div class="flex items-center gap-2 mb-1">
+          <span id="tm-dir-icon" class="material-symbols-outlined text-xl" style="font-variation-settings:'FILL' 1">trending_up</span>
+          <span id="tm-ticker" class="font-['Epilogue'] font-bold text-2xl text-tertiary-container"></span>
+        </div>
+        <span id="tm-dir-label" class="px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-widest"></span>
+      </div>
+      <button onclick="closeTickerModal()" class="text-outline hover:text-tertiary-container transition-colors mt-1">
+        <span class="material-symbols-outlined">close</span>
+      </button>
+    </div>
+
+    <!-- Info pills -->
+    <div id="tm-info" class="flex gap-2 flex-wrap px-6 mb-5"></div>
+
+    <!-- Inputs -->
+    <div class="px-6 space-y-4 mb-5">
+      <div class="grid grid-cols-2 gap-3">
+        <div class="space-y-1">
+          <label class="font-label text-[10px] font-bold uppercase tracking-widest text-outline">初始資金 ($)</label>
+          <input id="tm-capital" type="number" value="50000" oninput="calcTickerModal()"
+            class="w-full px-4 py-3 bg-surface-container-low border-none rounded-xl text-tertiary-container font-['Epilogue'] font-semibold text-sm focus:ring-2 focus:ring-secondary"/>
+        </div>
+        <div class="space-y-1">
+          <label class="font-label text-[10px] font-bold uppercase tracking-widest text-outline">每月投入 ($)</label>
+          <input id="tm-monthly" type="number" value="0" oninput="calcTickerModal()"
+            class="w-full px-4 py-3 bg-surface-container-low border-none rounded-xl text-tertiary-container font-['Epilogue'] font-semibold text-sm focus:ring-2 focus:ring-secondary"/>
+        </div>
+      </div>
+      <div class="grid grid-cols-2 gap-3">
+        <div class="space-y-1">
+          <label class="font-label text-[10px] font-bold uppercase tracking-widest text-outline">年報酬率 (%)</label>
+          <input id="tm-yield" type="number" step="0.1" oninput="calcTickerModal()"
+            class="w-full px-4 py-3 bg-surface-container-low border-none rounded-xl text-tertiary-container font-['Epilogue'] font-semibold text-sm focus:ring-2 focus:ring-secondary"/>
+        </div>
+        <div class="space-y-1">
+          <label class="font-label text-[10px] font-bold uppercase tracking-widest text-outline">年數</label>
+          <input id="tm-years" type="number" step="0.5" min="0.5" oninput="calcTickerModal()"
+            class="w-full px-4 py-3 bg-surface-container-low border-none rounded-xl text-tertiary-container font-['Epilogue'] font-semibold text-sm focus:ring-2 focus:ring-secondary"/>
+        </div>
+      </div>
+    </div>
+
+    <!-- Result -->
+    <div class="mx-6 mb-6 p-5 rounded-xl bg-tertiary-container text-white">
+      <p class="font-label text-[10px] font-bold uppercase tracking-widest text-on-tertiary-container mb-2">試算結果</p>
+      <div class="flex items-baseline gap-2 mb-1">
+        <span class="font-['Epilogue'] font-bold text-3xl" id="tm-result-total">$—</span>
+      </div>
+      <div class="flex justify-between text-xs text-on-tertiary-container mt-2">
+        <span>本金 <span id="tm-result-principal" class="font-bold text-white">$—</span></span>
+        <span>獲利 <span id="tm-result-gain" class="font-bold text-on-primary-container">+$—</span></span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- AI Chat Input (only visible on AI page) -->
+<div id="ai-input-bar" class="hidden fixed bottom-[72px] w-full z-40 bg-[#fcf9f0]/90 backdrop-blur-xl pt-3 pb-3 px-4">
+  <div class="max-w-4xl mx-auto flex items-center gap-4 bg-surface-container-high rounded-full p-2 pl-6 shadow-lg">
+    <button class="text-secondary hover:text-on-primary-container transition-colors"><span class="material-symbols-outlined">attach_file</span></button>
+    <input id="chat-input" class="w-full bg-transparent border-none focus:ring-0 text-on-surface font-body text-sm placeholder:text-outline/60" placeholder="Ask about investment strategies..." type="text" onkeydown="if(event.key==='Enter') sendChat()"/>
+    <button onclick="sendChat()" class="bg-[#d97f12] text-white w-12 h-12 rounded-full flex items-center justify-center hover:opacity-90 active:scale-95 transition-all">
+      <span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">send</span>
+    </button>
+  </div>
+</div>
+
+<style>
+  .nav-btn { color: #286671; }
+  .nav-btn.active { color: #113236; font-weight: bold; transform: scale(1.1); opacity: 1 !important; }
+  .nav-btn.active .nav-icon { font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+</style>
+
+<script>
+  let riskMultiplier = 1.0;
+
+  // ── 卡片顏色/圖示工具 ──────────────────────────────
+  const _cardBgs    = ['#113236','#286671','#472500','#1c1c16','#2c4c50','#d97f12','#1a3040','#3a2000'];
+  const _cardIcons  = ['podcasts','trending_up','show_chart','account_balance','public','workspace_premium','ssid_chart','mic'];
+  function cardStyle(str) {
+    let h = 0;
+    for (const c of (str||'')) h = (h * 31 + c.charCodeAt(0)) & 0xffffffff;
+    const i = Math.abs(h) % _cardBgs.length;
+    return { bg: _cardBgs[i], icon: _cardIcons[i] };
+  }
+
+  // ── 去重：同 source_filename 只留最新一筆 ──────────
+  function dedupeByEpisode(list) {
+    const seen = new Set();
+    return list.filter(s => {
+      if (seen.has(s.source_filename)) return false;
+      seen.add(s.source_filename);
+      return true;
+    });
+  }
+
+  // ── Continue Listening 渲染 ────────────────────────
+  let _discCurrentId = null;
+  function renderContinueListening(s) {
+    const el = document.getElementById('continue-listening-card');
+    if (!s) { el.innerHTML = '<p class="text-outline text-sm">暫無資料</p>'; return; }
+    const st = cardStyle(s.podcaster || s.source_filename);
+    const title = (s.source_filename||'').replace(/\.srt$/i,'') || s.one_sentence_summary?.slice(0,40);
+    _discCurrentId = s.id;
+    el.innerHTML = `
+      <div class="bg-surface-container-lowest p-6 rounded-lg shadow-[0px_20px_40px_rgba(28,28,22,0.04)] flex flex-col md:flex-row gap-6 items-center">
+        <div class="w-full md:w-32 h-32 rounded-lg overflow-hidden flex-shrink-0 cursor-pointer" onclick="openDeepDive(${s.id})">
+          <div class="w-full h-full flex flex-col items-center justify-center gap-1" style="background:${st.bg}">
+            <span class="material-symbols-outlined text-white/70 text-3xl" style="font-variation-settings:'FILL' 1">${st.icon}</span>
+          </div>
+        </div>
+        <div class="flex-grow space-y-3 w-full">
+          <div class="flex justify-between items-start">
+            <div class="cursor-pointer" onclick="openDeepDive(${s.id})">
+              <p class="text-secondary font-label text-xs font-bold uppercase tracking-widest">${s.podcaster || '未知節目'}</p>
+              <h3 class="text-xl font-bold text-tertiary-container mt-1 font-['Epilogue'] hover:text-secondary transition-colors">${title}</h3>
+            </div>
+            <button id="disc-play-btn" onclick="discTogglePlay(${s.id})" class="w-12 h-12 rounded-full bg-on-primary-container text-white flex items-center justify-center shadow-lg hover:scale-105 transition-transform flex-shrink-0 ml-4">
+              <span id="disc-play-icon" class="material-symbols-outlined" style="font-variation-settings:'FILL' 1">play_arrow</span>
+            </button>
+          </div>
+          <div class="space-y-2">
+            <div id="disc-progress-bar" onclick="discSeek(event)" class="h-1.5 w-full bg-surface-container rounded-full overflow-hidden cursor-pointer">
+              <div id="disc-progress-fill" class="h-full bg-on-primary-container rounded-full transition-none" style="width:0%"></div>
+            </div>
+            <div class="flex justify-between text-[10px] font-bold text-outline uppercase tracking-wider">
+              <span id="disc-current-time">0:00</span><span id="disc-duration">--:--</span>
+            </div>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  async function discTogglePlay(summaryId) {
+    const audio = document.getElementById('disc-audio');
+    const icon  = document.getElementById('disc-play-icon');
+    // 如果已載入同一集，直接 toggle
+    if (audio._loadedId === summaryId) {
+      if (audio.paused) { audio.play(); icon.textContent = 'pause'; }
+      else { audio.pause(); icon.textContent = 'play_arrow'; }
+      return;
+    }
+    // 否則先 fetch audio_url
+    icon.textContent = 'hourglass_empty';
+    try {
+      const res = await fetch(`/api/summaries/${summaryId}/`);
+      const data = await res.json();
+      if (!data.audio_url) { icon.textContent = 'play_arrow'; alert('此集沒有音檔'); return; }
+      audio.src = data.audio_url;
+      audio._loadedId = summaryId;
+      audio.play();
+      icon.textContent = 'pause';
+    } catch(e) { icon.textContent = 'play_arrow'; }
+  }
+
+  function discSeek(e) {
+    const audio = document.getElementById('disc-audio');
+    if (!audio.duration) return;
+    const bar = document.getElementById('disc-progress-bar');
+    const rect = bar.getBoundingClientRect();
+    audio.currentTime = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)) * audio.duration;
+  }
+
+  // 拖拉支援
+  let _discDragging = false;
+  document.addEventListener('mousedown', e => {
+    const bar = document.getElementById('disc-progress-bar');
+    if (bar && bar.contains(e.target)) { _discDragging = true; discSeek(e); }
+  });
+  document.addEventListener('mousemove', e => {
+    if (!_discDragging) return;
+    discSeek(e);
+  });
+  document.addEventListener('mouseup', () => { _discDragging = false; });
+  // 手機觸控
+  document.addEventListener('touchstart', e => {
+    const bar = document.getElementById('disc-progress-bar');
+    if (bar && bar.contains(e.target)) { _discDragging = true; discSeek(e.touches[0]); }
+  }, { passive: true });
+  document.addEventListener('touchmove', e => {
+    if (!_discDragging) return;
+    discSeek(e.touches[0]);
+  }, { passive: true });
+  document.addEventListener('touchend', () => { _discDragging = false; });
+
+  // ── Recommended For You 渲染 ───────────────────────
+  function renderRecommended(list) {
+    const el = document.getElementById('recommended-cards');
+    if (!list.length) { el.innerHTML = '<p class="text-outline text-sm">暫無資料</p>'; return; }
+    el.innerHTML = list.map(s => {
+      const st = cardStyle(s.podcaster || s.source_filename);
+      const title = (s.source_filename||'').replace(/\.srt$/i,'') || s.one_sentence_summary?.slice(0,40);
+      const tag = (s.tags||[])[0] || s.podcaster || 'Podcast';
+      return `
+        <div onclick="openDeepDive(${s.id})" class="flex-shrink-0 w-52 bg-surface-container-lowest rounded-lg overflow-hidden cursor-pointer group hover:shadow-lg transition-shadow border border-outline-variant/10">
+          <div class="h-36 w-full flex items-center justify-center" style="background:${st.bg}">
+            <span class="material-symbols-outlined text-white/60 text-4xl" style="font-variation-settings:'FILL' 1">${st.icon}</span>
+          </div>
+          <div class="p-4 space-y-2">
+            <div class="flex items-center justify-between">
+              <span class="text-[10px] font-bold text-secondary uppercase tracking-widest truncate max-w-[60%]">${tag}</span>
+              <span class="text-[10px] font-bold text-on-primary-container">New</span>
+            </div>
+            <h4 class="font-['Epilogue'] font-bold text-sm text-tertiary-container leading-snug group-hover:text-secondary transition-colors line-clamp-2">${title}</h4>
+            <p class="text-[10px] text-outline truncate">${s.podcaster || ''}</p>
+          </div>
+        </div>`;
+    }).join('');
+  }
+
+  // ── Ticker Targets 渲染 ───────────────────────────
+  function renderTickerTargets(tickers) {
+    const section = document.getElementById('dd-ticker-section');
+    const list    = document.getElementById('dd-ticker-list');
+    if (!tickers || !tickers.length) { section.classList.add('hidden'); return; }
+    section.classList.remove('hidden');
+
+    list.innerHTML = tickers.map(t => {
+      const isBull = t.direction === 'bullish';
+      const dirLabel = isBull ? '看多' : '看空';
+      const dirIcon  = isBull ? 'trending_up' : 'trending_down';
+      const dirColor = isBull ? 'text-on-primary-container' : 'text-tertiary-container';
+      const dirBg    = isBull ? 'bg-on-primary-container/10 border-on-primary-container/30' : 'bg-tertiary-container/10 border-tertiary-container/30';
+
+      const priceStr  = t.price_target   != null ? `目標價 $${t.price_target}`  : null;
+      const returnStr = t.expected_return != null ? `預期報酬 ${t.expected_return}%` : null;
+      const timeStr   = t.timeframe       ? `時間：${t.timeframe}` : null;
+
+      return `
+        <div class="p-5 rounded-lg border bg-surface-container-lowest ${dirBg} flex flex-col gap-3">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-2">
+              <span class="material-symbols-outlined ${dirColor} text-lg" style="font-variation-settings:'FILL' 1">${dirIcon}</span>
+              <span class="font-['Epilogue'] font-bold text-lg text-tertiary-container">${t.ticker}</span>
+            </div>
+            <span class="px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest ${dirColor} border ${dirBg}">${dirLabel}</span>
+          </div>
+          <div class="space-y-1 text-sm text-outline">
+            ${priceStr  ? `<p><span class="font-semibold text-on-surface">${priceStr}</span></p>` : ''}
+            ${returnStr ? `<p><span class="font-semibold text-on-primary-container">${returnStr}</span></p>` : ''}
+            ${timeStr   ? `<p>${timeStr}</p>` : ''}
+          </div>
+          <button onclick="openCalculatorWithTicker(${JSON.stringify(t).replace(/"/g, '&quot;')})"
+            class="mt-auto w-full py-2 bg-tertiary-container text-white rounded-full font-label text-xs font-bold uppercase tracking-widest hover:opacity-90 transition-all active:scale-95 flex items-center justify-center gap-1">
+            <span class="material-symbols-outlined text-sm">calculate</span>
+            帶入試算
+          </button>
+        </div>`;
+    }).join('');
+  }
+
+  function parseYears(timeframe) {
+    if (!timeframe) return null;
+    const yearMatch  = timeframe.match(/(\d+)\s*年/);
+    const monthMatch = timeframe.match(/(\d+)\s*個?月/);
+    const qMatch     = timeframe.match(/Q[1-4]/i);
+    if (yearMatch)  return parseFloat(yearMatch[1]);
+    if (monthMatch) return parseFloat((parseInt(monthMatch[1]) / 12).toFixed(1));
+    if (qMatch)     return 0.5;
+    return null;
+  }
+
+  function openCalculatorWithTicker(t) {
+    const isBull   = t.direction === 'bullish';
+    const dirColor = isBull ? 'text-on-primary-container' : 'text-tertiary-container';
+    const dirBg    = isBull ? 'bg-on-primary-container/10 border border-on-primary-container/30' : 'bg-tertiary-container/10 border border-tertiary-container/30';
+
+    document.getElementById('tm-ticker').textContent     = t.ticker;
+    document.getElementById('tm-dir-icon').textContent   = isBull ? 'trending_up' : 'trending_down';
+    document.getElementById('tm-dir-icon').className     = `material-symbols-outlined text-xl ${dirColor}`;
+    document.getElementById('tm-dir-label').textContent  = isBull ? '看多' : '看空';
+    document.getElementById('tm-dir-label').className    = `px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-widest ${dirColor} ${dirBg}`;
+
+    // Info pills
+    const pills = [];
+    if (t.price_target   != null) pills.push(`目標價 $${t.price_target}`);
+    if (t.expected_return != null) pills.push(`預期報酬 ${t.expected_return}%`);
+    if (t.timeframe)               pills.push(t.timeframe);
+    document.getElementById('tm-info').innerHTML = pills.map(p =>
+      `<span class="px-3 py-1 rounded-full bg-surface-container-low text-outline text-[10px] font-semibold border border-outline-variant/20">${p}</span>`
+    ).join('');
+
+    // 帶入預設值
+    if (t.expected_return != null) document.getElementById('tm-yield').value = t.expected_return;
+    else document.getElementById('tm-yield').value = '';
+    const yrs = parseYears(t.timeframe);
+    document.getElementById('tm-years').value = yrs ?? '';
+
+    calcTickerModal();
+    document.getElementById('ticker-modal').classList.remove('hidden');
+  }
+
+  function closeTickerModal() {
+    document.getElementById('ticker-modal').classList.add('hidden');
+  }
+
+  function calcTickerModal() {
+    const capital  = parseFloat(document.getElementById('tm-capital').value) || 0;
+    const monthly  = parseFloat(document.getElementById('tm-monthly').value) || 0;
+    const rate     = (parseFloat(document.getElementById('tm-yield').value) || 0) / 100;
+    const years    = parseFloat(document.getElementById('tm-years').value) || 0;
+    const months   = Math.round(years * 12);
+    const mr       = rate / 12;
+
+    let total = capital * Math.pow(1 + mr, months);
+    if (mr > 0) total += monthly * (Math.pow(1 + mr, months) - 1) / mr;
+    else        total += monthly * months;
+
+    const principal = capital + monthly * months;
+    const gain      = total - principal;
+    const fmt = v => '$' + Math.round(v).toLocaleString();
+
+    document.getElementById('tm-result-total').textContent     = fmt(total);
+    document.getElementById('tm-result-principal').textContent = fmt(principal);
+    document.getElementById('tm-result-gain').textContent      = (gain >= 0 ? '+' : '') + fmt(gain);
+  }
+
+  // ── Related Recommendations 渲染 ──────────────────
+  function renderRelated(list, currentId) {
+    const el = document.getElementById('dd-related-grid');
+    const filtered = list.filter(s => s.id !== currentId).slice(0, 3);
+    if (!filtered.length) { el.innerHTML = '<p class="text-outline text-sm col-span-3">暫無資料</p>'; return; }
+    el.innerHTML = filtered.map(s => {
+      const st = cardStyle(s.podcaster || s.source_filename);
+      const title = (s.source_filename||'').replace(/\.srt$/i,'') || s.one_sentence_summary?.slice(0,40);
+      return `
+        <div onclick="openDeepDive(${s.id})" class="bg-surface-container-lowest rounded-lg overflow-hidden group hover:shadow-xl transition-shadow border border-outline-variant/10 cursor-pointer">
+          <div class="h-48 overflow-hidden">
+            <div class="w-full h-full flex flex-col items-center justify-center gap-2" style="background:${st.bg}">
+              <span class="material-symbols-outlined text-white/70 text-3xl" style="font-variation-settings:'FILL' 1">${st.icon}</span>
+            </div>
+          </div>
+          <div class="p-6">
+            <span class="font-label text-[10px] font-bold text-secondary uppercase tracking-widest mb-2 block">${s.podcaster || ''}</span>
+            <h4 class="font-['Epilogue'] font-bold text-lg mb-2 line-clamp-2 group-hover:text-secondary transition-colors">${title}</h4>
+            <p class="font-body text-sm text-on-surface-variant line-clamp-2">${s.one_sentence_summary || ''}</p>
+          </div>
+        </div>`;
+    }).join('');
+  }
+
+  // ── 首頁資料載入 ───────────────────────────────────
+  let _discoverCache = [];
+  async function loadDiscoverData() {
+    try {
+      const res = await fetch('/api/summaries/?limit=100');
+      const all = await res.json();
+      _discoverCache = dedupeByEpisode(all);
+      renderContinueListening(_discoverCache[0] || null);
+      renderRecommended(_discoverCache.slice(0, 8));
+    } catch(e) { console.error('loadDiscoverData failed', e); }
+  }
+
+  let _prevPage = 'discover';
+
+  function goBack() { showPage(_prevPage); }
+
+  function showPage(page) {
+    // Record previous page (skip transient layers so back always lands somewhere stable)
+    const currentActive = document.querySelector('.page.active');
+    if (currentActive) {
+      const currentId = currentActive.id.replace('page-', '');
+      if (currentId !== page) _prevPage = currentId;
+    }
+
+    // Hide all pages
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    // Deactivate all nav buttons
+    document.querySelectorAll('.nav-btn').forEach(b => { b.classList.remove('active'); b.classList.add('opacity-60'); });
+    // Show target page
+    document.getElementById('page-' + page).classList.add('active');
+    // Scroll to top
+    window.scrollTo(0, 0);
+
+    // Map pages to nav buttons
+    const navMap = { discover: 'discover', 'deep-dive': 'discover', rankings: 'rankings', podcaster: 'rankings', calculator: 'calculator', ai: 'ai', profile: 'profile' };
+    const navId = 'nav-' + (navMap[page] || page);
+    const activeBtn = document.getElementById(navId);
+    if (activeBtn) { activeBtn.classList.add('active'); activeBtn.classList.remove('opacity-60'); }
+
+    // Show/hide AI input bar
+    document.getElementById('ai-input-bar').classList.toggle('hidden', page !== 'ai');
+  }
+
+  async function showPodcaster(name, host, listeners, accuracy, bgColor, icon) {
+    document.getElementById('podcaster-name').textContent = name;
+    document.getElementById('podcaster-host').textContent = host;
+    document.getElementById('podcaster-listeners').textContent = listeners;
+    document.getElementById('podcaster-accuracy').textContent = accuracy;
+    document.getElementById('podcaster-avatar-inner').style.background = bgColor;
+    document.getElementById('podcaster-avatar-icon').textContent = icon;
+
+    const epList   = document.getElementById('podcaster-episodes-list');
+    const viewList = document.getElementById('podcaster-views-list');
+    epList.innerHTML   = '<p class="text-outline text-sm py-6 text-center">載入中...</p>';
+    viewList.innerHTML = '<p class="text-outline text-sm py-6 text-center">載入中...</p>';
+
+    switchPodcasterTab('episodes');
+    showPage('podcaster');
+
+    try {
+      const res = await fetch(`/api/summaries/?podcaster=${encodeURIComponent(name)}&limit=200`);
+      if (!res.ok) throw new Error('network');
+      const summaries = await res.json();
+
+      // ── Episodes（去重，只留每集最新一筆）────────────────
+      const seenFiles = new Set();
+      const episodes  = [];
+      for (const s of summaries) {
+        const key = s.source_filename || String(s.id);
+        if (!seenFiles.has(key)) {
+          seenFiles.add(key);
+          episodes.push(s);
+        }
+      }
+
+      epList.innerHTML = episodes.length
+        ? episodes.map(ep => {
+            const title = (ep.source_filename || '').replace(/\.srt$/i, '') || ep.one_sentence_summary?.slice(0, 60) || '(未命名)';
+            const date  = (ep.created_at || '').slice(0, 10);
+            return `
+              <div onclick="openDeepDive(${ep.id})" class="flex items-center justify-between p-4 bg-surface-container-low rounded-lg hover:bg-surface-container-highest transition-all cursor-pointer">
+                <div class="flex items-center gap-4">
+                  <div class="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0" style="background:${bgColor}">
+                    <span class="material-symbols-outlined text-white/80 text-lg" style="font-variation-settings:'FILL' 1">${icon}</span>
+                  </div>
+                  <div>
+                    <h4 class="font-bold text-tertiary-container text-sm leading-snug line-clamp-2">${title}</h4>
+                    <p class="text-xs text-outline mt-0.5">${date}</p>
+                  </div>
+                </div>
+                <span class="material-symbols-outlined text-outline/50 flex-shrink-0">chevron_right</span>
+              </div>`;
+          }).join('')
+        : '<p class="text-outline text-sm py-6 text-center">暫無集數資料</p>';
+
+      // ── 所有觀點（outlook_calls 去重合併）────────────────
+      const seenTheses = new Set();
+      const allCalls   = [];
+      for (const s of summaries) {
+        for (const call of (s.outlook_calls || [])) {
+          const thesis = call.thesis || '';
+          if (thesis && !seenTheses.has(thesis)) {
+            seenTheses.add(thesis);
+            allCalls.push(call);
+          }
+        }
+      }
+
+      const groups = { '對': [], '錯': [], '未驗證': [] };
+      for (const call of allCalls) {
+        const r = call.result || '未驗證';
+        (groups[r] !== undefined ? groups[r] : groups['未驗證']).push(call);
+      }
+      const groupConfig = {
+        '對':    { label: '正確',  icon: 'check_circle', colorClass: 'text-secondary' },
+        '錯':    { label: '錯誤',  icon: 'cancel',       colorClass: 'text-secondary' },
+        '未驗證':{ label: '未驗證', icon: 'schedule',    colorClass: 'text-secondary' },
+      };
+
+      viewList.innerHTML = Object.entries(groups).map(([key, items]) => {
+        const cfg = groupConfig[key];
+        return `
+          <div class="mb-6">
+            <div class="flex items-center gap-2 mb-3">
+              <span class="material-symbols-outlined text-lg ${cfg.colorClass}" style="font-variation-settings:'FILL' 1">${cfg.icon}</span>
+              <h4 class="font-['Epilogue'] font-bold text-base text-tertiary-container">${cfg.label}</h4>
+              <span class="text-xs text-outline font-medium">(${items.length})</span>
+            </div>
+            ${items.length === 0
+              ? '<p class="text-xs text-outline pl-7">尚無資料</p>'
+              : items.map(v => `
+                  <div class="flex items-center justify-between p-3 mb-2 rounded-lg border bg-surface-container-low border-outline-variant/20">
+                    <p class="text-sm font-medium text-tertiary-container">${v.thesis || ''}</p>
+                    <span class="text-[10px] text-outline font-medium ml-4 flex-shrink-0">${(v.date || v.call_date || '').slice(0,10)}</span>
+                  </div>`).join('')}
+          </div>`;
+      }).join('');
+
+    } catch (e) {
+      epList.innerHTML   = '<p class="text-outline text-sm py-6 text-center text-red-400">載入失敗，請稍後再試</p>';
+      viewList.innerHTML = '<p class="text-outline text-sm py-6 text-center text-red-400">載入失敗，請稍後再試</p>';
+    }
+  }
+
+  function switchPodcasterTab(tab) {
+    document.getElementById('tab-episodes').classList.toggle('hidden', tab !== 'episodes');
+    document.getElementById('tab-views').classList.toggle('hidden', tab !== 'views');
+    document.getElementById('btn-all-episodes').className = tab === 'episodes'
+      ? 'px-6 py-2.5 bg-tertiary-container text-white rounded-full font-label text-sm font-bold tracking-wide shadow-md transition-all'
+      : 'px-6 py-2.5 bg-surface-container-low text-secondary rounded-full font-label text-sm font-bold tracking-wide border border-secondary/30 transition-all';
+    document.getElementById('btn-all-views').className = tab === 'views'
+      ? 'px-6 py-2.5 bg-tertiary-container text-white rounded-full font-label text-sm font-bold tracking-wide shadow-md transition-all'
+      : 'px-6 py-2.5 bg-surface-container-low text-secondary rounded-full font-label text-sm font-bold tracking-wide border border-secondary/30 transition-all';
+  }
+
+  function setRisk(mult) {
+    riskMultiplier = mult;
+    document.querySelectorAll('.risk-btn').forEach((btn, i) => {
+      const mults = [0.85, 1.0, 1.15];
+      if (mults[i] === mult) { btn.className = btn.className.replace('bg-surface-container-high text-tertiary-container', '') + ' bg-tertiary-container text-white shadow-md'; }
+      else { btn.className = btn.className.replace('bg-tertiary-container text-white shadow-md', '') + ' bg-surface-container-high text-tertiary-container'; }
+    });
+    calcWealth();
+  }
+
+  function calcWealth() {
+    const capital     = parseFloat(document.getElementById('sim-capital').value) || 0;
+    const monthly     = parseFloat(document.getElementById('sim-monthly').value) || 0;
+    const annualYield = (parseFloat(document.getElementById('sim-yield').value) || 0) * riskMultiplier / 100;
+    const years       = parseInt(document.getElementById('sim-years').value) || 1;
+    const monthlyRate = annualYield / 12;
+
+    // 逐年計算資產與本金
+    const totalPts = [];
+    const princPts = [];
+    for (let y = 0; y <= years; y++) {
+      const m = y * 12;
+      let fv = capital * Math.pow(1 + monthlyRate, m);
+      if (monthlyRate > 0) fv += monthly * (Math.pow(1 + monthlyRate, m) - 1) / monthlyRate;
+      else fv += monthly * m;
+      totalPts.push(fv);
+      princPts.push(capital + monthly * m);
+    }
+
+    const finalFv        = totalPts[years];
+    const totalPrincipal = princPts[years];
+    const growthPct      = totalPrincipal > 0 ? Math.round((finalFv / totalPrincipal - 1) * 100) : 0;
+
+    // 更新數字
+    const fmt = v => '$' + Math.round(v).toLocaleString();
+    document.getElementById('sim-result').textContent       = fmt(finalFv);
+    document.getElementById('tooltip-value').textContent    = fmt(finalFv);
+    document.getElementById('tooltip-label').textContent    = 'Year ' + years + ' Milestone';
+    document.getElementById('tooltip-growth').innerHTML     = '<span class="material-symbols-outlined text-xs">auto_awesome</span>' + growthPct + '% TOTAL GROWTH';
+    document.getElementById('end-label').textContent        = 'YEAR ' + years;
+    document.getElementById('mid-label').textContent        = 'YEAR ' + Math.round(years / 2);
+
+    // SVG 座標轉換 (viewBox 0 0 800 400)
+    const W = 800, H = 400, padT = 20, padB = 50;
+    const maxVal = Math.max(...totalPts, 1);
+    const toX = i => (i / years) * W;
+    const toY = v => padT + (1 - v / maxVal) * (H - padT - padB);
+
+    // Growth curve (smooth via cardinal spline)
+    const pts = totalPts.map((v, i) => [toX(i), toY(v)]);
+    let d = `M${pts[0][0]},${pts[0][1]}`;
+    for (let i = 1; i < pts.length; i++) {
+      const [x0, y0] = pts[i - 1], [x1, y1] = pts[i];
+      const cpx = (x0 + x1) / 2;
+      d += ` C${cpx},${y0} ${cpx},${y1} ${x1},${y1}`;
+    }
+    document.getElementById('growth-curve').setAttribute('d', d);
+
+    // Principal line (straight)
+    const py0 = toY(princPts[0]), pyN = toY(princPts[years]);
+    document.getElementById('principal-line').setAttribute('d', `M0,${py0} L${W},${pyN}`);
+
+    // Dots
+    const midIdx = Math.round(years / 2);
+    const [mx, my] = [toX(midIdx), toY(totalPts[midIdx])];
+    document.getElementById('mid-dot').setAttribute('cx', mx);
+    document.getElementById('mid-dot').setAttribute('cy', my);
+    document.getElementById('end-dot').setAttribute('cx', W);
+    document.getElementById('end-dot').setAttribute('cy', toY(finalFv));
+
+    // Grid lines（動態Y軸刻度）
+    const svg = document.getElementById('sim-chart');
+    svg.querySelectorAll('.grid-label').forEach(el => el.remove());
+    [0.25, 0.5, 0.75, 1].forEach(ratio => {
+      const val = maxVal * ratio;
+      const y   = toY(val);
+      const label = document.createElementNS('http://www.w3.org/2000/svg','text');
+      label.setAttribute('x', 5);
+      label.setAttribute('y', y - 4);
+      label.setAttribute('fill', '#717879');
+      label.setAttribute('font-family', 'Manrope');
+      label.setAttribute('font-size', '11');
+      label.setAttribute('font-weight', '600');
+      label.setAttribute('class', 'grid-label');
+      label.textContent = val >= 1e6 ? (val/1e6).toFixed(1)+'M' : val >= 1e3 ? (val/1e3).toFixed(0)+'K' : Math.round(val);
+      svg.appendChild(label);
+    });
+  }
+
+  // ── AI Assistant State ──
+  let currentConversationId = null;
+  let aiIsLoading = false;
+
+  function escapeHtml(str) {
+    return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  // ── Send message ──
+  async function sendChat() {
+    const input = document.getElementById('chat-input');
+    const msg = input.value.trim();
+    if (!msg || aiIsLoading) return;
+    input.value = '';
+    await submitMessage(msg);
+  }
+
+  async function sendQuickAction(text) {
+    if (aiIsLoading) return;
+    await submitMessage(text);
+  }
+
+  async function submitMessage(query) {
+    aiIsLoading = true;
+    hideChatEmptyState();
+    addUserMessage(query);
+    const loadingEl = addLoadingMessage();
+
+    try {
+      const body = { query };
+      if (currentConversationId) body.conversation_id = currentConversationId;
+
+      const res = await fetch('/api/ai/chat/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+
+      loadingEl.remove();
+      if (data.ok) {
+        currentConversationId = data.conversation_id;
+        addAIMessage(data.answer);
+        loadConversations(); // 更新側邊欄
+      } else {
+        addAIMessage('發生錯誤：' + (data.error || '請稍後再試'));
+      }
+    } catch (e) {
+      loadingEl.remove();
+      addAIMessage('網路錯誤，請稍後再試。');
+    } finally {
+      aiIsLoading = false;
+    }
+  }
+
+  function hideChatEmptyState() {
+    const el = document.getElementById('chat-empty-state');
+    if (el) el.remove();
+  }
+
+  function addUserMessage(text) {
+    const container = document.getElementById('chat-messages');
+    const div = document.createElement('div');
+    div.className = 'flex justify-end ml-12';
+    const p = document.createElement('p');
+    p.className = 'font-body text-sm leading-relaxed';
+    p.textContent = text;
+    const bubble = document.createElement('div');
+    bubble.className = 'bg-tertiary-container text-on-tertiary px-6 py-4 rounded-t-xl rounded-bl-xl shadow-sm max-w-md';
+    bubble.appendChild(p);
+    div.appendChild(bubble);
+    container.appendChild(div);
+    div.scrollIntoView({ behavior: 'smooth' });
+  }
+
+  function addLoadingMessage() {
+    const container = document.getElementById('chat-messages');
+    const div = document.createElement('div');
+    div.className = 'flex justify-start mr-12 space-x-4';
+    div.innerHTML = `<div class="w-8 h-8 rounded-full bg-secondary-container flex items-center justify-center shrink-0 mt-1"><span class="material-symbols-outlined text-on-secondary-container text-sm">psychology</span></div><div class="bg-surface-container-lowest border border-secondary/20 px-6 py-4 rounded-t-xl rounded-br-xl shadow-sm"><p class="font-body text-sm text-outline animate-pulse">思考中...</p></div>`;
+    container.appendChild(div);
+    div.scrollIntoView({ behavior: 'smooth' });
+    return div;
+  }
+
+  function addAIMessage(text) {
+    const container = document.getElementById('chat-messages');
+    const div = document.createElement('div');
+    div.className = 'flex justify-start mr-12 space-x-4';
+    const p = document.createElement('p');
+    p.className = 'font-body text-sm leading-relaxed whitespace-pre-wrap';
+    p.textContent = text;
+    const bubble = document.createElement('div');
+    bubble.className = 'bg-surface-container-lowest border border-secondary/20 px-6 py-4 rounded-t-xl rounded-br-xl shadow-sm max-w-2xl';
+    bubble.appendChild(p);
+    const icon = document.createElement('div');
+    icon.className = 'w-8 h-8 rounded-full bg-secondary-container flex items-center justify-center shrink-0 mt-1';
+    icon.innerHTML = '<span class="material-symbols-outlined text-on-secondary-container text-sm">psychology</span>';
+    div.appendChild(icon);
+    div.appendChild(bubble);
+    container.appendChild(div);
+    div.scrollIntoView({ behavior: 'smooth' });
+  }
+
+  // ── New conversation ──
+  function startNewConversation() {
+    currentConversationId = null;
+    const container = document.getElementById('chat-messages');
+    container.innerHTML = `<div id="chat-empty-state" class="flex flex-col items-center justify-center py-16 space-y-4">
+      <div class="w-16 h-16 rounded-full bg-secondary-container flex items-center justify-center">
+        <span class="material-symbols-outlined text-on-secondary-container text-3xl">psychology</span>
+      </div>
+      <div class="text-center space-y-1">
+        <h3 class="font-['Epilogue'] font-bold text-xl text-tertiary-container">AI 投資助理</h3>
+        <p class="text-on-surface-variant text-sm">詢問股票、Podcast 重點或投資觀點</p>
+      </div>
+      <div class="flex flex-wrap gap-2 justify-center pt-2">
+        <button onclick="sendQuickAction('台積電最新股價與本益比？')" class="px-4 py-2 rounded-full border border-outline-variant bg-surface-container-lowest text-secondary font-label text-xs font-semibold hover:bg-secondary-container/30 transition-all">台積電股價與本益比</button>
+        <button onclick="sendQuickAction('最新一集Podcast重點摘要')" class="px-4 py-2 rounded-full border border-outline-variant bg-surface-container-lowest text-secondary font-label text-xs font-semibold hover:bg-secondary-container/30 transition-all">最新Podcast摘要</button>
+        <button onclick="sendQuickAction('現在有什麼值得關注的投資機會？')" class="px-4 py-2 rounded-full border border-outline-variant bg-surface-container-lowest text-secondary font-label text-xs font-semibold hover:bg-secondary-container/30 transition-all">近期投資機會</button>
+      </div>
+    </div>`;
+    closeHistoryDrawer();
+  }
+
+  // ── Conversation history drawer ──
+  function openHistoryDrawer() {
+    document.getElementById('ai-history-overlay').classList.remove('hidden');
+    document.getElementById('ai-history-drawer').style.transform = 'translateX(0)';
+    loadConversations();
+  }
+
+  function closeHistoryDrawer() {
+    document.getElementById('ai-history-overlay').classList.add('hidden');
+    document.getElementById('ai-history-drawer').style.transform = 'translateX(-100%)';
+  }
+
+  async function loadConversations() {
+    const list = document.getElementById('ai-history-list');
+    try {
+      const res = await fetch('/api/ai/conversations/');
+      const data = await res.json();
+      if (!data.ok || !data.data.length) {
+        list.innerHTML = '<p class="text-outline text-xs text-center py-6">尚無對話記錄</p>';
+        return;
+      }
+      list.innerHTML = '';
+      for (const group of data.data) {
+        const label = document.createElement('p');
+        label.className = 'text-outline text-[10px] font-bold uppercase tracking-widest px-2 pt-4 pb-1';
+        label.textContent = group.group;
+        list.appendChild(label);
+        for (const conv of group.conversations) {
+          const row = document.createElement('div');
+          row.className = 'flex items-center gap-1 group rounded-xl hover:bg-surface-container transition-colors';
+          const btn = document.createElement('button');
+          btn.className = 'flex-1 text-left px-3 py-2.5 text-sm text-on-surface font-body truncate';
+          btn.textContent = conv.title;
+          btn.onclick = () => loadConversationMessages(conv.id, conv.title);
+          const del = document.createElement('button');
+          del.className = 'opacity-0 group-hover:opacity-100 p-1.5 rounded-lg hover:bg-surface-container-high transition-all';
+          del.innerHTML = '<span class="material-symbols-outlined text-outline text-base">delete</span>';
+          del.onclick = (e) => { e.stopPropagation(); deleteConversation(conv.id, row); };
+          row.appendChild(btn);
+          row.appendChild(del);
+          list.appendChild(row);
+        }
+      }
+    } catch {
+      list.innerHTML = '<p class="text-outline text-xs text-center py-6">載入失敗</p>';
+    }
+  }
+
+  async function loadConversationMessages(convId, title) {
+    currentConversationId = convId;
+    const container = document.getElementById('chat-messages');
+    container.innerHTML = '<p class="text-outline text-sm text-center py-8 animate-pulse">載入對話中...</p>';
+    closeHistoryDrawer();
+    try {
+      const res = await fetch(`/api/ai/conversations/${convId}/messages/`);
+      const data = await res.json();
+      container.innerHTML = '';
+      if (!data.ok || !data.data.length) {
+        container.innerHTML = '<p class="text-outline text-sm text-center py-8">此對話沒有訊息</p>';
+        return;
+      }
+      for (const msg of data.data) {
+        if (msg.role === 'user') addUserMessage(msg.content);
+        else addAIMessage(msg.content);
+      }
+    } catch {
+      container.innerHTML = '<p class="text-outline text-sm text-center py-8">載入失敗</p>';
+    }
+  }
+
+  async function deleteConversation(convId, rowEl) {
+    try {
+      const res = await fetch(`/api/ai/conversations/${convId}/`, { method: 'DELETE' });
+      const data = await res.json();
+      if (data.ok) {
+        rowEl.remove();
+        if (currentConversationId === convId) startNewConversation();
+      }
+    } catch { /* silent */ }
+  }
+  let currentSummaryId = null;
+
+async function loadVerifiedInsights() {
+  try {
+    const res = await fetch('/api/summaries/');
+    const list = await res.json();
+    const grid = document.getElementById('insights-grid');
+    if (!list.length) { grid.innerHTML = '<p class="text-outline text-sm">尚無摘要資料</p>'; return; }
+
+    const directionLabel = { bullish: '看多', bearish: '看空', neutral: '觀察' };
+
+    let cards = [];
+    const seenTheses = new Set();
+    for (const s of list) {
+      const episodeName = s.source_filename?.replace(/\.srt$/i, '') || '未知集數';
+      const showName = s.podcaster || episodeName;
+      const calls = s.outlook_calls || [];
+      if (!calls.length) continue;
+      for (const call of calls) {
+        const thesis = call.thesis || '';
+        if (!thesis || seenTheses.has(thesis)) continue;
+        seenTheses.add(thesis);
+        const asset = call.asset || '';
+        const label = directionLabel[call.direction || 'neutral'] || '觀察';
+        cards.push(`
+          <div class="bg-surface-container-low p-6 rounded-lg border-l-4 border-secondary/40">
+            <div class="flex justify-between items-start mb-3">
+              <div class="px-3 py-1 bg-surface-container-lowest rounded-full text-[10px] font-bold text-tertiary-container uppercase tracking-widest">${asset}</div>
+              <span class="text-xs font-bold px-2 py-0.5 rounded-full bg-surface-container text-outline">${label}</span>
+            </div>
+            <h3 class="text-base font-bold text-tertiary-container mb-3 font-['Epilogue'] leading-snug">${thesis}</h3>
+            <div class="flex items-center justify-between mb-4">
+              <p class="text-sm text-on-surface-variant font-body">Extracted from <span class="font-semibold">${episodeName}</span></p>
+              <span class="text-[10px] font-bold text-secondary ml-3 flex-shrink-0">?% Acc.</span>
+            </div>
+            <div class="flex gap-2">
+              <button onclick="openDeepDive(${s.id})" class="flex-1 py-2 bg-on-primary-container text-white rounded-full font-label text-xs font-bold uppercase tracking-widest">Read Thesis</button>
+              <button class="px-4 py-2 border border-outline-variant rounded-full text-tertiary-container hover:bg-surface-container-highest transition-colors">
+                <span class="material-symbols-outlined text-sm">bookmark</span>
+              </button>
+            </div>
+          </div>
+        `);
+        if (cards.length >= 4) break;
+      }
+      if (cards.length >= 4) break;
+    }
+
+    if (!cards.length) { grid.innerHTML = '<p class="text-outline text-sm">尚無可回測句子</p>'; return; }
+    currentSummaryId = list[0].id;
+    grid.innerHTML = cards.join('');
+  } catch (e) {
+    console.error('loadVerifiedInsights failed', e);
+  }
+}
+
+let ddSummaryData = {};  // { novice: {...}, pro: {...} }
+let ddCurrentMode = 'novice';
+let _ddAutoPlay = false;
+
+function openDeepDive(summaryId, autoPlay = false) {
+  currentSummaryId = summaryId;
+  ddSummaryData = {};
+  ddCurrentMode = 'novice';
+  _ddAutoPlay = autoPlay;
+  showPage('deep-dive');
+  loadDeepDive(summaryId);
+  loadMindmap(summaryId);
+}
+
+function renderDdModeContent(mode) {
+  const s = ddSummaryData[mode];
+  if (!s) return;
+
+  // Investment Takeaways
+  const tw = s.investment_takeaways || {};
+  let twHtml = '';
+  if ((tw.bullish || []).length) {
+    twHtml += `<div class="p-6 rounded-lg bg-on-primary-container/5 border-l-4 border-on-primary-container">
+      <div class="flex items-center gap-2 mb-3 text-on-primary-container">
+        <span class="material-symbols-outlined font-bold">trending_up</span>
+        <span class="font-label font-bold uppercase tracking-wider text-xs">Bullish Thesis</span>
+      </div>
+      <ul class="space-y-2">${(tw.bullish).map(item => `<li class="flex gap-2 text-on-surface font-body font-medium"><span class="text-on-primary-container shrink-0">•</span><span>${item}</span></li>`).join('')}</ul>
+    </div>`;
+  }
+  if ((tw.bearish || []).length) {
+    twHtml += `<div class="p-6 rounded-lg bg-tertiary-container/10 border-l-4 border-tertiary-container">
+      <div class="flex items-center gap-2 mb-3 text-tertiary-container">
+        <span class="material-symbols-outlined font-bold">trending_down</span>
+        <span class="font-label font-bold uppercase tracking-wider text-xs">Bearish Thesis</span>
+      </div>
+      <ul class="space-y-2">${(tw.bearish).map(item => `<li class="flex gap-2 text-on-surface font-body font-medium"><span class="text-tertiary-container shrink-0">•</span><span>${item}</span></li>`).join('')}</ul>
+    </div>`;
+  }
+  if ((tw.watchlist || []).length) {
+    twHtml += `<div class="p-6 rounded-lg bg-secondary/5 border-l-4 border-secondary">
+      <div class="flex items-center gap-2 mb-3 text-secondary">
+        <span class="material-symbols-outlined font-bold">visibility</span>
+        <span class="font-label font-bold uppercase tracking-wider text-xs">Watchlist</span>
+      </div>
+      <ul class="space-y-2">${(tw.watchlist).map(item => `<li class="flex gap-2 text-on-surface font-body font-medium"><span class="text-secondary shrink-0">•</span><span>${item}</span></li>`).join('')}</ul>
+    </div>`;
+  }
+  document.getElementById('dd-takeaways').innerHTML = twHtml || '<p class="text-outline text-sm">無資料</p>';
+
+  // Critical Thesis Points
+  const args = s.arguments || [];
+  let argHtml = '';
+  args.forEach((arg, i) => {
+    const isLast = i === args.length - 1;
+    const timestamp = (arg.evidence_timestamps && arg.evidence_timestamps[0]) || '--:--';
+    const fullSummary = arg.summary || '';
+    const preview = getTwoSentences(fullSummary);
+    argHtml += `
+      <div class="${isLast ? '' : 'border-b border-outline-variant/30'} py-8 px-2">
+        <div class="flex flex-col md:flex-row gap-5">
+          <div class="md:w-28 flex-shrink-0">
+            <button onclick="playAtTimestamp('${timestamp}')" class="bg-secondary-container text-tertiary-container font-bold px-4 py-2 rounded-full text-sm hover:scale-95 transition-transform flex items-center gap-2">
+              <span class="material-symbols-outlined text-sm" style="font-variation-settings: 'FILL' 1;">play_arrow</span>
+              ${timestamp}
+            </button>
+          </div>
+          <div class="flex-1 space-y-3">
+            <h3 class="font-['Epilogue'] text-xl font-bold text-on-surface">${arg.topic || ''}</h3>
+            <div class="thesis-preview text-on-surface-variant leading-relaxed text-base">${preview}</div>
+            <div class="thesis-full hidden text-on-surface-variant leading-relaxed text-base"><p>${fullSummary}</p></div>
+            <button onclick="toggleThesis(this)" class="flex items-center gap-1 text-secondary font-label font-bold text-xs uppercase tracking-wider hover:text-on-primary-container transition-colors mt-1">
+              <span class="btn-label">Read More</span>
+              <span class="material-symbols-outlined text-sm btn-icon">expand_more</span>
+            </button>
+          </div>
+        </div>
+      </div>`;
+  });
+  document.getElementById('dd-arguments').innerHTML = argHtml || '<p class="text-outline text-sm">無資料</p>';
+}
+
+function updateDdModeButtons() {
+  ['novice','pro'].forEach(m => {
+    const btn = document.getElementById(`btn-mode-${m}`);
+    if (!btn) return;
+    const hasData = !!ddSummaryData[m];
+    const isActive = ddCurrentMode === m;
+    btn.className = `px-5 py-1.5 rounded-full font-label text-xs font-bold tracking-wide transition-all ${
+      isActive ? 'bg-tertiary-container text-white' :
+      hasData  ? 'text-secondary' : 'text-outline/40 cursor-not-allowed'
+    }`;
+    btn.disabled = !hasData && !isActive;
+  });
+}
+
+function switchDdMode(mode) {
+  ddCurrentMode = mode;
+  updateDdModeButtons();
+  if (ddSummaryData[mode]) {
+    renderDdModeContent(mode);
+  } else {
+    document.getElementById('dd-takeaways').innerHTML = '<p class="text-outline text-sm">此模式無資料</p>';
+    document.getElementById('dd-arguments').innerHTML = '<p class="text-outline text-sm">此模式無資料</p>';
+  }
+}
+
+async function loadDeepDive(summaryId) {
+  try {
+    const res = await fetch(`/api/summaries/${summaryId}/`);
+    const s = await res.json();
+
+    const episodeTitle = s.source_filename?.replace(/\.srt$/i, '') || s.one_sentence_summary?.slice(0, 40) + '...';
+    const showName = s.podcaster || '未知節目';
+
+    document.getElementById('dd-title').textContent = episodeTitle;
+    const podcasterEl = document.getElementById('dd-podcaster');
+    podcasterEl.innerHTML = `Extracted from <span class="font-semibold">${showName}</span>`;
+    document.getElementById('dd-one-sentence').textContent = '"' + s.one_sentence_summary + '"';
+
+    // 設定音檔
+    const audioEl = document.getElementById('dd-audio');
+    const playerEl = document.getElementById('dd-audio-player');
+    if (s.audio_url) {
+      audioEl.src = s.audio_url;
+      playerEl.classList.remove('hidden');
+      // 重置 UI
+      document.getElementById('dd-progress-fill').style.width = '0%';
+      document.getElementById('dd-progress-thumb').style.left = '0%';
+      document.getElementById('dd-current-time').textContent = '0:00';
+      document.getElementById('dd-duration').textContent = '--:--';
+      document.getElementById('dd-play-icon').textContent = 'play_arrow';
+      if (_ddAutoPlay) { audioEl.play().catch(()=>{}); document.getElementById('dd-play-icon').textContent = 'pause'; _ddAutoPlay = false; }
+    } else {
+      audioEl.removeAttribute('src');
+      playerEl.classList.add('hidden');
+    }
+
+    // Viewpoint Verification：所有可回測句子
+    const calls = s.outlook_calls || [];
+    let vpHtml = '';
+    calls.forEach(call => {
+      const thesis = call.thesis || '';
+      const asset = call.asset || '';
+      const timeframe = call.timeframe || null;
+      // 目前沒有驗證結果，全部顯示待驗證
+      const status = call.verified_status || 'pending';
+      const statusMap = {
+        pending:  { label: '待驗證', icon: 'pending',       cls: 'text-outline',           border: 'border-outline-variant',       bg: 'bg-surface-container/50' },
+        correct:  { label: '正確',   icon: 'check_circle',  cls: 'text-green-600',         border: 'border-green-500',             bg: 'bg-green-50/50' },
+        incorrect:{ label: '錯誤',   icon: 'cancel',        cls: 'text-error',             border: 'border-error',                 bg: 'bg-error-container/10' },
+      };
+      const st = statusMap[status] || statusMap.pending;
+      vpHtml += `
+        <div class="p-6 rounded-lg ${st.bg} border-l-4 ${st.border}">
+          <div class="flex items-start justify-between mb-2">
+            <div class="flex items-center gap-2 ${st.cls}">
+              <span class="material-symbols-outlined text-sm" style="font-variation-settings:'FILL' 1">${st.icon}</span>
+              <span class="font-label font-bold uppercase tracking-wider text-xs">${st.label}</span>
+            </div>
+            <span class="text-xs font-bold text-outline uppercase">${asset}</span>
+          </div>
+          <p class="font-body text-on-surface font-medium mb-2">${thesis}</p>
+          ${timeframe ? `<span class="text-[10px] font-bold text-outline uppercase tracking-widest">驗證時間：${timeframe}</span>` : '<span class="text-[10px] text-outline">未設定驗證時間</span>'}
+        </div>`;
+    });
+    document.getElementById('dd-viewpoints').innerHTML = vpHtml || '<p class="text-outline text-sm">無可回測句子</p>';
+
+    // 存入當前模式資料，並查詢另一模式
+    ddSummaryData[s.mode] = s;
+    ddCurrentMode = s.mode;
+    switchDdMode(s.mode);
+
+    // Ticker Targets（後端有資料時自動顯示，mock 示範用）
+    const mockTickers = [
+      { ticker: 'TSMC / 2330', direction: 'bullish', price_target: 980, expected_return: 18, timeframe: '12個月' },
+      { ticker: 'NVIDIA',      direction: 'bullish', price_target: 150, expected_return: 25, timeframe: '6個月' },
+      { ticker: 'USD/TWD',     direction: 'bearish', price_target: null, expected_return: null, timeframe: '2026 Q3' },
+    ];
+    renderTickerTargets(s.ticker_targets || mockTickers);
+
+    // Related Recommendations
+    if (_discoverCache.length) renderRelated(_discoverCache, summaryId);
+    else fetch('/api/summaries/?limit=30').then(r=>r.json()).then(all=>{ _discoverCache = dedupeByEpisode(all); renderRelated(_discoverCache, summaryId); }).catch(()=>{});
+
+    // 非同步抓另一個模式
+    if (s.source_filename) {
+      const otherMode = s.mode === 'novice' ? 'pro' : 'novice';
+      fetch(`/api/summaries/?source_filename=${encodeURIComponent(s.source_filename)}&mode=${otherMode}`)
+        .then(r => r.json())
+        .then(list => {
+          if (list.length) {
+            return fetch(`/api/summaries/${list[0].id}/`).then(r => r.json());
+          }
+        })
+        .then(other => {
+          if (other) { ddSummaryData[other.mode] = other; updateDdModeButtons(); }
+        })
+        .catch(() => {});
+    }
+
+  } catch (e) {
+    console.error('loadDeepDive failed', e);
+  }
+}
+
+function formatTime(sec) {
+  if (isNaN(sec)) return '--:--';
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
+function toggleAudioPlay() {
+  const audio = document.getElementById('dd-audio');
+  const icon = document.getElementById('dd-play-icon');
+  if (!audio.src) return;
+  if (audio.paused) {
+    audio.play();
+    icon.textContent = 'pause';
+  } else {
+    audio.pause();
+    icon.textContent = 'play_arrow';
+  }
+}
+
+function seekAudio(event) {
+  const audio = document.getElementById('dd-audio');
+  if (!audio.src || !audio.duration) return;
+  const bar = document.getElementById('dd-progress-bar');
+  const rect = bar.getBoundingClientRect();
+  const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+  audio.currentTime = ratio * audio.duration;
+}
+
+// ── 個人偏好設定 ──────────────────────────────────────────
+const _prefActiveClass  = 'pref-chip px-5 py-2 rounded-full border border-secondary bg-secondary/10 text-secondary font-label text-sm font-bold transition-all';
+const _prefDefaultClass = 'pref-chip px-5 py-2 rounded-full border border-outline-variant/40 bg-surface-container text-on-surface-variant font-label text-sm font-semibold transition-all hover:border-secondary/40';
+
+function togglePref(groupId, btn, mode) {
+  const group = document.getElementById(groupId);
+  if (mode === 'single') {
+    group.querySelectorAll('.pref-chip').forEach(b => b.className = _prefDefaultClass);
+    btn.className = _prefActiveClass;
+  } else {
+    btn.className = btn.className.includes('text-secondary') ? _prefDefaultClass : _prefActiveClass;
+  }
+}
+
+function savePreferences() {
+  const prefs = {
+    style:  [...document.querySelectorAll('#pref-style .pref-chip')].filter(b => b.className.includes('text-secondary')).map(b => b.dataset.val),
+    topics: [...document.querySelectorAll('#pref-topics .pref-chip')].filter(b => b.className.includes('text-secondary')).map(b => b.dataset.val),
+    depth:  [...document.querySelectorAll('#pref-depth .pref-chip')].filter(b => b.className.includes('text-secondary')).map(b => b.dataset.val),
+  };
+  localStorage.setItem('pod2invest_prefs', JSON.stringify(prefs));
+  const msg = document.getElementById('pref-saved-msg');
+  msg.classList.remove('hidden');
+  setTimeout(() => msg.classList.add('hidden'), 3000);
+}
+
+function loadPreferences() {
+  try {
+    const prefs = JSON.parse(localStorage.getItem('pod2invest_prefs') || '{}');
+    if (prefs.style)  prefs.style.forEach(v  => { const b = document.querySelector(`#pref-style [data-val="${v}"]`);  if(b) b.className = _prefActiveClass; });
+    if (prefs.topics) prefs.topics.forEach(v => { const b = document.querySelector(`#pref-topics [data-val="${v}"]`); if(b) b.className = _prefActiveClass; });
+    if (prefs.depth)  prefs.depth.forEach(v  => { const b = document.querySelector(`#pref-depth [data-val="${v}"]`);  if(b) b.className = _prefActiveClass; });
+  } catch {}
+}
+
+// ── Discover 熱門標籤 ─────────────────────────────────────
+let _activeTag = null;
+
+const _tagActiveCls  = 'px-5 py-2 bg-tertiary-container text-surface rounded-full font-label text-sm font-semibold whitespace-nowrap transition-colors';
+const _tagNormalCls  = 'px-5 py-2 bg-secondary/10 text-secondary rounded-full font-label text-sm font-semibold whitespace-nowrap border border-secondary/20 hover:bg-secondary/20 transition-colors';
+
+function _updateTagButtons() {
+  const container = document.getElementById('discover-tags');
+  if (!container) return;
+  container.querySelectorAll('button[data-tag]').forEach(btn => {
+    const isActive = btn.dataset.tag === (_activeTag === null ? '__all__' : _activeTag);
+    btn.className = isActive ? _tagActiveCls : _tagNormalCls;
+  });
+}
+
+function filterDiscoverByTag(tagName) {
+  _activeTag = tagName;
+  _updateTagButtons();
+
+  const resultsSection      = document.getElementById('tag-results-section');
+  const continueSec         = document.getElementById('continue-listening-section');
+  const insightsSec         = document.getElementById('verified-insights-section');
+  const recommendedSection  = document.getElementById('recommended-section');
+
+  if (!tagName) {
+    resultsSection.classList.add('hidden');
+    continueSec.classList.remove('hidden');
+    insightsSec.classList.remove('hidden');
+    recommendedSection.classList.remove('hidden');
+    return;
+  }
+
+  resultsSection.classList.remove('hidden');
+  continueSec.classList.add('hidden');
+  insightsSec.classList.add('hidden');
+  recommendedSection.classList.add('hidden');
+  document.getElementById('tag-results-title').textContent = `「${tagName}」相關節目`;
+
+  const kw = tagName.toLowerCase();
+
+  // 把 entities dict 的所有值（可能是 string 或 array）攤平成字串陣列
+  function entityStrings(s) {
+    const ent = s.entities;
+    if (!ent || typeof ent !== 'object') return [];
+    return Object.values(ent).flatMap(v =>
+      Array.isArray(v) ? v.map(String) : [String(v)]
+    );
+  }
+
+  const filtered = _discoverCache.filter(s => {
+    const texts = [
+      ...(s.tags || []),
+      s.one_sentence_summary || '',
+      s.source_filename      || '',
+      s.podcaster            || '',
+      ...entityStrings(s),
+    ];
+    return texts.some(t => t.toLowerCase().includes(kw));
+  });
+
+  const list = document.getElementById('tag-results-list');
+  if (!filtered.length) {
+    list.innerHTML = '<p class="text-outline text-sm">找不到相關節目，試試其他標籤</p>';
+    return;
+  }
+  list.innerHTML = filtered.map(s => {
+    const st    = cardStyle(s.podcaster || s.source_filename);
+    const title = (s.source_filename || '').replace(/\.srt$/i, '') || s.one_sentence_summary?.slice(0, 60) || '(未命名)';
+    const tagStr = (s.tags || []).slice(0, 3).join(' · ');
+    return `
+      <div onclick="openDeepDive(${s.id})" class="flex gap-4 p-4 rounded-lg bg-surface-container-lowest hover:bg-surface-container-low transition-colors cursor-pointer border border-transparent hover:border-outline-variant/20">
+        <div class="w-16 h-16 rounded-lg flex-shrink-0 flex items-center justify-center" style="background:${st.bg}">
+          <span class="material-symbols-outlined text-white/60 text-2xl" style="font-variation-settings:'FILL' 1">${st.icon}</span>
+        </div>
+        <div class="flex flex-col justify-center min-w-0">
+          <span class="text-[10px] font-bold text-secondary uppercase tracking-widest truncate">${s.podcaster || ''}</span>
+          <h4 class="font-['Epilogue'] font-bold text-sm text-tertiary-container leading-snug line-clamp-2">${title}</h4>
+          <p class="text-xs text-outline mt-0.5 truncate">${tagStr}</p>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+async function loadHotTags() {
+  const container = document.getElementById('discover-tags');
+  if (!container) return;
+  try {
+    const res = await fetch('/api/knowledge-graph/hot-nodes/?days=30&limit=12');
+    if (!res.ok) throw new Error('network');
+    const data = await res.json();
+    const nodes = data.nodes || [];
+    if (!nodes.length) {
+      container.innerHTML = '<span class="text-outline text-sm self-center">暫無熱門標籤</span>';
+      return;
+    }
+    // "All" 按鈕 + 動態關鍵字
+    const allBtn = `<button data-tag="__all__" onclick="filterDiscoverByTag(null)" class="${_tagActiveCls}">All</button>`;
+    const tagBtns = nodes.map(n =>
+      `<button data-tag="${n.name}" onclick="filterDiscoverByTag('${n.name.replace(/'/g,"\\'")}') " class="${_tagNormalCls}">${n.name}</button>`
+    ).join('');
+    container.innerHTML = allBtn + tagBtns;
+  } catch {
+    container.innerHTML = '<span class="text-outline text-sm self-center">標籤載入失敗</span>';
+  }
+}
+
+// ── Rankings 真實節目 ──────────────────────────────────────
+const _rankColors = ['#d97f12','#286671','#1c1c16','#472500','#2c4c50','#113236','#3a4c2c','#6b2c6b','#1a3a5c','#4c3a1c'];
+const _rankIcons  = ['workspace_premium','podcasts','show_chart','account_balance','public','ssid_chart','psychology','monitoring','bar_chart','mic'];
+let _rankData = [];
+
+function openRankedPodcaster(idx) {
+  const p = _rankData[idx];
+  if (!p) return;
+  const bg   = _rankColors[idx % _rankColors.length];
+  const icon = _rankIcons[idx  % _rankIcons.length];
+  showPodcaster(p.podcaster, p.podcaster, p.episodes + ' 集', '--', bg, icon);
+}
+
+async function loadRankings() {
+  const podium   = document.getElementById('rankings-podium');
+  const fullList = document.getElementById('rankings-full-list');
+  if (!podium || !fullList) return;
+  try {
+    const res = await fetch('/api/summaries/podcasters/?limit=50');
+    if (!res.ok) throw new Error('network');
+    const data = await res.json();
+    _rankData = data;
+
+    if (!data.length) {
+      podium.innerHTML   = '<div class="col-span-3 text-outline text-sm text-center py-12">暫無節目資料</div>';
+      fullList.innerHTML = '';
+      return;
+    }
+
+    // Podium: render top-3 in display order [#2, #1, #3]
+    const top3 = data.slice(0, 3);
+    const displayOrder = top3.length >= 3 ? [1, 0, 2]   // indices into top3
+                       : top3.length === 2 ? [null, 0, 1]
+                       : [null, 0, null];
+
+    podium.innerHTML = displayOrder.map(origIdx => {
+      if (origIdx === null) return '<div></div>';
+      const p      = top3[origIdx];
+      const rank   = origIdx + 1;                        // 1-based rank
+      const dataIdx = origIdx;                           // index in _rankData
+      const rankStr = String(rank).padStart(2, '0');
+      const bg   = _rankColors[origIdx % _rankColors.length];
+      const icon = _rankIcons[origIdx  % _rankIcons.length];
+      const isFirst = rank === 1;
+
+      if (isFirst) {
+        return `
+          <div class="flex flex-col items-center gap-3 pb-4 pt-8 bg-tertiary-container rounded-lg shadow-xl relative">
+            <div class="absolute -top-3 left-1/2 -translate-x-1/2">
+              <span class="material-symbols-outlined text-on-primary-container text-2xl" style="font-variation-settings:'FILL' 1">emoji_events</span>
+            </div>
+            <div class="w-16 h-16 rounded-full overflow-hidden ring-2 ring-on-primary-container">
+              <div class="w-full h-full flex items-center justify-center" style="background:${bg}">
+                <span class="material-symbols-outlined text-white/80 text-3xl" style="font-variation-settings:'FILL' 1">${icon}</span>
+              </div>
+            </div>
+            <div class="text-center px-2">
+              <div class="font-['Epilogue'] font-black text-3xl text-white/20 mb-1">${rankStr}</div>
+              <h4 class="font-['Epilogue'] font-bold text-sm text-white leading-tight">${p.podcaster}</h4>
+              <p class="text-[10px] text-on-tertiary-container mt-1">${p.episodes} 集</p>
+            </div>
+            <button onclick="openRankedPodcaster(${dataIdx})" class="px-4 py-1.5 bg-on-primary-container text-white rounded-full font-label text-[10px] font-bold uppercase tracking-widest hover:opacity-90 transition-all">More</button>
+          </div>`;
+      } else {
+        return `
+          <div class="flex flex-col items-center gap-3 pb-4 pt-6 bg-surface-container-low rounded-lg border border-outline-variant/10">
+            <div class="w-14 h-14 rounded-full overflow-hidden">
+              <div class="w-full h-full flex items-center justify-center" style="background:${bg}">
+                <span class="material-symbols-outlined text-white/80 text-2xl" style="font-variation-settings:'FILL' 1">${icon}</span>
+              </div>
+            </div>
+            <div class="text-center px-2">
+              <div class="font-['Epilogue'] font-black text-3xl text-outline/20 mb-1">${rankStr}</div>
+              <h4 class="font-['Epilogue'] font-bold text-sm text-tertiary-container leading-tight">${p.podcaster}</h4>
+              <p class="text-[10px] text-outline mt-1">${p.episodes} 集</p>
+            </div>
+            <button onclick="openRankedPodcaster(${dataIdx})" class="px-4 py-1.5 border border-secondary text-secondary rounded-full font-label text-[10px] font-bold uppercase tracking-widest hover:bg-secondary hover:text-white transition-all">More</button>
+          </div>`;
+      }
+    }).join('');
+
+    // Full list #4 onwards
+    const rest = data.slice(3);
+    fullList.innerHTML = rest.map((p, i) => {
+      const rank    = i + 4;
+      const dataIdx = i + 3;
+      const rankStr = String(rank).padStart(2, '0');
+      const bg   = _rankColors[dataIdx % _rankColors.length];
+      const icon = _rankIcons[dataIdx  % _rankIcons.length];
+      return `
+        <div class="flex items-center justify-between p-4 bg-surface-container-low rounded-lg hover:bg-surface-container-highest transition-all">
+          <div class="flex items-center gap-4">
+            <span class="text-2xl font-black text-outline/30 italic w-8">${rankStr}</span>
+            <div class="w-12 h-12 rounded-full overflow-hidden">
+              <div class="w-full h-full flex items-center justify-center" style="background:${bg}">
+                <span class="material-symbols-outlined text-white/70 text-xl" style="font-variation-settings:'FILL' 1">${icon}</span>
+              </div>
+            </div>
+            <div>
+              <h4 class="font-bold text-tertiary-container">${p.podcaster}</h4>
+              <p class="text-xs text-outline font-medium">${p.episodes} 集</p>
+            </div>
+          </div>
+          <button onclick="openRankedPodcaster(${dataIdx})" class="px-5 py-2 border border-secondary text-secondary rounded-full font-label text-xs font-bold uppercase tracking-widest hover:bg-secondary hover:text-white transition-all">More</button>
+        </div>`;
+    }).join('') || '<p class="text-outline text-sm">暫無更多資料</p>';
+
+  } catch (e) {
+    podium.innerHTML   = '<div class="col-span-3 text-outline text-sm text-center py-12">載入失敗</div>';
+    fullList.innerHTML = '';
+  }
+}
+
+// 音檔事件監聽（只綁一次）
+document.addEventListener('DOMContentLoaded', () => {
+  loadDiscoverData();
+  loadHotTags();
+  loadRankings();
+  loadPreferences();
+
+  // disc-audio 進度條更新
+  const discAudio = document.getElementById('disc-audio');
+  discAudio.addEventListener('loadedmetadata', () => {
+    const el = document.getElementById('disc-duration');
+    if (el) el.textContent = formatTime(discAudio.duration);
+  });
+  discAudio.addEventListener('timeupdate', () => {
+    if (!discAudio.duration) return;
+    const pct = (discAudio.currentTime / discAudio.duration * 100).toFixed(1) + '%';
+    const fill = document.getElementById('disc-progress-fill');
+    const cur  = document.getElementById('disc-current-time');
+    if (fill) fill.style.width = pct;
+    if (cur)  cur.textContent = formatTime(discAudio.currentTime);
+  });
+  discAudio.addEventListener('ended', () => {
+    const icon = document.getElementById('disc-play-icon');
+    if (icon) icon.textContent = 'play_arrow';
+  });
+
+  const audio = document.getElementById('dd-audio');
+  if (!audio) return;
+
+  audio.addEventListener('loadedmetadata', () => {
+    document.getElementById('dd-duration').textContent = formatTime(audio.duration);
+  });
+
+  audio.addEventListener('timeupdate', () => {
+    if (!audio.duration) return;
+    const pct = (audio.currentTime / audio.duration) * 100;
+    document.getElementById('dd-progress-fill').style.width = pct + '%';
+    document.getElementById('dd-progress-thumb').style.left = pct + '%';
+    document.getElementById('dd-current-time').textContent = formatTime(audio.currentTime);
+  });
+
+  audio.addEventListener('ended', () => {
+    document.getElementById('dd-play-icon').textContent = 'play_arrow';
+    document.getElementById('dd-progress-fill').style.width = '0%';
+    document.getElementById('dd-progress-thumb').style.left = '0%';
+    document.getElementById('dd-current-time').textContent = '0:00';
+  });
+});
+
+function playAtTimestamp(ts) {
+  const audioEl = document.getElementById('dd-audio');
+  if (!audioEl || !audioEl.src) {
+    alert('此集無音檔連結');
+    return;
+  }
+  const parts = ts.split(':').map(Number);
+  let seconds = 0;
+  if (parts.length === 2) seconds = parts[0] * 60 + parts[1];
+  else if (parts.length === 3) seconds = parts[0] * 3600 + parts[1] * 60 + parts[2];
+  audioEl.currentTime = seconds;
+  audioEl.play();
+  document.getElementById('dd-play-icon').textContent = 'pause';
+  // 捲動到播放器
+  document.getElementById('dd-audio-player').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function getTwoSentences(text) {
+  if (!text) return '';
+  const sentences = text.match(/[^。！？!?]+[。！？!?]+/g) || [];
+  if (sentences.length >= 2) return sentences.slice(0, 2).join('');
+  return text.slice(0, 80) + (text.length > 80 ? '...' : '');
+}
+
+async function loadMindmap(summaryId) {
+  const container = document.getElementById('mindmap-container');
+  container.innerHTML = '<p class="text-outline text-sm p-4">心智圖產生中...</p>';
+  try {
+    const res = await fetch(`/api/summaries/${summaryId}/mindmap/`);
+    const data = await res.json();
+    const mm = data.mindmap;
+    if (!mm || (!mm.central_topic && !(mm.arguments||[]).length)) {
+      container.innerHTML = '<p class="text-outline text-sm p-4">此集尚無心智圖資料</p>';
+      return;
+    }
+    renderMindmap(mm, container);
+  } catch (e) {
+    container.innerHTML = '<p class="text-outline text-sm p-4">心智圖載入失敗</p>';
+  }
+}
+
+function renderMindmap(data, container) {
+  container.innerHTML = '';
+
+  const marginLeft = 320;
+  const marginRight = 260;
+  const marginTop = 40;
+  const marginBottom = 40;
+  const treeWidth = 500;
+
+  const numLeaves = (data.arguments || []).reduce((acc, arg) => {
+    const s = Array.isArray(arg.summary) ? arg.summary : [arg.summary];
+    return acc + Math.min(3, s.length);
+  }, 0);
+  const treeHeight = Math.max(300, numLeaves * 36);
+
+  const totalW = treeWidth + marginLeft + marginRight;
+  const totalH = treeHeight + marginTop + marginBottom;
+
+  const treeData = {
+    name: data.title || 'Mindmap',
+    children: (data.arguments || []).map(arg => ({
+      name: arg.topic,
+      children: (Array.isArray(arg.summary) ? arg.summary : [arg.summary])
+        .slice(0, 3).map(s => ({ name: s }))
+    }))
+  };
+
+  const root = d3.hierarchy(treeData);
+  const treeLayout = d3.tree().size([treeHeight, treeWidth]);
+  treeLayout(root);
+
+  const svg = d3.select(container).append('svg')
+    .attr('width', totalW)
+    .attr('height', totalH)
+    .style('display', 'block');
+
+  const g = svg.append('g').attr('transform', `translate(${marginLeft},${marginTop})`);
+
+  g.selectAll('.link')
+    .data(root.links()).enter().append('path')
+    .attr('fill', 'none')
+    .attr('stroke', '#286671').attr('stroke-opacity', 0.4).attr('stroke-width', 1.5)
+    .attr('d', d3.linkHorizontal().x(d => d.y).y(d => d.x));
+
+  const node = g.selectAll('.node')
+    .data(root.descendants()).enter().append('g')
+    .attr('transform', d => `translate(${d.y},${d.x})`);
+
+  node.append('circle').attr('r', 5)
+    .attr('fill', d => d.depth === 0 ? '#113236' : d.depth === 1 ? '#286671' : '#d97f12');
+
+  node.append('text')
+    .attr('dy', '0.35em')
+    .attr('x', d => d.children ? -12 : 12)
+    .attr('text-anchor', d => d.children ? 'end' : 'start')
+    .style('font-size', '14px')
+    .style('font-family', 'Manrope')
+    .style('font-weight', d => d.depth <= 1 ? '600' : '400')
+    .style('fill', d => d.depth === 0 ? '#113236' : '#1c1c16')
+    .text(d => d.data.name || '');
+}
+
+
+
+// Init
+calcWealth();
+showPage('discover');
+loadVerifiedInsights();
+
+// Glossary btn：只保留一個 handler（document 事件委派）
+
+
+  // Thesis expand/collapse
+  function toggleThesis(btn) {
+    const item    = btn.closest('.flex-1');
+    const preview = item.querySelector('.thesis-preview');
+    const full    = item.querySelector('.thesis-full');
+    const label   = btn.querySelector('.btn-label');
+    const icon    = btn.querySelector('.btn-icon');
+    const isOpen  = !full.classList.contains('hidden');
+    if (isOpen) {
+      full.classList.add('hidden');
+      preview.classList.remove('hidden');
+      label.textContent = 'Read More';
+      icon.textContent  = 'expand_more';
+      btn.classList.remove('text-on-primary-container');
+      btn.classList.add('text-secondary');
+    } else {
+      preview.classList.add('hidden');
+      full.classList.remove('hidden');
+      label.textContent = 'Show Less';
+      icon.textContent  = 'expand_less';
+      btn.classList.remove('text-secondary');
+      btn.classList.add('text-on-primary-container');
+    }
+  }
+
+window._selectedText = '';
+
+document.addEventListener('mouseup', (e) => {
+  if (document.getElementById('glossary-card').contains(e.target)) return;
+  if (document.getElementById('glossary-btn').contains(e.target)) return;
+
+  const sel = window.getSelection();
+  const text = sel ? sel.toString().trim() : '';
+
+  if (text.length >= 2 && text.length <= 20) {
+    window._selectedText = text;
+    const range = sel.getRangeAt(0).getBoundingClientRect();
+    const btn = document.getElementById('glossary-btn');
+    btn.style.top = (range.bottom + 6) + 'px';
+    btn.style.left = range.left + 'px';
+    btn.classList.remove('hidden');
+  } else {
+    document.getElementById('glossary-btn').classList.add('hidden');
+    window._selectedText = '';
+  }
+});
+
+async function lookupGlossary() {
+  document.getElementById('glossary-btn').classList.add('hidden');
+  const q = window._selectedText;
+  if (!q) return;
+
+  const card = document.getElementById('glossary-card');
+
+  try {
+    const res = await fetch(`/api/glossary/lookup/?q=${encodeURIComponent(q)}`);
+    const data = await res.json();
+    const results = data.results || [];
+
+    if (!results.length) {
+      document.getElementById('gc-term').textContent = `「${q}」`;
+      document.getElementById('gc-short').textContent = '目前尚無此詞的解釋。';
+      document.getElementById('gc-long').classList.add('hidden');
+      document.getElementById('gc-more-btn').classList.add('hidden');
+    } else {
+      const t = results[0];
+      document.getElementById('gc-term').textContent = t.term;
+      document.getElementById('gc-short').textContent = t.short_definition;
+      document.getElementById('gc-long').textContent = t.long_definition || '';
+      document.getElementById('gc-long').classList.add('hidden');
+      document.getElementById('gc-more-btn').classList.toggle('hidden', !t.long_definition);
+    }
+
+    card.style.display = 'block';
+
+  } catch (err) {
+    console.error('glossary lookup failed', err);
+    document.getElementById('gc-term').textContent = '載入失敗';
+    document.getElementById('gc-short').textContent = err.message || '請稍後再試。';
+    document.getElementById('gc-more-btn').classList.add('hidden');
+    card.style.display = 'block';
+  }
+}
+
+
+
+
+function showGlossaryLong() {
+  document.getElementById('gc-long').classList.remove('hidden');
+  document.getElementById('gc-more-btn').classList.add('hidden');
+}
+
+</script>
+<!-- Glossary Popup -->
+<div id="glossary-btn" class="hidden fixed z-[200] cursor-pointer">
+  <button onclick="lookupGlossary()" class="bg-tertiary-container text-white text-xs font-bold px-3 py-1.5 rounded-full shadow-lg">
+    解釋
+  </button>
+</div>
+
+<div id="glossary-card" class="bg-surface-container-lowest border border-outline-variant/30 rounded-xl shadow-2xl p-5 w-72" style="position:fixed; top:120px; left:50%; transform:translateX(-50%); z-index:9999; display:none;">
+  <div class="flex justify-between items-start mb-2">
+    <p id="gc-term" class="font-['Epilogue'] font-bold text-tertiary-container text-base"></p>
+    <button onclick="document.getElementById('glossary-card').style.display='none'" class="text-outline text-xs ml-2">✕</button>
+  </div>
+  <p id="gc-short" class="text-sm text-on-surface-variant leading-relaxed"></p>
+  <button id="gc-more-btn" onclick="showGlossaryLong()" class="mt-3 text-secondary font-bold text-xs uppercase tracking-wider hover:text-on-primary-container transition-colors">
+    查看更多 ›
+  </button>
+  <div id="gc-long" class="hidden mt-3 pt-3 border-t border-outline-variant/20 text-sm text-on-surface-variant leading-relaxed"></div>
+</div>
+
+</body>
+</html>

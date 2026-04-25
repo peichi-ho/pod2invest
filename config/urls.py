@@ -16,6 +16,10 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path, include
+from django.shortcuts import render
+
+def frontend_index(request):
+    return render(request, 'index.html')
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -25,5 +29,6 @@ urlpatterns = [
     path("api/etf/", include("apps.etf.api.urls")),
     path("api/ai/", include("apps.ai_assistant.urls")),
     path("api/knowledge-graph/", include("apps.knowledge_graph.urls")),
-    
+    path('', frontend_index),   # 放最後
 ]
+

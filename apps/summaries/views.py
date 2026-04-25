@@ -9,6 +9,7 @@ from .serializers import SummarizeRequestSerializer, GenerateFromPodcastSerializ
 from .services.engine import summarize_from_srt_text
 from .models import SummaryRecord, BacktestingRecord
 from apps.podcasts.models import PodcastEpisode
+from apps.podcasts.models import PodcastEpisode
 from apps.glossary.services.annotator import annotate
 from apps.mindmap.services.gemini_mindmap import generate_mindmap_json
 
@@ -109,6 +110,24 @@ def _save_summary(result: dict, *, mode: str, model_name: str,
     return record
 
 
+class PodcastersRankingAPIView(APIView):
+    def get(self, request):
+        limit = int(request.query_params.get("limit", 10))
+        from django.db import connections
+        with connections["summariesdb"].cursor() as c:
+            c.execute("""
+                SELECT podcaster, COUNT(DISTINCT source_filename) as episodes, MAX(created_at) as latest
+                FROM summaries_summaryrecord
+                WHERE podcaster IS NOT NULL AND podcaster != ''
+                GROUP BY podcaster
+                ORDER BY episodes DESC, latest DESC
+                LIMIT %s
+            """, [limit])
+            rows = c.fetchall()
+        result = [{"podcaster": r[0], "episodes": r[1], "latest": r[2].isoformat()} for r in rows]
+        return Response(result)
+
+
 class SummarizeAPIView(APIView):
     def post(self, request):
         serializer = SummarizeRequestSerializer(data=request.data)
@@ -160,6 +179,108 @@ class SummarizeAPIView(APIView):
             )
 
 
+class SummaryListAPIView(APIView):
+    def get(self, request):
+        source_filename = request.query_params.get("source_filename")
+        podcaster = request.query_params.get("podcaster")
+        mode = request.query_params.get("mode")
+
+        qs = SummaryRecord.objects.using("summariesdb").order_by("-created_at")
+        if source_filename:
+            qs = qs.filter(source_filename=source_filename)
+        if podcaster:
+            qs = qs.filter(podcaster=podcaster)
+        if mode:
+            qs = qs.filter(mode=mode)
+        # Apply limit only when not filtering by a specific episode or podcaster
+        if not source_filename and not podcaster:
+            limit = int(request.query_params.get("limit", 20))
+            qs = qs[:limit]
+        elif request.query_params.get("limit"):
+            qs = qs[:int(request.query_params.get("limit"))]
+
+        result = []
+        for s in qs:
+            backtesting = BacktestingRecord.objects.using("summariesdb").filter(summary_id=s.id).first()
+            outlook_calls = backtesting.outlook_calls if backtesting else []
+            result.append({
+                "id": s.id,
+                "mode": s.mode,
+                "source_filename": s.source_filename,
+                "podcaster": s.podcaster,
+                "one_sentence_summary": s.one_sentence_summary,
+                "tags": s.tags,
+                "entities": s.entities,
+                "created_at": s.created_at.isoformat(),
+                "outlook_calls": outlook_calls,
+            })
+        return Response(result)
+
+
+class SummaryDetailAPIView(APIView):
+    def get(self, request, pk):
+        try:
+            s = SummaryRecord.objects.using("summariesdb").get(pk=pk)
+        except SummaryRecord.DoesNotExist:
+            return Response({"detail": "not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        # 抓同一集（相同 source_filename）所有摘要的 outlook_calls，合併去重
+        if s.source_filename:
+            related_ids = SummaryRecord.objects.using("summariesdb").filter(
+                source_filename=s.source_filename
+            ).values_list("id", flat=True)
+            bt_records = BacktestingRecord.objects.using("summariesdb").filter(
+                summary_id__in=related_ids
+            )
+        else:
+            bt_records = BacktestingRecord.objects.using("summariesdb").filter(summary_id=s.id)
+
+        seen_theses = set()
+        outlook_calls = []
+        for bt in bt_records:
+            for call in (bt.outlook_calls or []):
+                thesis = call.get("thesis", "")
+                if thesis and thesis not in seen_theses:
+                    seen_theses.add(thesis)
+                    outlook_calls.append(call)
+
+        audio_url = ""
+        if s.source_filename:
+            try:
+                episode = PodcastEpisode.objects.using("podcasts").filter(
+                    episode_title=s.source_filename
+                ).first()
+                if episode:
+                    audio_url = episode.audio_url
+            except Exception:
+                logger.exception("Failed to fetch audio_url from podcasts DB")
+
+        return Response({
+            "id": s.id,
+            "source_filename": s.source_filename,
+            "podcaster": s.podcaster,
+            "mode": s.mode,
+            "one_sentence_summary": s.one_sentence_summary,
+            "investment_takeaways": s.investment_takeaways,
+            "tags": s.tags,
+            "entities": s.entities,
+            "arguments": s.arguments,
+            "outlook_calls": outlook_calls,
+            "audio_url": audio_url,
+            "published_at": s.published_at.isoformat() if s.published_at else None,
+            "created_at": s.created_at.isoformat(),
+        })
+
+
+class SummaryMindmapAPIView(APIView):
+    def get(self, request, pk):
+        try:
+            s = SummaryRecord.objects.using("summariesdb").get(pk=pk)
+        except SummaryRecord.DoesNotExist:
+            return Response({"detail": "not found"}, status=status.HTTP_404_NOT_FOUND)
+        return Response({"mindmap": s.mind_map})
+
+
 class GenerateFromPodcastAPIView(APIView):
     def post(self, request):
         serializer = GenerateFromPodcastSerializer(data=request.data)
@@ -175,17 +296,15 @@ class GenerateFromPodcastAPIView(APIView):
 
         podcast_id = data["podcast_id"]
         try:
-            episode = PodcastEpisode.objects.using("podcasts").select_related(
-                "podcast", "transcript"
-            ).get(id=podcast_id)
+            episode = PodcastEpisode.objects.using("podcasts").select_related('podcast', 'transcript').get(id=podcast_id)
         except PodcastEpisode.DoesNotExist:
             return Response(
                 {"detail": f"找不到 podcast id={podcast_id}"},
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        transcript = getattr(episode, "transcript", None)
-        if not transcript or not transcript.srt_content:
+        srt_content = getattr(getattr(episode, 'transcript', None), 'srt_content', None)
+        if not srt_content:
             return Response(
                 {"detail": f"podcast id={podcast_id} 沒有 srt_content，請先完成轉錄。"},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -194,7 +313,7 @@ class GenerateFromPodcastAPIView(APIView):
         try:
             result = summarize_from_srt_text(
                 api_key=api_key,
-                srt_text=transcript.srt_content,
+                srt_text=srt_content,
                 mode=data["mode"],
                 model=data.get("model", "models/gemini-2.5-flash-lite"),
                 chunk_threshold_chars=data.get("chunk_threshold_chars", 30000),
@@ -211,6 +330,7 @@ class GenerateFromPodcastAPIView(APIView):
             )
 
             return Response(result | {"summary_id": record.id}, status=status.HTTP_200_OK)
+
 
         except Exception as e:
             return Response(
