@@ -14,6 +14,27 @@ def graph_page(request):
     return render(request, "knowledge_graph/graph.html")
 
 
+def hot_nodes_api(request):
+    """回傳最近 N 天內出現最多次的節點（source+target 合計）。"""
+    days = int(request.GET.get("days", 30))
+    limit = int(request.GET.get("limit", 12))
+    try:
+        with connections["knowledge_graphdb"].cursor() as cursor:
+            cursor.execute("""
+                SELECT name, SUM(cnt) as total FROM (
+                    SELECT source as name, COUNT(*) as cnt FROM links
+                    WHERE summary_date >= NOW() - INTERVAL '%s days' GROUP BY source
+                    UNION ALL
+                    SELECT target as name, COUNT(*) as cnt FROM links
+                    WHERE summary_date >= NOW() - INTERVAL '%s days' GROUP BY target
+                ) t GROUP BY name ORDER BY total DESC LIMIT %s
+            """, [days, days, limit])
+            nodes = [{"name": r[0], "count": r[1]} for r in cursor.fetchall()]
+        return JsonResponse({"nodes": nodes, "days": days})
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+
 def industries_api(request):
     """回傳 nodes 表中所有不重複的產業清單（排序後）。"""
     try:

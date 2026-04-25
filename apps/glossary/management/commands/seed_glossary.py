@@ -1730,5 +1730,23 @@ class Command(BaseCommand):
             ),
             lang="zh-TW",
         )
+        upsert_term_orm(
+            term="聯準會",
+            aliases=["Fed", "Federal Reserve"],
+            category="總體經濟",
+            short_definition="美國中央銀行，負責制定貨幣政策與利率決策。",
+            long_definition="聯邦準備系統是美國的中央銀行體系，1913年成立。主要職責包括制定貨幣政策、監管銀行體系、維護金融穩定。聯準會的利率決策對全球金融市場有深遠影響。",
+            lang="zh-TW",
+        )
+
+        upsert_term_orm(
+            term="CPI",
+            aliases=["消費者物價指數"],
+            category="總體經濟",
+            short_definition="衡量消費者購買商品與服務價格變化的指標，用來追蹤通貨膨脹。",
+            long_definition="消費者物價指數（Consumer Price Index）追蹤一籃子固定商品與服務的價格變動，是衡量通貨膨脹最常用的指標之一。CPI上升代表物價上漲（通膨），下降代表通縮。聯準會會參考CPI來決定升降息方向。",
+            lang="zh-TW",
+        )
+
 
         self.stdout.write(self.style.SUCCESS("Glossary seeding completed."))
