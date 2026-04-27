@@ -65,11 +65,11 @@ class PodcastRetrieverTool(Tool):
     name = "search_podcast_transcript"
     description = "Search podcast knowledge base and return relevant episodes."
 
-    def __init__(self, search_fn: Callable[[str, int], List[PodcastHit]]):
+    def __init__(self, search_fn: Callable):
         self.search_fn = search_fn
 
-    def run(self, query: str, top_k: int = 5) -> List[Dict[str, Any]]:
-        hits = self.search_fn(query, top_k)
+    def run(self, query: str, top_k: int = 5, filters: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        hits = self.search_fn(query, top_k, filters)
         return [asdict(h) for h in hits]
 
 
@@ -89,64 +89,178 @@ class FinanceTool(Tool):
 # Tool implementations (replace with real ones)
 # =============================================================================
 
+_embed_model = None
+
+
+def _get_embed_model():
+    global _embed_model
+    if _embed_model is None:
+        from sentence_transformers import SentenceTransformer
+        _embed_model = SentenceTransformer("BAAI/bge-m3")
+    return _embed_model
+
+
 def _embed_query(query: str) -> List[float]:
     """將查詢文字用 bge-m3 轉為 dense vector（query 前綴）"""
-    from sentence_transformers import SentenceTransformer
-    model = SentenceTransformer("BAAI/bge-m3")
-    vec = model.encode(f"query: {query}", normalize_embeddings=True)
+    vec = _get_embed_model().encode(f"query: {query}", normalize_embeddings=True)
     return vec.tolist()
 
 
-def search_podcast_transcript(query: str, top_k: int = 5) -> List[PodcastHit]:
+def _tokenize_cn(text: str) -> List[str]:
+    """中文 BM25 用的 tokenizer：CJK 單字 + bigram + ASCII 詞。"""
+    tokens: List[str] = []
+    for word in re.findall(r"[a-zA-Z0-9]+", text.lower()):
+        if len(word) >= 2:
+            tokens.append(word)
+    cjk = [c for c in text if "一" <= c <= "鿿"]
+    tokens.extend(cjk)
+    for i in range(len(cjk) - 1):
+        tokens.append(cjk[i] + cjk[i + 1])
+    return tokens
+
+
+def _hybrid_rerank(candidates: List[Dict[str, Any]], query: str, alpha: float = 0.7) -> List[Dict[str, Any]]:
+    """BM25 + vector 混合重排；combined_score 寫入每筆 candidate。"""
+    if not candidates:
+        return candidates
+    try:
+        from rank_bm25 import BM25Okapi
+    except ImportError:
+        logger.warning("rank_bm25 not installed, falling back to vector-only ranking")
+        return candidates
+
+    query_tokens = _tokenize_cn(query)
+    corpus_tokens = [_tokenize_cn(c["chunk_text"]) for c in candidates]
+    bm25 = BM25Okapi(corpus_tokens)
+    bm25_scores = bm25.get_scores(query_tokens)
+
+    max_bm25 = float(max(bm25_scores)) if max(bm25_scores) > 0 else 1.0
+    for i, c in enumerate(candidates):
+        bm25_norm = float(bm25_scores[i]) / max_bm25
+        c["combined_score"] = alpha * float(c["score"]) + (1 - alpha) * bm25_norm
+
+    candidates.sort(key=lambda x: x["combined_score"], reverse=True)
+    return candidates
+
+
+def _apply_diversity(candidates: List[Dict[str, Any]], top_k: int, max_per_episode: Optional[int]) -> List[Dict[str, Any]]:
+    """每集最多保留 max_per_episode 個 chunk；None 表示不限。"""
+    if max_per_episode is None:
+        return candidates[:top_k]
+    result: List[Dict[str, Any]] = []
+    counts: Dict[int, int] = {}
+    for c in candidates:
+        rid = c["record_id"]
+        if counts.get(rid, 0) < max_per_episode:
+            result.append(c)
+            counts[rid] = counts.get(rid, 0) + 1
+        if len(result) >= top_k:
+            break
+    return result
+
+
+def search_podcast_transcript(
+    query: str,
+    top_k: int = 5,
+    filters: Optional[Dict[str, Any]] = None,
+    n_candidates: Optional[int] = None,
+    max_per_episode: Optional[int] = None,
+) -> List[PodcastHit]:
     """
-    對 podcast_embedded_chunks 做 cosine similarity 搜尋，
-    回傳最相關的 top_k chunk 組成的 PodcastHit list。
+    Hybrid (BM25 + vector) search with optional metadata filter and diversity control.
+
+    filters:         entity_companies / entity_people / entity_regions / date_from / date_to
+    n_candidates:    candidate pool size before reranking（default: top_k * 4）
+    max_per_episode: max chunks per episode for diversity（None = no limit）
     """
     from django.db import connections
+
+    if n_candidates is None:
+        n_candidates = max(top_k * 4, 20)
 
     try:
         query_vec = _embed_query(query)
         vec_str = "[" + ",".join(f"{v:.8f}" for v in query_vec) + "]"
 
-        sql = """
-            SELECT
-                source_filename,
-                published_at,
-                podcaster,
-                topic,
-                chunk_text,
-                1 - (embedding <=> %s::vector) AS score
-            FROM podcast_embedded_chunks
-            ORDER BY embedding <=> %s::vector
-            LIMIT %s
-        """
+        # Build WHERE
+        where_parts: List[str] = []
+        where_params: List[Any] = []
+        if filters:
+            entity_conds: List[str] = []
+            for company in (filters.get("entity_companies") or []):
+                entity_conds.append("entity_companies @> %s::jsonb")
+                where_params.append(json.dumps([company], ensure_ascii=False))
+            for person in (filters.get("entity_people") or []):
+                entity_conds.append("entity_people @> %s::jsonb")
+                where_params.append(json.dumps([person], ensure_ascii=False))
+            for region in (filters.get("entity_regions") or []):
+                entity_conds.append("entity_regions @> %s::jsonb")
+                where_params.append(json.dumps([region], ensure_ascii=False))
+            if entity_conds:
+                where_parts.append("(" + " OR ".join(entity_conds) + ")")
+            if filters.get("date_from"):
+                where_parts.append("published_at >= %s")
+                where_params.append(filters["date_from"])
+            if filters.get("date_to"):
+                where_parts.append("published_at <= %s")
+                where_params.append(filters["date_to"])
 
-        with connections["ai_assistant_db"].cursor() as cursor:
-            cursor.execute(sql, [vec_str, vec_str, top_k])
-            rows = cursor.fetchall()
+        def _fetch(wp: List[str], wparams: List[Any], limit: int) -> List[Any]:
+            wc = ("WHERE " + " AND ".join(wp)) if wp else ""
+            sql = f"""
+                SELECT id, record_id, source_filename, published_at, podcaster, topic,
+                       chunk_text, 1 - (embedding <=> %s::vector) AS score
+                FROM podcast_embedded_chunks {wc}
+                ORDER BY embedding <=> %s::vector LIMIT %s
+            """
+            with connections["ai_assistant_db"].cursor() as cur:
+                cur.execute(sql, [vec_str] + wparams + [vec_str, limit])
+                return cur.fetchall()
 
-        hits = []
-        for row in rows:
-            source_filename, published_at, podcaster_raw, topic, chunk_text, score = row
+        rows = _fetch(where_parts, where_params, n_candidates)
 
-            # podcaster 是 jsonb，可能是 list 或 string
-            if isinstance(podcaster_raw, list):
-                podcaster_str = "、".join(str(p) for p in podcaster_raw)
-            elif isinstance(podcaster_raw, str):
-                podcaster_str = podcaster_raw
+        # Fallback if filtered results < top_k
+        if where_parts and len(rows) < top_k:
+            seen_ids = {r[0] for r in rows}
+            for row in _fetch([], [], n_candidates * 2):
+                if row[0] not in seen_ids:
+                    rows = list(rows) + [row]
+                    seen_ids.add(row[0])
+                if len(rows) >= n_candidates:
+                    break
+
+        # Convert to candidate dicts
+        candidates: List[Dict[str, Any]] = []
+        for r in rows:
+            cid, record_id, src, pub, pod_raw, topic, chunk_text, score = r
+            if isinstance(pod_raw, list):
+                pod_str = "、".join(str(p) for p in pod_raw)
+            elif isinstance(pod_raw, str):
+                pod_str = pod_raw
             else:
-                podcaster_str = ""
+                pod_str = ""
+            candidates.append({
+                "id": cid, "record_id": record_id,
+                "source_filename": src, "published_at": pub,
+                "podcaster": pod_str, "topic": topic,
+                "chunk_text": chunk_text, "score": float(score),
+            })
 
-            hits.append(PodcastHit(
-                episode_title=topic or source_filename or "",
-                publish_date=str(published_at) if published_at else "",
-                podcaster=podcaster_str,
+        # Hybrid rerank → diversity → slice
+        candidates = _hybrid_rerank(candidates, query)
+        candidates = _apply_diversity(candidates, top_k, max_per_episode)
+
+        return [
+            PodcastHit(
+                episode_title=c["topic"] or c["source_filename"] or "",
+                publish_date=str(c["published_at"]) if c["published_at"] else "",
+                podcaster=c["podcaster"],
                 episode_number=None,
-                summary=chunk_text,
-                score=float(score),
-            ))
-
-        return hits
+                summary=c["chunk_text"],
+                score=c.get("combined_score", c["score"]),
+            )
+            for c in candidates
+        ]
 
     except Exception as e:
         logger.warning(f"pgvector search failed: {e}")
@@ -363,6 +477,26 @@ class Orchestrator:
         10. 若問題可用一般知識完整回答，禁止使用工具。
         11. args_json 必須是合法 JSON 字串，且包含必要參數（如 ticker 或 query）。
         12. 若使用者用代名詞（它、這支、剛才那檔），請參考近期對話記錄推斷實際指稱對象。
+
+        search_podcast_transcript 的 args_json 格式：
+        {{
+          "query": "搜尋字串（必填）",
+          "filters": {{
+            "entity_companies": ["公司或股票名稱"],
+            "entity_people":    ["人名"],
+            "entity_regions":   ["國家或地區"],
+            "date_from": "YYYY-MM-DD",
+            "date_to":   "YYYY-MM-DD"
+          }}
+        }}
+
+        filters 填寫規則（重要）：
+        - entity_companies：只填真實公司名或股票名稱（如台積電、NVIDIA、聯發科）。「美股」、「台股」、「科技巨頭」、「AI公司」等概念詞不算公司名，不要填入。
+        - entity_people：只填真實人名（如黃仁勳、川普）。職稱或角色名稱不算。
+        - entity_regions：只填真實國家或地區名稱（如美國、台灣、中國）。「美股」、「台股」是市場代稱，不是地區，不要填入。
+        - 若問題沒有明確提及上述實體，該欄位省略，不要猜測。
+        - 若問題有時間範圍（如「今年」、「最近三個月」、「2024 年」），填入 date_from / date_to。
+        - 若無任何明確 entity 或時間，filters 整個省略。
         """
         raw = self.planner_llm(system, user_input, history)
         return self._safe_json_parse(raw)
@@ -440,6 +574,14 @@ class Orchestrator:
         5. 若涉及投資建議，避免保證報酬，應說明主要風險與判斷依據。
         6. 若無法明確回答，要直接說明原因。
         7. 若使用者問的是延續前一個話題的問題，請結合對話歷史作答。
+
+        內容不足時的透明化規則（重要）：
+        8. 若 retrieved chunks 的內容與問題明顯不相關（跑題、只沾到邊），主動說明：
+           「Podcast 中目前找到的內容與這個問題的關聯性較低，以下回答僅供參考。」
+        9. 若問題問的是某公司或主題，但 chunks 完全沒有提及，明確說：
+           「這個主題在目前收錄的 Podcast 中沒有找到直接討論。」
+        10. 若問題過於寬泛（例如只提概念詞、未指定公司或時間），在回答後補一句建議：
+            「若要取得更精準的 Podcast 觀點，可以嘗試在問題中加入具體的公司名稱、人名或時間範圍。」
 
         輸出風格：
         - 一般用 1~3 段短文
