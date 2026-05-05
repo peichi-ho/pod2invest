@@ -33,7 +33,7 @@ class GeminiCorrectionError(Exception):
 # --- Gemini 語意校對模組 ---
 
 
-def fix_content_with_gemini(batch_text: str, gemini_key: str) -> str:
+def fix_content_with_gemini(batch_text: str) -> str:
     """
     將 SRT 文本提交至 Gemini API 進行語意校對
     執行重點：同音錯字修正、財經專業術語校正、保持 SRT 格式結構。
@@ -41,7 +41,12 @@ def fix_content_with_gemini(batch_text: str, gemini_key: str) -> str:
     """
     import time
 
-    client = genai.Client(api_key=gemini_key)
+    from django.conf import settings
+    client = genai.Client(
+        vertexai=True,
+        project=settings.VERTEX_PROJECT_ID,
+        location=settings.VERTEX_LOCATION,
+    )
 
     prompt = f"""
     任務：專業逐字稿校對。
@@ -219,7 +224,7 @@ def _get_whisper_model():
 
 
 def transcribe_and_fix(
-    audio_path: Path, out_path: Path, language: str | None, gemini_key: str
+    audio_path: Path, out_path: Path, language: str | None
 ):
     """
     轉錄流程管理：
@@ -272,7 +277,7 @@ def transcribe_and_fix(
         print(
             f"      處理進度：校正第 {i+1} ~ {min(i + batch_size, len(srt_blocks))} 句..."
         )
-        fixed_batch = fix_content_with_gemini(batch, gemini_key)
+        fixed_batch = fix_content_with_gemini(batch)
         final_srt_blocks.append(fixed_batch)
 
     print("   [Debug] 寫入最終 SRT 檔案...")
@@ -289,7 +294,7 @@ def transcribe_and_fix(
 # --- 只校對現有 SRT（不重跑 Whisper） ---
 
 
-def fix_existing_srt_only(srt_path: Path, gemini_key: str) -> None:
+def fix_existing_srt_only(srt_path: Path) -> None:
     """
     當 SRT 已經存在時，只重新執行 Gemini 語意校對並覆蓋檔案
     """
@@ -308,7 +313,7 @@ def fix_existing_srt_only(srt_path: Path, gemini_key: str) -> None:
         print(
             f"      處理進度：校正第 {i+1} ~ {min(i + batch_size, len(srt_blocks))} 句..."
         )
-        fixed_batch = fix_content_with_gemini(batch, gemini_key)
+        fixed_batch = fix_content_with_gemini(batch)
         final_srt_blocks.append(fixed_batch)
 
     with open(srt_path, "w", encoding="utf-8") as f:

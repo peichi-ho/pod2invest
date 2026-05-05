@@ -337,11 +337,11 @@ def get_gemini_client() -> genai.Client:
     if _client is not None:
         return _client
 
-    api_key = getattr(settings, "GEMINI_API_KEY", None) or os.getenv("GEMINI_API_KEY")
-    if not api_key:
-        raise RuntimeError("Missing GEMINI_API_KEY. Set it in settings.py or env var.")
-
-    _client = genai.Client(api_key=api_key)
+    _client = genai.Client(
+        vertexai=True,
+        project=settings.VERTEX_PROJECT_ID,
+        location=settings.VERTEX_LOCATION,
+    )
     return _client
 
 

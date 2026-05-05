@@ -19,8 +19,11 @@ _client = None
 def get_client():
     global _client
     if _client is None:
-        api_key = getattr(settings, "GEMINI_API_KEY", "").strip() or os.getenv("GEMINI_API_KEY", "")
-        _client = genai.Client(api_key=api_key)
+        _client = genai.Client(
+            vertexai=True,
+            project=settings.VERTEX_PROJECT_ID,
+            location=settings.VERTEX_LOCATION,
+        )
     return _client
 
 

@@ -10,10 +10,9 @@ from .harmonize import harmonize_classification_entities, harmonize_investment_t
 
 def summarize_from_srt_text(
     *,
-    api_key: str,
     srt_text: str,
     mode: str,  # "novice" | "pro" | "both"
-    model: str = "models/gemini-2.5-flash-lite",
+    model: str = "gemini-2.5-flash-lite",
     chunk_threshold_chars: int = 20000,
     debug_chars: int = 0,
     raw_save_path: Optional[Path] = None,
@@ -24,7 +23,7 @@ def summarize_from_srt_text(
       - mode=novice/pro -> dict summary
       - mode=both       -> {"novice":..., "pro":...}
     """
-    client = make_client(api_key)
+    client = make_client()
 
     items = parse_srt(srt_text)
     inline_text = srt_to_inline_text(items)

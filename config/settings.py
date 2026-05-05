@@ -18,10 +18,15 @@ SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'django-insecure-預設字串請在.
 DEBUG = os.getenv('DJANGO_DEBUG', 'True') == 'True'
 ALLOWED_HOSTS = os.getenv("DJANGO_ALLOWED_HOSTS", "127.0.0.1,localhost").split(",")
 
-# Gemini / AI Assistant settings
-
-GEMINI_API_KEY = os.getenv("GEMINI_APIKEY", "").strip()
+# Vertex AI / Gemini settings
+VERTEX_PROJECT_ID = os.getenv("VERTEX_PROJECT_ID", "gen-lang-client-0357610042")
+VERTEX_LOCATION = os.getenv("VERTEX_LOCATION", "us-central1")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
+
+# 讓 Google auth 函式庫自動找到服務帳戶金鑰
+_gac = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "")
+if _gac and not os.path.isabs(_gac):
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(BASE_DIR / _gac)
 
 # 股票資料快取秒數（避免 yfinance 太慢）
 STOCK_CACHE_TTL_SECONDS = int(os.getenv("STOCK_CACHE_TTL_SECONDS", "60"))

@@ -6,13 +6,15 @@ import time
 from typing import Optional
 
 from google import genai
-from google.genai import types
+
+from django.conf import settings
 
 
-def make_client(api_key: str) -> genai.Client:
+def make_client() -> genai.Client:
     return genai.Client(
-        api_key=api_key,
-        http_options=types.HttpOptions(api_version="v1"),
+        vertexai=True,
+        project=settings.VERTEX_PROJECT_ID,
+        location=settings.VERTEX_LOCATION,
     )
 
 

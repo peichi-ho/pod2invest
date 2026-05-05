@@ -1,12 +1,10 @@
 import json
-import os
 import re
 from typing import Any, Dict, List
 
-import requests
-
-GEMINI_API_KEY_ENV = "GEMINI_API_KEY"
+from google import genai
 from django.conf import settings
+
 GEMINI_MODEL = settings.GEMINI_MODEL
 
 MAX_ARGUMENTS = 8
@@ -144,25 +142,15 @@ def build_prompt_for_mindmap(data: Dict[str, Any]) -> str:
 
 def gemini_generate_content(
     prompt: str,
-    api_key: str,
     model: str = GEMINI_MODEL,
 ) -> str:
-    url = f"https://generativelanguage.googleapis.com/v1/models/{model}:generateContent"
-
-    params = {"key": api_key}
-    payload = {"contents": [{"parts": [{"text": prompt}]}]}
-
-    response = requests.post(url, params=params, json=payload, timeout=60)
-
-    if response.status_code != 200:
-        raise ValueError(f"Gemini API 請求失敗：{response.text}")
-
-    data = response.json()
-
-    try:
-        return data["candidates"][0]["content"]["parts"][0]["text"]
-    except (KeyError, IndexError, TypeError):
-        raise ValueError(f"Gemini 回傳格式異常：{json.dumps(data, ensure_ascii=False)}")
+    client = genai.Client(
+        vertexai=True,
+        project=settings.VERTEX_PROJECT_ID,
+        location=settings.VERTEX_LOCATION,
+    )
+    response = client.models.generate_content(model=model, contents=prompt)
+    return response.text
 
 
 def normalize_mindmap_json(mm_json: Dict[str, Any], fallback_title: str = "Mindmap") -> Dict[str, Any]:
@@ -237,21 +225,15 @@ def normalize_mindmap_json(mm_json: Dict[str, Any], fallback_title: str = "Mindm
 
 
 def generate_mindmap_json(summary_data: Dict[str, Any]) -> Dict[str, Any]:
-    api_key = os.environ.get(GEMINI_API_KEY_ENV, "").strip()
-    print("GEMINI_API_KEY exists:", bool(api_key))
-
-    if not api_key:
-        raise ValueError(f"找不到環境變數 {GEMINI_API_KEY_ENV}")
-
     if not isinstance(summary_data, dict):
         raise ValueError("summary_data 必須是 JSON 物件。")
 
     fallback_title = _clean_text(summary_data.get("title")) or "Mindmap"
 
     prompt = build_prompt_for_mindmap(summary_data)
-    print("Calling Gemini API...")
+    print("Calling Gemini (Vertex AI)...")
 
-    gemini_text = gemini_generate_content(prompt=prompt, api_key=api_key, model=GEMINI_MODEL)
+    gemini_text = gemini_generate_content(prompt=prompt, model=GEMINI_MODEL)
     print("Gemini response received.")
 
     raw_json = _extract_json(gemini_text)
