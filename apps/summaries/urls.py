@@ -10,3 +10,4 @@ urlpatterns = [
     path("<int:pk>/", SummaryDetailAPIView.as_view(), name="summaries-detail"),
     path("<int:pk>/mindmap/", SummaryMindmapAPIView.as_view(), name="summaries-mindmap"),
 ]
+

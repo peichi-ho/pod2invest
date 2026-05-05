@@ -10,6 +10,7 @@ from .services.engine import summarize_from_srt_text
 from .models import SummaryRecord, BacktestingRecord
 from apps.podcasts.models import PodcastEpisode
 from apps.podcasts.models import PodcastEpisode
+from apps.podcasts.models import PodcastEpisode
 from apps.glossary.services.annotator import annotate
 from apps.mindmap.services.gemini_mindmap import generate_mindmap_json
 
@@ -298,11 +299,15 @@ class GenerateFromPodcastAPIView(APIView):
         try:
             episode = PodcastEpisode.objects.using("podcasts").select_related('podcast', 'transcript').get(id=podcast_id)
         except PodcastEpisode.DoesNotExist:
+            episode = PodcastEpisode.objects.using("podcasts").select_related('podcast', 'transcript').get(id=podcast_id)
+        except PodcastEpisode.DoesNotExist:
             return Response(
                 {"detail": f"找不到 podcast id={podcast_id}"},
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        srt_content = getattr(getattr(episode, 'transcript', None), 'srt_content', None)
+        if not srt_content:
         srt_content = getattr(getattr(episode, 'transcript', None), 'srt_content', None)
         if not srt_content:
             return Response(
@@ -313,6 +318,7 @@ class GenerateFromPodcastAPIView(APIView):
         try:
             result = summarize_from_srt_text(
                 api_key=api_key,
+                srt_text=srt_content,
                 srt_text=srt_content,
                 mode=data["mode"],
                 model=data.get("model", "models/gemini-2.5-flash-lite"),
@@ -327,9 +333,13 @@ class GenerateFromPodcastAPIView(APIView):
                 source_filename=episode.episode_title,
                 podcaster=episode.podcast.show_name,
                 published_at=episode.published_at,
+                source_filename=episode.episode_title,
+                podcaster=episode.podcast.show_name,
+                published_at=episode.published_at,
             )
 
             return Response(result | {"summary_id": record.id}, status=status.HTTP_200_OK)
+
 
 
         except Exception as e:
