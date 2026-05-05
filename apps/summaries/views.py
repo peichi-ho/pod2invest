@@ -134,13 +134,6 @@ class SummarizeAPIView(APIView):
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
 
-        api_key = getattr(settings, "GEMINI_API_KEY", "").strip()
-        if not api_key:
-            return Response(
-                {"detail": "GEMINI_API_KEY 未設定。"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-
         srt_text = data.get("srt_text", "")
         srt_file = data.get("srt_file")
         source_filename = ""
@@ -155,10 +148,9 @@ class SummarizeAPIView(APIView):
 
         try:
             result = summarize_from_srt_text(
-                api_key=api_key,
                 srt_text=srt_text,
                 mode=data["mode"],
-                model=data.get("model", "models/gemini-2.5-flash-lite"),
+                model=data.get("model", "gemini-2.5-flash-lite"),
                 chunk_threshold_chars=data.get("chunk_threshold_chars", 30000),
                 debug_chars=data.get("debug_chars", 0),
             )
@@ -166,7 +158,7 @@ class SummarizeAPIView(APIView):
             record = _save_summary(
                 result,
                 mode=data["mode"],
-                model_name=data.get("model", "models/gemini-2.5-flash-lite"),
+                model_name=data.get("model", "gemini-2.5-flash-lite"),
                 source_filename=source_filename,
             )
 
@@ -287,13 +279,6 @@ class GenerateFromPodcastAPIView(APIView):
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
 
-        api_key = getattr(settings, "GEMINI_API_KEY", "").strip()
-        if not api_key:
-            return Response(
-                {"detail": "GEMINI_API_KEY 未設定。"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-
         podcast_id = data["podcast_id"]
         try:
             episode = PodcastEpisode.objects.using("podcasts").select_related('podcast', 'transcript').get(id=podcast_id)
@@ -312,10 +297,9 @@ class GenerateFromPodcastAPIView(APIView):
 
         try:
             result = summarize_from_srt_text(
-                api_key=api_key,
                 srt_text=srt_content,
                 mode=data["mode"],
-                model=data.get("model", "models/gemini-2.5-flash-lite"),
+                model=data.get("model", "gemini-2.5-flash-lite"),
                 chunk_threshold_chars=data.get("chunk_threshold_chars", 30000),
                 debug_chars=0,
             )
@@ -323,7 +307,7 @@ class GenerateFromPodcastAPIView(APIView):
             record = _save_summary(
                 result,
                 mode=data["mode"],
-                model_name=data.get("model", "models/gemini-2.5-flash-lite"),
+                model_name=data.get("model", "gemini-2.5-flash-lite"),
                 source_filename=episode.episode_title,
                 podcaster=episode.podcast.show_name,
                 published_at=episode.published_at,
