@@ -44,14 +44,25 @@ def _key_data_to_text(key_data: List[Dict]) -> str:
     return "；".join(parts)
 
 
+def _parse_topic_category_detail(topic: str):
+    """'個股：台積電' → ('個股', '台積電')；'總體經濟環境' → ('總體經濟環境', None)"""
+    topic = (topic or "").strip()
+    if "：" in topic:
+        idx = topic.index("：")
+        return topic[:idx].strip(), topic[idx + 1:].strip() or None
+    return topic or None, None
+
+
 def build_argument_chunk_text(arg: Dict) -> str:
     """
     主題：{topic}
+    立場：{position}      ← 有才加
     {summary}
-    關鍵數據：{key_data 轉自然語言}   ← 有才加
-    相關概念：{related_concepts 用頓號串接}
+    關鍵數據：{key_data}  ← 有才加
+    相關概念：{related_concepts}
     """
     topic = (arg.get("topic") or "").strip()
+    position = (arg.get("position") or "").strip()
     summary = (arg.get("summary") or "").strip()
     key_data = arg.get("key_data") or []
     related_concepts = arg.get("related_concepts") or []
@@ -59,6 +70,8 @@ def build_argument_chunk_text(arg: Dict) -> str:
     lines = []
     if topic:
         lines.append(f"主題：{topic}")
+    if position:
+        lines.append(f"立場：{position}")
     if summary:
         lines.append(summary)
     if key_data:
@@ -136,6 +149,7 @@ def build_chunks_from_record(record: Dict) -> List[Dict]:
     source_filename = record.get("source_filename") or None
     podcaster = json.dumps(podcaster_raw, ensure_ascii=False) if podcaster_raw is not None else None
     published_at = record.get("published_at") or None
+    mode = (record.get("mode") or "").strip() or None
 
     base = dict(
         record_id=record_id,
@@ -146,6 +160,7 @@ def build_chunks_from_record(record: Dict) -> List[Dict]:
         source_filename=source_filename,
         podcaster=podcaster,
         published_at=published_at,
+        mode=mode,
     )
 
     # --- Chunk Type 1: argument ---
@@ -156,10 +171,14 @@ def build_chunks_from_record(record: Dict) -> List[Dict]:
         chunk_text = build_argument_chunk_text(arg)
         if not chunk_text.strip():
             continue
+        topic_str = (arg.get("topic") or "").strip() or None
+        topic_category, topic_detail = _parse_topic_category_detail(topic_str or "")
         chunks.append({
             **base,
             "chunk_type": "argument",
-            "topic": (arg.get("topic") or "").strip() or None,
+            "topic": topic_str,
+            "topic_category": topic_category,
+            "topic_detail": topic_detail,
             "chunk_text": chunk_text,
         })
 
@@ -172,6 +191,8 @@ def build_chunks_from_record(record: Dict) -> List[Dict]:
                 **base,
                 "chunk_type": "takeaway",
                 "topic": None,
+                "topic_category": None,
+                "topic_detail": None,
                 "chunk_text": chunk_text,
             })
 
@@ -183,6 +204,8 @@ def build_chunks_from_record(record: Dict) -> List[Dict]:
             **base,
             "chunk_type": "summary",
             "topic": None,
+            "topic_category": None,
+            "topic_detail": None,
             "chunk_text": chunk_text,
         })
 
@@ -228,19 +251,23 @@ def _vec_to_pg(vec: List[float]) -> str:
 def insert_chunks(chunks_with_embeddings: List[Dict], cursor):
     sql = """
         INSERT INTO podcast_embedded_chunks
-            (record_id, chunk_type, topic, chunk_text, embedding,
+            (record_id, chunk_type, topic, topic_category, topic_detail,
+             chunk_text, embedding,
              entity_people, entity_companies, entity_regions, tags,
-             source_filename, podcaster, published_at, embedded_at)
+             source_filename, podcaster, published_at, mode, embedded_at)
         VALUES
-            (%s, %s, %s, %s, %s::vector,
+            (%s, %s, %s, %s, %s,
+             %s, %s::vector,
              %s::jsonb, %s::jsonb, %s::jsonb, %s::jsonb,
-             %s, %s::jsonb, %s, now())
+             %s, %s::jsonb, %s, %s, now())
     """
     for c in chunks_with_embeddings:
         cursor.execute(sql, [
             c["record_id"],
             c["chunk_type"],
             c["topic"],
+            c["topic_category"],
+            c["topic_detail"],
             c["chunk_text"],
             _vec_to_pg(c["embedding"]),
             c["entity_people"],
@@ -250,6 +277,7 @@ def insert_chunks(chunks_with_embeddings: List[Dict], cursor):
             c["source_filename"],
             c["podcaster"],
             c["published_at"],
+            c["mode"],
         ])
 
 
@@ -297,7 +325,7 @@ class Command(BaseCommand):
                 src_cursor.execute("""
                     SELECT id, one_sentence_summary, investment_takeaways,
                            tags, entities, arguments, source_filename,
-                           podcaster, published_at
+                           podcaster, published_at, mode
                     FROM summaries_summaryrecord
                     WHERE id = %s
                 """, [only_record_id])
@@ -306,7 +334,7 @@ class Command(BaseCommand):
                 src_cursor.execute("""
                     SELECT id, one_sentence_summary, investment_takeaways,
                            tags, entities, arguments, source_filename,
-                           podcaster, published_at
+                           podcaster, published_at, mode
                     FROM summaries_summaryrecord
                     ORDER BY id
                 """)

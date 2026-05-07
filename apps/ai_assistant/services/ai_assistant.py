@@ -90,6 +90,7 @@ class FinanceTool(Tool):
 # =============================================================================
 
 _embed_model = None
+_reranker_model = None
 
 
 def _get_embed_model():
@@ -100,10 +101,71 @@ def _get_embed_model():
     return _embed_model
 
 
+def _get_reranker_model():
+    global _reranker_model
+    if _reranker_model is None:
+        from sentence_transformers import CrossEncoder
+        _reranker_model = CrossEncoder("BAAI/bge-reranker-v2-m3")
+    return _reranker_model
+
+
 def _embed_query(query: str) -> List[float]:
     """將查詢文字用 bge-m3 轉為 dense vector（query 前綴）"""
     vec = _get_embed_model().encode(f"query: {query}", normalize_embeddings=True)
     return vec.tolist()
+
+
+_MULTI_QUERY_PROMPT = """\
+你是一個財經搜尋引擎的查詢最佳化器。
+
+根據以下問題，生成 2 個語意不同但意圖相同的查詢變體，從不同角度搜尋 podcast 知識庫。
+
+規則：
+- 每個變體用不同的措辭或切入角度
+- 不預設答案方向（不論觀點是看多或看空都要能搜到）
+- 用繁體中文
+
+原始問題：{question}
+
+只回傳 JSON：
+{{"queries": ["...", "..."]}}
+"""
+
+
+def _expand_queries(query: str) -> List[str]:
+    """Multi-Query：用 Gemini 生成 2 個查詢變體，回傳含原始 query 共 3 個。失敗時只回傳原始 query。"""
+    try:
+        client = get_gemini_client()
+        resp = client.models.generate_content(
+            model=_get_model_name(),
+            contents=_MULTI_QUERY_PROMPT.replace("{question}", query),
+            config={"response_mime_type": "application/json", "temperature": 0.3},
+        )
+        variants = json.loads(resp.text).get("queries", [])
+        unique = [v for v in variants if v and v != query][:2]
+        return [query] + unique
+    except Exception as e:
+        logger.warning(f"multi-query expansion failed: {e}")
+        return [query]
+
+
+def _cross_encoder_rerank(candidates: List[Dict[str, Any]], query: str, top_n: int = 30) -> List[Dict[str, Any]]:
+    """Cross-encoder 精細重排：對 top_n 個 candidate 做 (query, chunk) 配對評分後重排。"""
+    if not candidates:
+        return candidates
+    try:
+        reranker = _get_reranker_model()
+        pool = candidates[:top_n]
+        rest = candidates[top_n:]
+        pairs = [(query, c["chunk_text"]) for c in pool]
+        scores = reranker.predict(pairs, show_progress_bar=False)
+        for c, s in zip(pool, scores):
+            c["cross_score"] = float(s)
+        pool.sort(key=lambda x: x["cross_score"], reverse=True)
+        return pool + rest
+    except Exception as e:
+        logger.warning(f"cross-encoder rerank failed: {e}")
+        return candidates
 
 
 def _tokenize_cn(text: str) -> List[str]:
@@ -165,24 +227,25 @@ def search_podcast_transcript(
     filters: Optional[Dict[str, Any]] = None,
     n_candidates: Optional[int] = None,
     max_per_episode: Optional[int] = None,
+    use_multi_query: bool = True,
+    use_reranker: bool = True,
 ) -> List[PodcastHit]:
     """
     Hybrid (BM25 + vector) search with optional metadata filter and diversity control.
 
     filters:         entity_companies / entity_people / entity_regions / date_from / date_to
-    n_candidates:    candidate pool size before reranking（default: top_k * 4）
+    n_candidates:    candidate pool size per query before reranking（default: max(top_k * 4, 50)）
     max_per_episode: max chunks per episode for diversity（None = no limit）
+    use_multi_query: expand query into 3 variants and merge results
+    use_reranker:    apply cross-encoder reranking after BM25 hybrid
     """
     from django.db import connections
 
     if n_candidates is None:
-        n_candidates = max(top_k * 4, 20)
+        n_candidates = max(top_k * 4, 50)
 
     try:
-        query_vec = _embed_query(query)
-        vec_str = "[" + ",".join(f"{v:.8f}" for v in query_vec) + "]"
-
-        # Build WHERE
+        # Build WHERE（所有 query 變體共用同一組 filter）
         where_parts: List[str] = []
         where_params: List[Any] = []
         if filters:
@@ -204,8 +267,28 @@ def search_podcast_transcript(
             if filters.get("date_to"):
                 where_parts.append("published_at <= %s")
                 where_params.append(filters["date_to"])
+            if filters.get("mode"):
+                where_parts.append("mode = %s")
+                where_params.append(filters["mode"])
+            if filters.get("topic_category"):
+                where_parts.append("topic_category = %s")
+                where_params.append(filters["topic_category"])
+            if filters.get("topic_detail"):
+                where_parts.append("topic_detail = %s")
+                where_params.append(filters["topic_detail"])
+            if filters.get("podcaster"):
+                where_parts.append("podcaster #>> '{}' ILIKE %s")
+                where_params.append(f"%{filters['podcaster']}%")
+            for tag in (filters.get("tags") or []):
+                tag = tag.strip()
+                if tag in TAG_WHITELIST:
+                    where_parts.append("tags @> %s::jsonb")
+                    where_params.append(json.dumps([tag], ensure_ascii=False))
+            if filters.get("source_filename_keyword"):
+                where_parts.append("source_filename ILIKE %s")
+                where_params.append(f"%{filters['source_filename_keyword']}%")
 
-        def _fetch(wp: List[str], wparams: List[Any], limit: int) -> List[Any]:
+        def _fetch(vec_str: str, wp: List[str], wparams: List[Any], limit: int) -> List[Any]:
             wc = ("WHERE " + " AND ".join(wp)) if wp else ""
             sql = f"""
                 SELECT id, record_id, source_filename, published_at, podcaster, topic,
@@ -217,37 +300,50 @@ def search_podcast_transcript(
                 cur.execute(sql, [vec_str] + wparams + [vec_str, limit])
                 return cur.fetchall()
 
-        rows = _fetch(where_parts, where_params, n_candidates)
+        # Multi-query 展開（失敗時自動 fallback 成單一 query）
+        queries = _expand_queries(query) if use_multi_query else [query]
 
-        # Fallback if filtered results < top_k
-        if where_parts and len(rows) < top_k:
-            seen_ids = {r[0] for r in rows}
-            for row in _fetch([], [], n_candidates * 2):
-                if row[0] not in seen_ids:
-                    rows = list(rows) + [row]
-                    seen_ids.add(row[0])
-                if len(rows) >= n_candidates:
-                    break
+        # 對每個 query 各自 retrieve，合并取各 chunk 最高分
+        merged: Dict[int, Dict[str, Any]] = {}
+        for q in queries:
+            q_vec = _embed_query(q)
+            vec_str = "[" + ",".join(f"{v:.8f}" for v in q_vec) + "]"
 
-        # Convert to candidate dicts
-        candidates: List[Dict[str, Any]] = []
-        for r in rows:
-            cid, record_id, src, pub, pod_raw, topic, chunk_text, score = r
-            if isinstance(pod_raw, list):
-                pod_str = "、".join(str(p) for p in pod_raw)
-            elif isinstance(pod_raw, str):
-                pod_str = pod_raw
-            else:
-                pod_str = ""
-            candidates.append({
-                "id": cid, "record_id": record_id,
-                "source_filename": src, "published_at": pub,
-                "podcaster": pod_str, "topic": topic,
-                "chunk_text": chunk_text, "score": float(score),
-            })
+            rows = _fetch(vec_str, where_parts, where_params, n_candidates)
 
-        # Hybrid rerank → diversity → slice
+            # Fallback if filtered results < top_k
+            if where_parts and len(rows) < top_k:
+                seen_ids = {r[0] for r in rows}
+                for row in _fetch(vec_str, [], [], n_candidates * 2):
+                    if row[0] not in seen_ids:
+                        rows = list(rows) + [row]
+                        seen_ids.add(row[0])
+                    if len(rows) >= n_candidates:
+                        break
+
+            for r in rows:
+                cid, record_id, src, pub, pod_raw, topic, chunk_text, score = r
+                score = float(score)
+                if isinstance(pod_raw, list):
+                    pod_str = "、".join(str(p) for p in pod_raw)
+                elif isinstance(pod_raw, str):
+                    pod_str = pod_raw
+                else:
+                    pod_str = ""
+                if cid not in merged or score > merged[cid]["score"]:
+                    merged[cid] = {
+                        "id": cid, "record_id": record_id,
+                        "source_filename": src, "published_at": pub,
+                        "podcaster": pod_str, "topic": topic,
+                        "chunk_text": chunk_text, "score": score,
+                    }
+
+        candidates: List[Dict[str, Any]] = list(merged.values())
+
+        # BM25 hybrid rerank → cross-encoder rerank → diversity → slice
         candidates = _hybrid_rerank(candidates, query)
+        if use_reranker:
+            candidates = _cross_encoder_rerank(candidates, query)
         candidates = _apply_diversity(candidates, top_k, max_per_episode)
 
         return [
@@ -257,7 +353,7 @@ def search_podcast_transcript(
                 podcaster=c["podcaster"],
                 episode_number=None,
                 summary=c["chunk_text"],
-                score=c.get("combined_score", c["score"]),
+                score=c.get("cross_score", c.get("combined_score", c["score"])),
             )
             for c in candidates
         ]
@@ -303,6 +399,17 @@ def get_realtime_stock_data(ticker: str) -> StockData:
 # =============================================================================
 # Gemini adapter
 # =============================================================================
+
+TAG_WHITELIST = {
+    "總體經濟", "半導體", "新聞", "美股", "ETF",
+    "金融市場", "人工智慧", "訪談", "台股", "個股",
+    "投資策略", "電動車", "深度分析", "港股", "債券",
+    "產業分析", "能源", "投資觀點", "加密貨幣", "貴金屬",
+    "公司分析", "金融", "案例研究", "外匯",
+    "科技趨勢", "生技醫療", "總體債市",
+    "政策與地緣政治", "消費科技",
+    "雲端 / SaaS", "區塊鏈 / 加密貨幣", "電商", "媒體娛樂", "製造業", "房地產",
+}
 
 PLANNER_SCHEMA: Dict[str, Any] = {
     "type": "object",
@@ -482,11 +589,14 @@ class Orchestrator:
         {{
           "query": "搜尋字串（必填）",
           "filters": {{
-            "entity_companies": ["公司或股票名稱"],
-            "entity_people":    ["人名"],
-            "entity_regions":   ["國家或地區"],
-            "date_from": "YYYY-MM-DD",
-            "date_to":   "YYYY-MM-DD"
+            "entity_companies":       ["公司或股票名稱"],
+            "entity_people":          ["人名"],
+            "entity_regions":         ["國家或地區"],
+            "date_from":              "YYYY-MM-DD",
+            "date_to":                "YYYY-MM-DD",
+            "podcaster":              "節目名稱",
+            "tags":                   ["標籤"],
+            "source_filename_keyword":"集數關鍵字"
           }}
         }}
 
@@ -494,14 +604,19 @@ class Orchestrator:
         - entity_companies：只填真實公司名或股票名稱（如台積電、NVIDIA、聯發科）。「美股」、「台股」、「科技巨頭」、「AI公司」等概念詞不算公司名，不要填入。
         - entity_people：只填真實人名（如黃仁勳、川普）。職稱或角色名稱不算。
         - entity_regions：只填真實國家或地區名稱（如美國、台灣、中國）。「美股」、「台股」是市場代稱，不是地區，不要填入。
+        - podcaster：若使用者明確提及節目名稱或主持人名稱（如「下班經濟學」、「股癌」），填入此欄。模糊描述不填。
+        - tags：只能從以下白名單中選，不得自創。根據問題主題填入最相關的 1–3 個：
+          {sorted(TAG_WHITELIST)}
+          「美股」、「台股」這類詞若在白名單中才能填，不在白名單不要填。
+        - source_filename_keyword：若使用者提到某一集的標題關鍵字（如「法說會」、「ETF 比較」），填入此欄做模糊搜尋。
         - 若問題沒有明確提及上述實體，該欄位省略，不要猜測。
         - 若問題有時間範圍（如「今年」、「最近三個月」、「2024 年」），填入 date_from / date_to。
-        - 若無任何明確 entity 或時間，filters 整個省略。
+        - 若無任何明確 filter，filters 整個省略。
         """
         raw = self.planner_llm(system, user_input, history)
         return self._safe_json_parse(raw)
 
-    def run_tools(self, actions: List[Dict[str, Any]]) -> List[ToolResult]:
+    def run_tools(self, actions: List[Dict[str, Any]], user_mode: Optional[str] = None) -> List[ToolResult]:
         results: List[ToolResult] = []
 
         for act in actions:
@@ -512,6 +627,10 @@ class Orchestrator:
                 args = json.loads(args_json) if isinstance(args_json, str) else (args_json or {})
             except json.JSONDecodeError:
                 args = {}
+
+            # Inject mode filter so search is scoped to the user's content tier
+            if user_mode and tool_name == "search_podcast_transcript":
+                args.setdefault("filters", {})["mode"] = user_mode
 
             tool = self.tool_map.get(tool_name)
             if not tool:
@@ -528,7 +647,7 @@ class Orchestrator:
 
         return results
 
-    def answer(self, user_input: str, history: Optional[List[Dict[str, str]]] = None) -> str:
+    def answer(self, user_input: str, history: Optional[List[Dict[str, str]]] = None, user_mode: Optional[str] = None) -> str:
         history = history or []
         plan = self.plan(user_input, history)
 
@@ -554,7 +673,7 @@ class Orchestrator:
             """
             return self.finance_qa_llm(system, user_input, history)
 
-        tool_results = self.run_tools(actions)
+        tool_results = self.run_tools(actions, user_mode=user_mode)
         tool_context = {"user_input": user_input, "tool_results": [asdict(r) for r in tool_results]}
 
         system = """
@@ -651,9 +770,10 @@ def get_agent() -> Orchestrator:
     return _agent
 
 
-def answer_user(query: str, history: Optional[List[Dict[str, str]]] = None) -> str:
+def answer_user(query: str, history: Optional[List[Dict[str, str]]] = None, user_mode: Optional[str] = None) -> str:
     """
     Public entry for Django views.
     history: [{"role": "user"|"assistant", "content": "..."}]
+    user_mode: "pro" | "novice" — pre-filters podcast search to matching content tier
     """
-    return get_agent().answer(query, history or [])
+    return get_agent().answer(query, history or [], user_mode=user_mode)
