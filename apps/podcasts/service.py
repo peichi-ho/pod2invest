@@ -63,8 +63,9 @@ def fix_content_with_gemini(batch_text: str) -> str:
 
     import concurrent.futures
 
+    MAX_ATTEMPTS = 5
     wait = 10
-    for attempt in range(1, 4):
+    for attempt in range(1, MAX_ATTEMPTS + 1):
         try:
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
                 future = executor.submit(
@@ -75,20 +76,24 @@ def fix_content_with_gemini(batch_text: str) -> str:
                 response = future.result(timeout=300)
             return response.text.replace("```srt", "").replace("```", "").strip()
         except concurrent.futures.TimeoutError:
-            e = "請求逾時（120 秒無回應）"
-            if attempt < 3:
-                print(f"   [Gemini Warning] 第 {attempt} 次{e}，{wait} 秒後重試...")
+            err_msg = "請求逾時（300 秒無回應）"
+            if attempt < MAX_ATTEMPTS:
+                print(f"   [Gemini Warning] 第 {attempt} 次{err_msg}，{wait} 秒後重試...")
                 time.sleep(wait)
-                wait *= 2
+                wait = min(wait * 2, 300)
             else:
-                raise GeminiCorrectionError("請求逾時，三次嘗試均失敗")
+                raise GeminiCorrectionError("請求逾時，五次嘗試均失敗")
         except KeyboardInterrupt:
             raise
         except Exception as e:
-            if attempt < 3:
-                print(f"   [Gemini Warning] 第 {attempt} 次失敗（{e}），{wait} 秒後重試...")
-                time.sleep(wait)
-                wait *= 2
+            is_503 = "503" in str(e) or "UNAVAILABLE" in str(e)
+            if attempt < MAX_ATTEMPTS:
+                # 503 流量過高：等更久再重試
+                actual_wait = wait * 3 if is_503 else wait
+                tag = "（503 流量過高，等待較長時間）" if is_503 else ""
+                print(f"   [Gemini Warning] 第 {attempt} 次失敗（{e}）{tag}，{actual_wait} 秒後重試...")
+                time.sleep(actual_wait)
+                wait = min(wait * 2, 300)
             else:
                 raise GeminiCorrectionError(str(e))
 
