@@ -27,9 +27,9 @@ logger = logging.getLogger(__name__)
 
 # 各題型的 retrieval 設定
 RETRIEVAL_CFG_BY_TYPE = {
-    "A": {"top_k": 5,  "n_candidates": 30, "max_per_episode": None},
-    "B": {"top_k": 10, "n_candidates": 30, "max_per_episode": 3},
-    "C": {"top_k": 10, "n_candidates": 30, "max_per_episode": 3},
+    "A": {"top_k": 3,  "n_candidates": 30, "max_per_episode": None, "multi_query": True,  "use_reranker": False},
+    "B": {"top_k": 10, "n_candidates": 50, "max_per_episode": 4,    "multi_query": True,  "use_reranker": True},
+    "C": {"top_k": 10, "n_candidates": 50, "max_per_episode": 4,    "multi_query": True,  "use_reranker": True},
 }
 
 # chunk 抽樣設定：每種題型用多少 record 和每 record 幾個 chunk
@@ -126,91 +126,137 @@ STEP1_PROMPT = """\
 """
 
 STEP3_1_PROMPT = """\
-你是一個資訊檢索評估器。
+你是一個 RAG 檢索結果評估器。
 
-請判斷以下每一個 chunk 是否「與問題直接相關」，並且能幫助回答問題。
+請判斷每個 chunk 對回答問題的「實際貢獻程度」。
+只能根據 chunk 內容判斷，不可以使用外部知識。
 
 問題：
 {question}
 
 Chunks：
-1. {chunk_1}
-2. {chunk_2}
-3. {chunk_3}
-4. {chunk_4}
-5. {chunk_5}
+{chunks_section}
 
-判斷標準：
+評分標準：
 
-- relevant：
-  該 chunk 包含「可用於回答問題的實質資訊」（例如觀點、解釋、數據、原因）
+1 = directly_answering
+- chunk 直接包含回答問題所需的核心資訊
+- 可以單獨支撐答案中的一個重要結論
+- 不是只提到關鍵字，而是有明確觀點、原因、解釋、例子或事實
 
-- partially_relevant：
-  與主題相關，但資訊不完整或幫助有限
+0.75 = useful_context
+- chunk 與問題高度相關
+- 能補充背景、原因、脈絡或部分答案
+- 但單獨不足以完整回答問題
 
-- irrelevant：
-  與問題無關，或只是提到關鍵字但沒有提供可用資訊
+0.25 = weakly_related
+- chunk 只和主題有關
+- 只有關鍵字、泛泛背景、前後文不足，或幫助很小
+- 不足以支撐答案中的具體說法
 
----
+0 = irrelevant
+- 與問題無關
+- 或只是剛好出現相同詞彙
+- 或內容方向不同，不能幫助回答
 
-請逐一判斷每個 chunk，並簡短說明原因。
+請特別注意：
+- 「提到關鍵字」不等於 relevant
+- 「同一主題」不一定等於有用
+- chunk 必須提供可被答案使用的資訊，才算高分
+- 如果 chunk 語意不完整，最高只能給 0 或 0.25
 
-請輸出 JSON：
+請輸出 JSON，不要輸出其他文字：
 
-{
+{{
   "results": [
-    {
+    {{
       "chunk_id": 1,
-      "label": "relevant / partially_relevant / irrelevant",
+      "score": 0,
+      "label": "irrelevant / weakly_related / useful_context / directly_answering",
       "reason": "..."
-    }
+    }}
   ],
-  "precision_at_5": 0.0
-}
+  "precision_score": 0.0
+}}
 
-precision_at_5 計算方式：
-relevant = 1
-partially_relevant = 0.5
-irrelevant = 0
-總和 / 5\
+precision_score 計算方式：
+precision_score = {k} 個 chunk 分數加總 / {k}
 """
 
 STEP3_2_PROMPT = """\
 你是一個 RAG 評估器。
 
-請判斷以下 chunks 是否涵蓋回答問題所需的關鍵面向。
+請判斷以下 chunks 是否能「完整支撐回答問題所需的關鍵面向」。
 
-問題：
+注意：
+你只能根據 chunks 判斷，不可以使用外部知識。
+
+---
+
+【問題】
 {question}
 
-題型：
+【題型】
 {question_type}
 
-應涵蓋面向：
+【應涵蓋面向】
 {must_cover_points}
 
-Chunks：
+【Chunks】
 {top_5_chunks}
 
 ---
 
-請完成以下任務：
+請完成以下評估：
 
-【任務 1：面向覆蓋】
+====================
+【任務 1：面向支撐（Aspect Coverage）】
+====================
 
-逐一判斷每個面向是否有被涵蓋：
+對每個面向判斷：
 
-- covered：chunk 中有明確資訊
-- partially_covered：有提到但不完整
-- not_covered：完全沒有
+- fully_supported：
+  有明確資訊 + 有解釋 / 原因 / 細節
+  且可能由多個 chunk 組合支撐
+
+- partially_supported：
+  有提到，但缺乏細節或解釋
+  或只有單一弱證據
+
+- not_supported：
+  完全沒有相關資訊
+
+⚠️ 注意：
+- 「只提到關鍵字」不算 supported
+- 可以跨多個 chunk 合併判斷
 
 ---
 
-【任務 2：來源多樣性（重要）】
+====================
+【任務 2：證據充分性（Evidence Sufficiency）】
+====================
 
-若題型為 B（multi）或 C（comparison）：
+整體 chunks 是否提供「足夠資訊」支撐完整答案：
 
-請判斷這些 chunks 是否來自「不同集數或來源」，而不是集中在單一來源。
+- sufficient：大部分面向都有完整支撐
+- partial：只有部分面向有支撐
+- insufficient：缺少關鍵資訊
+
+---
+
+====================
+【任務 3：來源分布（Source Diversity）】
+====================
+
+若題型為 B 或 C：
+
+請判斷資訊是否來自不同來源（例如不同 episode）：
+
+- high：多個來源（≥3）
+- medium：2 個來源
+- low：幾乎單一來源
+
+若題型為 A，請設為 null
 
 ---
 
@@ -220,31 +266,34 @@ Chunks：
   "points": [
     {
       "point": "...",
-      "status": "covered / partially_covered / not_covered"
+      "status": "fully_supported / partially_supported / not_supported"
     }
   ],
-  "covered_points": [],
-  "missing_points": [],
   "coverage_score": 0.0,
-  "source_diversity": "high / medium / low",
-  "notes": "..."
+  "evidence_sufficiency": "sufficient / partial / insufficient",
+  "source_diversity": "high / medium / low / null"
 }
 
 ---
 
-coverage_score 計算方式：
+coverage_score 計算：
 
-covered = 1
-partially_covered = 0.5
-not_covered = 0
+fully_supported = 1
+partially_supported = 0.5
+not_supported = 0
 
-總和 / 面向數量\
+總和 / 面向數量
 """
 
 STEP5_PROMPT = """\
-你是一個 RAG 評估器，負責評估 AI 回答的品質。
+你是一個專業的 RAG（Retrieval-Augmented Generation）評估器。
 
-請嚴格依據提供的 context 進行判斷，不可以使用外部知識或常識補充。
+請評估 AI 回答的品質。
+
+⚠️ 重要限制：
+- 只能根據提供的 context 判斷
+- 不可以使用外部知識或常識補充
+- 若 context 沒有資訊，必須視為 unsupported
 
 ---
 
@@ -269,78 +318,106 @@ STEP5_PROMPT = """\
 請完成以下評估：
 
 ====================
-【任務 1：面向覆蓋（Coverage）】
+【任務 1：Answer Coverage（答案完整性）】
 ====================
 
-逐一判斷每個面向是否有被涵蓋：
+請判斷 AI 回答是否「完整表達每個關鍵面向」，而不只是提到。
 
-- covered：回答中明確提到且有說明
-- partially_covered：有提到但不完整或不清楚
-- not_covered：完全沒有提到
+對每個面向評估：
 
-請務必逐點判斷。
+- fully_covered：
+  回答有清楚說明該面向，包含重點或細節（不是只提到）
 
-coverage_score 計算方式：
-covered = 1
+- partially_covered：
+  回答有提到該面向，但資訊不足或不清楚
+
+- not_covered：
+  回答完全沒有涉及該面向
+
+⚠️ 注意：
+- 「只出現關鍵字」不算 covered
+- 必須是可以讓使用者理解的資訊
+
+coverage_score 計算：
+fully_covered = 1
 partially_covered = 0.5
 not_covered = 0
-總和 / 面向數量
 
 ---
 
 ====================
-【任務 2：忠實性（Faithfulness）】
+【任務 2：Faithfulness（是否忠於 context）】
 ====================
 
-判斷 AI 回答中的內容是否都有 context 支撐：
+請檢查 AI 回答中的每個「具體資訊或主張」是否都能在 context 中找到支持。
 
-- faithful：所有重要內容都可在 context 中找到依據
-- partially_faithful：大部分有依據，但有少量無法確認
-- not_faithful：存在明顯未出現在 context 的資訊
+評估標準：
+
+- faithful：
+  所有重要資訊都可在 context 中找到明確依據
+
+- partially_faithful：
+  大部分有依據，但有少量無法確認
+
+- not_faithful：
+  存在明顯 hallucination（context 沒有的資訊）
 
 請列出：
 
-- unsupported_claims：回答中無法從 context 找到依據的內容（若沒有則為空陣列）
+- unsupported_claims：
+  回答中「無法在 context 找到依據」的內容
+
+⚠️ 注意：
+- 若 context 沒有提到 → 一律算 unsupported
+- 不可以用常識補
 
 ---
 
 ====================
-【任務 3：是否回答問題（Relevance）】
+【任務 3：Relevance（是否回答問題）】
 ====================
 
-判斷回答是否有針對問題：
+請判斷 AI 回答是否「直接回應問題的核心意圖」。
 
-- yes：直接回答問題且重點正確
-- partial：只回答部分或偏離重點
-- no：沒有真正回答問題
+評估標準：
 
-請提供簡短理由。
+- fully_relevant：
+  回答直接回應問題核心（例如趨勢 / 原因 / 比較），並提供清楚結論
+
+- partially_relevant：
+  回答與問題相關，但沒有完整回應核心（例如只講背景）
+
+- not_relevant：
+  回答偏離問題，或只是講相關主題
+
+⚠️ 注意：
+- 「有關」不等於「有回答」
+- 必須對問題本身做出回應
 
 ---
 
 ====================
-【任務 4：比較品質（Comparison Quality）】
-（僅適用於 C 題）
+【任務 4：Comparison Quality（僅限 C 題）】
 ====================
 
-⚠️ 若題型不是 C（comparison），請將此欄位設為 null
+若題型不是 C，請設為 null
 
 若題型為 C，請評估：
 
-1. 是否有明確比較不同來源（例如不同集數 / 來賓 / 時間點）
+1. 是否有明確比較不同來源（集數 / 來賓 / 時間）
 2. 是否指出差異或變化
 3. 是否只是列舉而沒有比較
 
-評分標準：
+評分：
 
-- good：有清楚比較且指出差異或變化
-- weak：有提多來源但比較不明確
-- none：沒有比較，只是列舉或單一觀點
+- good：
+  有清楚比較 + 有差異分析
 
-並輸出：
+- weak：
+  有提多來源，但比較不清楚
 
-- has_clear_comparison：true / false
-- missing_comparisons：缺少的比較面向
+- none：
+  沒有比較，只是列舉
 
 ---
 
@@ -351,7 +428,7 @@ not_covered = 0
     "results": [
       {
         "point": "...",
-        "status": "covered / partially_covered / not_covered"
+        "status": "fully_covered / partially_covered / not_covered"
       }
     ],
     "coverage_score": 0.0
@@ -361,7 +438,7 @@ not_covered = 0
     "unsupported_claims": []
   },
   "relevance": {
-    "label": "yes / partial / no",
+    "label": "fully_relevant / partially_relevant / not_relevant",
     "reason": "..."
   },
   "comparison_quality": {
@@ -369,7 +446,7 @@ not_covered = 0
     "has_clear_comparison": true,
     "missing_comparisons": []
   }
-}\
+}
 """
 
 
@@ -386,6 +463,23 @@ ENTITY_EXTRACT_PROMPT = """\
 {"entity_companies": [], "entity_people": [], "entity_regions": []}
 
 問題：{question}
+"""
+
+
+MULTI_QUERY_PROMPT = """\
+你是一個財經搜尋引擎的查詢最佳化器。
+
+根據以下問題，生成 2 個語意不同但意圖相同的查詢變體，從不同角度搜尋 podcast 知識庫。
+
+規則：
+- 每個變體用不同的措辭或切入角度
+- 不預設答案方向（不論觀點是看多或看空都要能搜到）
+- 用繁體中文
+
+原始問題：{question}
+
+只回傳 JSON：
+{{"queries": ["...", "..."]}}
 """
 
 
@@ -447,14 +541,17 @@ def _format_chunks_for_prompt(chunks: list[dict]) -> str:
 # 抽樣
 # ===========================================================================
 
-def _sample_chunks(question_type: str) -> list[dict]:
-    """依題型從 DB 抽取對應的 chunk 組合，回傳 chunks 以及實際的 actual_record_ids。"""
+def _sample_chunks(question_type: str, pg_seed: float = 0.42) -> list[dict]:
+    """依題型從 DB 抽取對應的 chunk 組合，回傳 chunks 以及實際的 actual_record_ids。
+    pg_seed：傳給 PostgreSQL setseed()（需在 -1~1 之間），確保 ORDER BY RANDOM() 可重現。
+    """
     cfg = _SAMPLE_CFG[question_type]
     n_records = cfg["n_records"]
     per_record = cfg["chunks_per_record"]
 
     # 取足夠多候選再 Python 端隨機選，確保不會重複
     with connections["ai_assistant_db"].cursor() as cur:
+        cur.execute("SELECT setseed(%s)", [pg_seed])
         cur.execute(
             "SELECT record_id FROM podcast_embedded_chunks GROUP BY record_id ORDER BY RANDOM() LIMIT %s",
             [n_records * 5],
@@ -466,6 +563,7 @@ def _sample_chunks(question_type: str) -> list[dict]:
     chunks = []
     for rid in record_ids:
         with connections["ai_assistant_db"].cursor() as cur:
+            cur.execute("SELECT setseed(%s)", [pg_seed])
             cur.execute(
                 """
                 SELECT id, record_id, chunk_type, chunk_text, source_filename
@@ -519,12 +617,12 @@ def step1_validate_question(question: str, client, model_name: str) -> dict:
     return result
 
 
-def generate_valid_question(qtype: str, client, model_name: str, max_retries: int = 3):
+def generate_valid_question(qtype: str, client, model_name: str, max_retries: int = 3, pg_seed: float = 0.42):
     """抽樣 → 生成問題 → 驗證，不通過就重試，最多 max_retries 次。
     回傳 (step1_result, source_chunks, actual_record_ids) 或 (None, None, None)。
     """
     for attempt in range(max_retries):
-        source_chunks = _sample_chunks(qtype)
+        source_chunks = _sample_chunks(qtype, pg_seed=pg_seed + attempt * 0.001)
         actual_record_ids = list(dict.fromkeys(c["record_id"] for c in source_chunks))
         step1 = step1_generate_question(source_chunks, qtype, client, model_name)
         question = step1.get("question", "").strip()
@@ -551,6 +649,22 @@ def generate_valid_question(qtype: str, client, model_name: str, max_retries: in
 # Step 2：Retrieval（與生產邏輯一致：Planner entity 抽取 + metadata filter + 向量搜尋）
 # ===========================================================================
 
+def _expand_queries(question: str, client, model_name: str) -> list[str]:
+    """Multi-Query：生成 2 個查詢變體，回傳含原始 query 共 3 個。失敗時只回傳原始 query。"""
+    try:
+        resp = client.models.generate_content(
+            model=model_name,
+            contents=MULTI_QUERY_PROMPT.replace("{question}", question),
+            config={"response_mime_type": "application/json", "temperature": 0.3},
+        )
+        variants = json.loads(resp.text).get("queries", [])
+        unique = [v for v in variants if v and v != question][:2]
+        return [question] + unique
+    except Exception as e:
+        logger.warning(f"multi-query expansion failed: {e}")
+        return [question]
+
+
 def _extract_filters(question: str, client, model_name: str) -> dict | None:
     """從問題抽取 entity，對應 Planner 的行為。"""
     try:
@@ -573,6 +687,22 @@ def _extract_filters(question: str, client, model_name: str) -> dict | None:
         return None
 
 
+def _cross_encoder_rerank(candidates: list[dict], question: str, reranker, top_n: int = 30) -> list[dict]:
+    """Cross-encoder 精細重排：對 top_n 個 candidate 做 (question, chunk) 配對評分後重排。
+    其餘 candidate 保留在後面（不影響最終 top_k 切割）。
+    """
+    if not candidates or reranker is None:
+        return candidates
+    pool = candidates[:top_n]
+    rest = candidates[top_n:]
+    pairs = [(question, c["chunk_text"]) for c in pool]
+    scores = reranker.predict(pairs, show_progress_bar=False)
+    for c, s in zip(pool, scores):
+        c["cross_score"] = float(s)
+    pool.sort(key=lambda x: x["cross_score"], reverse=True)
+    return pool + rest
+
+
 def step2_retrieve(
     question: str,
     embed_model,
@@ -581,10 +711,16 @@ def step2_retrieve(
     top_k: int = 5,
     n_candidates: int = 20,
     max_per_episode: int | None = None,
+    use_multi_query: bool = False,
+    reranker=None,
+    use_reranker: bool = True,
 ) -> dict:
     """
     生產搜尋邏輯（與 search_podcast_transcript 一致）：
-      entity 抽取 → metadata filter → 向量搜尋（候選池）→ Hybrid BM25 重排 → diversity → top_k
+      entity 抽取 → [multi-query 展開] → metadata filter → 向量搜尋（候選池）→ Hybrid BM25 重排 → diversity → top_k
+
+    use_multi_query=True 時：將原始 query 改寫成 3 種表達，各自 retrieve 後合并去重（取最高分），
+    再用原始 question 做 BM25 重排，避免預設答案方向。
     """
     from apps.ai_assistant.services.ai_assistant import _hybrid_rerank, _apply_diversity
 
@@ -592,11 +728,7 @@ def step2_retrieve(
     filters = _extract_filters(question, client, model_name)
     time.sleep(0.2)
 
-    # embed query
-    vec = embed_model.encode(f"query: {question}", normalize_embeddings=True)
-    vec_str = "[" + ",".join(f"{v:.8f}" for v in vec) + "]"
-
-    # build WHERE
+    # build WHERE（entity filter，所有 query 共用）
     where_parts: list[str] = []
     where_params: list = []
     if filters:
@@ -613,7 +745,7 @@ def step2_retrieve(
         if entity_conds:
             where_parts.append("(" + " OR ".join(entity_conds) + ")")
 
-    def _fetch(wp, wparams, limit):
+    def _fetch_with_vec(vec_str: str, wp: list, wparams: list, limit: int):
         wc = ("WHERE " + " AND ".join(wp)) if wp else ""
         sql = f"""
             SELECT id, record_id, chunk_type, chunk_text, source_filename,
@@ -625,29 +757,48 @@ def step2_retrieve(
             cur.execute(sql, [vec_str] + wparams + [vec_str, limit])
             return cur.fetchall()
 
-    rows = _fetch(where_parts, where_params, n_candidates)
+    # 決定用哪些 queries
+    if use_multi_query:
+        queries = _expand_queries(question, client, model_name)
+        time.sleep(0.3)
+    else:
+        queries = [question]
 
-    # fallback
-    if where_parts and len(rows) < top_k:
-        seen_ids = {r[0] for r in rows}
-        for row in _fetch([], [], n_candidates * 2):
-            if row[0] not in seen_ids:
-                rows = list(rows) + [row]
-                seen_ids.add(row[0])
-            if len(rows) >= n_candidates:
-                break
+    # 對每個 query 各自 retrieve，合并取各 chunk 最高分
+    merged: dict[int, dict] = {}
+    for q in queries:
+        vec = embed_model.encode(f"query: {q}", normalize_embeddings=True)
+        vec_str = "[" + ",".join(f"{v:.8f}" for v in vec) + "]"
 
-    # Convert to candidate dicts
-    candidates = [
-        {
-            "id": r[0], "record_id": r[1], "chunk_type": r[2],
-            "chunk_text": r[3], "source_filename": r[4], "score": float(r[5]),
-        }
-        for r in rows
-    ]
+        rows = _fetch_with_vec(vec_str, where_parts, where_params, n_candidates)
 
-    # Hybrid rerank → diversity → slice
+        # fallback：filter 命中太少時補全集搜尋
+        if where_parts and len(rows) < top_k:
+            seen_ids = {r[0] for r in rows}
+            for row in _fetch_with_vec(vec_str, [], [], n_candidates * 2):
+                if row[0] not in seen_ids:
+                    rows = list(rows) + [row]
+                    seen_ids.add(row[0])
+                if len(rows) >= n_candidates:
+                    break
+
+        for r in rows:
+            cid, record_id, chunk_type, chunk_text, source_filename, score = r
+            score = float(score)
+            if cid not in merged or score > merged[cid]["score"]:
+                merged[cid] = {
+                    "id": cid, "record_id": record_id, "chunk_type": chunk_type,
+                    "chunk_text": chunk_text, "source_filename": source_filename,
+                    "score": score,
+                }
+
+    candidates = list(merged.values())
+
+    # BM25 重排用原始 question（不預設方向）
     candidates = _hybrid_rerank(candidates, question)
+    # Cross-encoder 精細重排（由 use_reranker 控制）
+    if reranker is not None and use_reranker:
+        candidates = _cross_encoder_rerank(candidates, question, reranker)
     candidates = _apply_diversity(candidates, top_k, max_per_episode)
 
     return {"retrieved_chunks": candidates, "filters_used": filters}
@@ -657,15 +808,12 @@ def step2_retrieve(
 # Step 3.1：Precision@5
 # ===========================================================================
 
-PRECISION_K = 5  # Precision 固定評估前 5 個 chunk
-
-def step3_1_precision(question: str, retrieved_chunks: list[dict], client, model_name: str) -> dict:
-    padded = (retrieved_chunks + [{"chunk_text": "（無內容）"}] * PRECISION_K)[:PRECISION_K]
-    prompt = _fill(
-        STEP3_1_PROMPT,
-        question=question,
-        **{f"chunk_{i+1}": padded[i]["chunk_text"][:600] for i in range(PRECISION_K)},
+def step3_1_precision(question: str, retrieved_chunks: list[dict], client, model_name: str, k: int = 5) -> dict:
+    chunks = retrieved_chunks[:k]
+    chunks_section = "\n".join(
+        f"{i+1}. {c['chunk_text'][:600]}" for i, c in enumerate(chunks)
     )
+    prompt = STEP3_1_PROMPT.format(question=question, chunks_section=chunks_section, k=k)
     return _call_json(client, model_name, prompt)
 
 
@@ -753,12 +901,17 @@ class Command(BaseCommand):
         per_type = options["per_type"]
         seed = options["seed"]
         random.seed(seed)
+        # PostgreSQL setseed() 需要 -1~1 的浮點數；用 seed mod 1000 / 1000 轉換
+        pg_seed = (seed % 1000) / 1000.0
 
         # 載入模型
         self.stdout.write("載入 bge-m3 模型...")
-        from sentence_transformers import SentenceTransformer
+        from sentence_transformers import SentenceTransformer, CrossEncoder
         embed_model = SentenceTransformer("BAAI/bge-m3")
         self.stdout.write("bge-m3 載入完成")
+        self.stdout.write("載入 bge-reranker-v2-m3 模型...")
+        reranker = CrossEncoder("BAAI/bge-reranker-v2-m3")
+        self.stdout.write("bge-reranker-v2-m3 載入完成")
 
         import os
         from django.conf import settings
@@ -786,7 +939,7 @@ class Command(BaseCommand):
                     # Step 1：生成問題 + validation（最多重試 3 次）
                     self.stdout.write("    Step 1: 生成問題...", ending="\r")
                     step1, source_chunks, actual_record_ids = generate_valid_question(
-                        qtype, client, model_name, max_retries=3
+                        qtype, client, model_name, max_retries=3, pg_seed=pg_seed + i * 0.01,
                     )
                     if step1 is None:
                         raise RuntimeError("無法生成有效的財經評估問題（重試 3 次均失敗）")
@@ -811,6 +964,9 @@ class Command(BaseCommand):
                         top_k=cfg["top_k"],
                         n_candidates=cfg["n_candidates"],
                         max_per_episode=cfg["max_per_episode"],
+                        use_multi_query=cfg.get("multi_query", False),
+                        reranker=reranker,
+                        use_reranker=cfg.get("use_reranker", True),
                     )
                     retrieved_chunks = step2["retrieved_chunks"]
                     filters_used = step2.get("filters_used")
@@ -825,11 +981,12 @@ class Command(BaseCommand):
                     time.sleep(0.3)
 
                     # Step 3.1
-                    self.stdout.write("    Step 3.1: Precision@5...", ending="\r")
-                    step3_1 = step3_1_precision(question, retrieved_chunks, client, model_name)
+                    top_k = cfg["top_k"]
+                    self.stdout.write(f"    Step 3.1: Precision@{top_k}...", ending="\r")
+                    step3_1 = step3_1_precision(question, retrieved_chunks, client, model_name, k=top_k)
                     record["precision"] = step3_1
-                    p5 = step3_1.get("precision_at_5", 0.0)
-                    self.stdout.write(f"    Step 3.1 完成：precision@5 = {p5:.2f}")
+                    p_score = step3_1.get("precision_score", 0.0)
+                    self.stdout.write(f"    Step 3.1 完成：precision@{top_k} = {p_score:.2f}")
                     time.sleep(0.5)
 
                     # Step 3.2
@@ -903,14 +1060,15 @@ class Command(BaseCommand):
                 continue
 
             n = len(rows)
-            p5_vals       = [r.get("precision", {}).get("precision_at_5", 0.0) for r in rows]
+            p5_vals       = [r.get("precision", {}).get("precision_score", 0.0) for r in rows]
             rcov_vals     = [r.get("retrieval_coverage", {}).get("coverage_score", 0.0) for r in rows]
             acov_vals     = [(r.get("answer_eval") or {}).get("coverage", {}).get("coverage_score", 0.0) for r in rows]
             faith_labels  = [(r.get("answer_eval") or {}).get("faithfulness", {}).get("label", "") for r in rows]
             answer_labels = [(r.get("answer_eval") or {}).get("relevance", {}).get("label", "") for r in rows]
 
             self.stdout.write(f"\n【題型 {qtype}（{label_map[qtype]}）】  有效 {n}/{per_type} 題")
-            self.stdout.write(f"  Precision@5         {sum(p5_vals)/n:.2f}")
+            top_k = RETRIEVAL_CFG_BY_TYPE[qtype]["top_k"]
+            self.stdout.write(f"  Precision@{top_k:<2}        {sum(p5_vals)/n:.2f}")
 
             if qtype in ("B", "C"):
                 self.stdout.write(f"  Coverage（檢索）    {sum(rcov_vals)/n:.2f}")
@@ -918,9 +1076,9 @@ class Command(BaseCommand):
             # Answerability（= Step 5 relevance）
             self.stdout.write(
                 f"  Answerability       "
-                f"yes={answer_labels.count('yes')}  "
-                f"partial={answer_labels.count('partial')}  "
-                f"no={answer_labels.count('no')}"
+                f"fully={answer_labels.count('fully_relevant')}  "
+                f"partially={answer_labels.count('partially_relevant')}  "
+                f"not={answer_labels.count('not_relevant')}"
             )
 
             if qtype == "B":

@@ -60,6 +60,7 @@ def chat(request):
         return JsonResponse({"ok": False, "error": "Missing query"}, status=400)
 
     conversation_id = payload.get("conversation_id")
+    user_mode = (payload.get("mode") or "").strip() or None
 
     try:
         # 取得或建立 Conversation
@@ -81,7 +82,7 @@ def chat(request):
 
     # 呼叫 AI
     try:
-        answer = answer_user(query, history)
+        answer = answer_user(query, history, user_mode=user_mode)
     except Exception as e:
         return JsonResponse({"ok": False, "error": f"AI error: {e}"}, status=500)
 
