@@ -1,14 +1,13 @@
 import json
 import os
 import re
+import time
 from typing import Any, Dict, List
 
 import requests
 
 GEMINI_API_KEY_ENV = "GEMINI_API_KEY"
-from django.conf import settings
-GEMINI_MODEL = settings.GEMINI_MODEL
-
+GEMINI_MODEL = "gemini-2.5-flash-lite"
 MAX_ARGUMENTS = 8
 
 
@@ -53,7 +52,13 @@ def _extract_json(text: str) -> Dict[str, Any]:
     if not match:
         raise ValueError("Gemini 回傳內容不包含有效 JSON。")
 
-    return json.loads(match.group(0))
+    try:
+        return json.loads(match.group(0))
+    except json.JSONDecodeError:
+        import re as _re
+        fixed = match.group(0)
+        fixed = _re.sub(r",\s*([}\]])", r"\1", fixed)
+        return json.loads(fixed)
 
 
 def build_prompt_for_mindmap(data: Dict[str, Any]) -> str:
@@ -106,11 +111,10 @@ def build_prompt_for_mindmap(data: Dict[str, Any]) -> str:
 
 【摘要處理規則】
 
-1. arguments 最多保留 5 個，選最重要的
-2. 每個 argument 的 summary 最多 3 個元素，不可更多
-3. 每個 summary 元素 ≤ 15 個中文字，只講一件事
-4. key_data 完全不需要輸出，從 JSON 格式中移除
-5. position 完全不需要輸出，從 JSON 格式中移除
+1. arguments 內的 summary 不得為長段落
+2. summary 若超過 20 字，必須拆成多個短句
+3. key_data 若資訊過多，保留最關鍵 3-4 筆
+4. 每筆 key_data 亦須 ≤ 20 字
 
 【語言要求】
 
@@ -124,18 +128,29 @@ def build_prompt_for_mindmap(data: Dict[str, Any]) -> str:
 
 {{
   "title": ".",
+  "one_sentence_summary": ".",
+  "investment_takeaways": {{
+    "bullish": ["."],
+    "bearish": ["."],
+    "watchlist": ["."],
+    "podcaster_stance": "."
+  }},
   "arguments": [
     {{
       "topic": ".",
-      "summary": [".", "."]
+      "position": ".",
+      "summary": [".", "."],
+      "key_data": [
+        {{"label": ".", "value": ".", "context": "."}}
+      ]
     }}
   ]
 }}
 
 重要：
-- summary 每個最多 3 個元素
-- 每個元素 ≤ 20 字
-- 不需要 investment_takeaways、key_data、position、one_sentence_summary
+summary 必須為字串陣列
+每一個元素為一個短節點
+不得為單一長段落字串
 
 請開始轉換以下資料：
 {json.dumps(source, ensure_ascii=False)}
@@ -147,15 +162,22 @@ def gemini_generate_content(
     api_key: str,
     model: str = GEMINI_MODEL,
 ) -> str:
-    url = f"https://generativelanguage.googleapis.com/v1/models/{model}:generateContent"
-
+    # v1beta 支援較新模型（gemini-2.5-flash-lite 等）
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     params = {"key": api_key}
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
 
-    response = requests.post(url, params=params, json=payload, timeout=60)
+    # 503 時最多重試 3 次
+    for attempt in range(3):
+        response = requests.post(url, params=params, json=payload, timeout=90)
+        if response.status_code == 503:
+            wait = (attempt + 1) * 15
+            time.sleep(wait)
+            continue
+        break
 
     if response.status_code != 200:
-        raise ValueError(f"Gemini API 請求失敗：{response.text}")
+        raise ValueError(f"Gemini API 請求失敗（{response.status_code}）：{response.text}")
 
     data = response.json()
 
@@ -236,23 +258,36 @@ def normalize_mindmap_json(mm_json: Dict[str, Any], fallback_title: str = "Mindm
     }
 
 
-def generate_mindmap_json(summary_data: Dict[str, Any]) -> Dict[str, Any]:
-    api_key = os.environ.get(GEMINI_API_KEY_ENV, "").strip()
-    print("GEMINI_API_KEY exists:", bool(api_key))
-
+def generate_mindmap_json(summary_data: Dict[str, Any], api_key: str = "") -> Dict[str, Any]:
     if not api_key:
+        api_key = os.environ.get(GEMINI_API_KEY_ENV, "").strip()
+
+    vertex_project = os.environ.get("VERTEX_PROJECT_ID", "").strip()
+    if not api_key and not vertex_project:
         raise ValueError(f"找不到環境變數 {GEMINI_API_KEY_ENV}")
 
     if not isinstance(summary_data, dict):
         raise ValueError("summary_data 必須是 JSON 物件。")
 
     fallback_title = _clean_text(summary_data.get("title")) or "Mindmap"
-
     prompt = build_prompt_for_mindmap(summary_data)
-    print("Calling Gemini API...")
 
-    gemini_text = gemini_generate_content(prompt=prompt, api_key=api_key, model=GEMINI_MODEL)
-    print("Gemini response received.")
+    if api_key:
+        # 原本的 REST 路徑（AI Studio API key）
+        gemini_text = gemini_generate_content(prompt=prompt, api_key=api_key, model=GEMINI_MODEL)
+    else:
+        # Vertex AI 路徑：使用共用 SDK client
+        from apps.summaries.services.gemini import make_client, gemini_generate_with_retry
+        client = make_client()
+        resp = gemini_generate_with_retry(
+            client=client,
+            model=f"models/{GEMINI_MODEL}",
+            prompt_text=prompt,
+            temperature=0.2,
+            max_output_tokens=4096,
+            max_tries=3,
+        )
+        gemini_text = getattr(resp, "text", "") or ""
 
     raw_json = _extract_json(gemini_text)
     return normalize_mindmap_json(raw_json, fallback_title=fallback_title)

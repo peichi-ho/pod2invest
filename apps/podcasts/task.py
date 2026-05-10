@@ -75,12 +75,7 @@ from service import (
 def main():
     print("=== 自動化 Podcast 轉錄與 AI 校對工具 ===\n")
 
-    gemini_key = os.getenv("GEMINI_API_KEY")
-    if not gemini_key:
-        gemini_key = input_nonempty("請輸入 GEMINI_API_KEY: ")
-    else:
-        print(f"   [✓] 已從 .env 讀取 GEMINI_API_KEY")
-
+    print("   [✓] 使用 Vertex AI 服務帳戶憑證（GOOGLE_APPLICATION_CREDENTIALS）")
     print("   [✓] 使用 Django ORM 寫入資料庫")
 
     podcast_name = input_nonempty("請輸入 Podcast 名稱: ")
@@ -181,9 +176,9 @@ def main():
             try:
                 if sub_path.exists():
                     print(f"   [Smart Skip] SRT 已存在，直接校對...")
-                    fix_existing_srt_only(sub_path, gemini_key)
+                    fix_existing_srt_only(sub_path)
                 else:
-                    transcribe_and_fix(audio_path, sub_path, language, gemini_key)
+                    transcribe_and_fix(audio_path, sub_path, language)
             except GeminiCorrectionError as e:
                 print(f"   [!] Gemini 校正失敗，略過資料庫寫入：{title}")
                 correction_failed.append(title)
