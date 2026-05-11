@@ -167,6 +167,21 @@ def main():
             if published_at == datetime.min.replace(tzinfo=timezone.utc):
                 published_at = None
 
+            # 檢查資料庫是否已有此集逐字稿，有的話直接跳過
+            try:
+                from apps.podcasts.models import Podcast, PodcastEpisode
+                existing_podcast = Podcast.objects.using("podcasts").filter(show_name=show_name).first()
+                if existing_podcast:
+                    existing_episode = PodcastEpisode.objects.using("podcasts").filter(
+                        podcast=existing_podcast,
+                        episode_title=title,
+                    ).select_related("transcript").first()
+                    if existing_episode and getattr(existing_episode, "transcript", None):
+                        print(f"   [DB Skip] 資料庫已有此集逐字稿，略過：{title}")
+                        continue
+            except Exception as db_check_err:
+                print(f"   [!] 資料庫檢查失敗（{db_check_err}），繼續處理...")
+
             # 下載音檔（如果不存在）
             if not audio_path.exists():
                 print(f"下載音檔: {title}")
