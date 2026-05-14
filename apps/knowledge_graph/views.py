@@ -21,8 +21,6 @@ def graph_page(request):
     return render(request, "knowledge_graph/graph.html")
 
 
-<<<<<<< Updated upstream
-=======
 def latest_date_api(request):
     """回傳 links 表中最新的 summary_date，供前端設定預設日期範圍。"""
     try:
@@ -53,7 +51,6 @@ def hot_nodes_api(request):
         return JsonResponse({"error": str(e)}, status=500)
 
 
->>>>>>> Stashed changes
 def industries_api(request):
     """回傳 nodes 表中所有不重複的產業清單（排序後）。"""
     try:
