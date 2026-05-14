@@ -20,8 +20,15 @@ ALLOWED_HOSTS = os.getenv("DJANGO_ALLOWED_HOSTS", "127.0.0.1,localhost").split("
 
 # Gemini / AI Assistant settings
 
-GEMINI_API_KEY = os.getenv("GEMINI_APIKEY", "").strip()
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
+VERTEX_PROJECT_ID = os.getenv("VERTEX_PROJECT_ID", "")
+VERTEX_LOCATION = os.getenv("VERTEX_LOCATION", "us-central1")
+
+# GCP 憑證：若 .env 裡是相對路徑，自動轉換為以專案根目錄為基準的絕對路徑
+_gcp_creds = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "")
+if _gcp_creds and not os.path.isabs(_gcp_creds):
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(BASE_DIR / _gcp_creds)
 
 # 股票資料快取秒數（避免 yfinance 太慢）
 STOCK_CACHE_TTL_SECONDS = int(os.getenv("STOCK_CACHE_TTL_SECONDS", "60"))

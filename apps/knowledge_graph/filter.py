@@ -27,8 +27,11 @@ def get_latest_date_in_db() -> date_type:
 # Gemini Client
 # ==========================================
 def _get_client():
-    api_key = getattr(settings, "GEMINI_API_KEY", "").strip() or os.getenv("GEMINI_API_KEY", "")
-    return genai.Client(api_key=api_key)
+    return genai.Client(
+        vertexai=True,
+        project=settings.VERTEX_PROJECT_ID,
+        location=settings.VERTEX_LOCATION,
+    )
 
 
 # ==========================================

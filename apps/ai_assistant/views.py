@@ -60,31 +60,38 @@ def chat(request):
         return JsonResponse({"ok": False, "error": "Missing query"}, status=400)
 
     conversation_id = payload.get("conversation_id")
+    user_mode = (payload.get("mode") or "").strip() or None
 
-    # 取得或建立 Conversation
-    if conversation_id:
-        try:
-            conversation = Conversation.objects.get(pk=conversation_id)
-        except Conversation.DoesNotExist:
-            return JsonResponse({"ok": False, "error": "Conversation not found"}, status=404)
-    else:
-        # 自動以問題前 30 字作為標題
-        title = query[:30] + ("..." if len(query) > 30 else "")
-        conversation = Conversation.objects.create(title=title)
+    try:
+        # 取得或建立 Conversation
+        if conversation_id:
+            try:
+                conversation = Conversation.objects.get(pk=conversation_id)
+            except Conversation.DoesNotExist:
+                return JsonResponse({"ok": False, "error": "Conversation not found"}, status=404)
+        else:
+            # 自動以問題前 30 字作為標題
+            title = query[:30] + ("..." if len(query) > 30 else "")
+            conversation = Conversation.objects.create(title=title)
 
-    # 載入歷史訊息
-    past_messages = conversation.messages.all()
-    history = [{"role": msg.role, "content": msg.content} for msg in past_messages]
+        # 載入歷史訊息
+        past_messages = conversation.messages.all()
+        history = [{"role": msg.role, "content": msg.content} for msg in past_messages]
+    except Exception as e:
+        return JsonResponse({"ok": False, "error": f"DB error: {e}"}, status=500)
 
     # 呼叫 AI
     try:
-        answer = answer_user(query, history)
+        answer = answer_user(query, history, user_mode=user_mode)
     except Exception as e:
-        return JsonResponse({"ok": False, "error": str(e)}, status=500)
+        return JsonResponse({"ok": False, "error": f"AI error: {e}"}, status=500)
 
-    # 儲存這輪的 user + assistant 訊息
-    Message.objects.create(conversation=conversation, role="user", content=query)
-    Message.objects.create(conversation=conversation, role="assistant", content=answer)
+    try:
+        # 儲存這輪的 user + assistant 訊息
+        Message.objects.create(conversation=conversation, role="user", content=query)
+        Message.objects.create(conversation=conversation, role="assistant", content=answer)
+    except Exception as e:
+        return JsonResponse({"ok": False, "error": f"Save error: {e}"}, status=500)
 
     return JsonResponse({
         "ok": True,

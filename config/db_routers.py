@@ -38,7 +38,7 @@ class SummariesRouter:
         return None
 
     def allow_relation(self, obj1, obj2, **hints):
-        db_list = {"default", "summariesdb"}
+        db_list = {"default", "summariesdb", "podcasts"}
         if obj1._state.db in db_list and obj2._state.db in db_list:
             return True
         return None
@@ -64,7 +64,7 @@ class PodcastsRouter:
         return None
 
     def allow_relation(self, obj1, obj2, **hints):
-        db_list = {"default", "podcasts"}
+        db_list = {"default", "podcasts", "summariesdb"}
         if obj1._state.db in db_list and obj2._state.db in db_list:
             return True
         return None

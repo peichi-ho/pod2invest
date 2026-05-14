@@ -7,7 +7,8 @@ from rest_framework import status
 
 from .serializers import SummarizeRequestSerializer, GenerateFromPodcastSerializer
 from .services.engine import summarize_from_srt_text
-from .models import SummaryRecord, BacktestingRecord
+from .services.backtesting import create_backtesting_rows
+from .models import SummaryRecord
 from apps.podcasts.models import PodcastEpisode
 from apps.glossary.services.annotator import annotate
 from apps.mindmap.services.gemini_mindmap import generate_mindmap_json
@@ -15,7 +16,7 @@ from apps.mindmap.services.gemini_mindmap import generate_mindmap_json
 logger = logging.getLogger(__name__)
 
 
-def _build_enrichments(result: dict) -> tuple:
+def _build_enrichments(result: dict, api_key: str = "") -> tuple:
     """
     Run glossary matching and mind map generation on a summary result dict.
     Returns (glossary_matches, mind_map). Both are non-fatal — failures return empty values.
@@ -51,16 +52,17 @@ def _build_enrichments(result: dict) -> tuple:
     # --- Mind map ---
     mind_map = {}
     try:
-        mind_map = generate_mindmap_json(result)
+        mind_map = generate_mindmap_json(result, api_key=api_key)
     except Exception:
         logger.exception("Mind map generation failed")
 
     return glossary_matches, mind_map
 
 
-def _save_summary(result: dict, *, mode: str, model_name: str,
+def _save_summary(result: dict, *, mode: str,
                   source_filename: str = "", podcaster: str = "",
-                  published_at=None) -> SummaryRecord:
+                  published_at=None, episode_id=None,
+                  api_key: str = "") -> SummaryRecord:
     """
     Build enrichments, save SummaryRecord + BacktestingRecord, and return the record.
     Handles both single-mode result (dict) and both-mode result ({"novice":..., "pro":...}).
@@ -83,14 +85,14 @@ def _save_summary(result: dict, *, mode: str, model_name: str,
         arguments = result.get("arguments", [])
         outlook_calls = result.get("outlook_calls", [])
 
-    glossary_matches, mind_map = _build_enrichments(enrich_base)
+    glossary_matches, mind_map = _build_enrichments(enrich_base, api_key=api_key)
 
     record = SummaryRecord.objects.using("summariesdb").create(
         mode=mode,
-        model=model_name,
         source_filename=source_filename,
         podcaster=podcaster,
         published_at=published_at,
+        episode_id=episode_id,
         one_sentence_summary=one_sentence,
         investment_takeaways=investment_takeaways,
         tags=tags,
@@ -98,13 +100,16 @@ def _save_summary(result: dict, *, mode: str, model_name: str,
         arguments=arguments,
         glossary_matches=glossary_matches,
         mind_map=mind_map,
+        outlook_calls=outlook_calls,
     )
 
-    if outlook_calls:
-        BacktestingRecord.objects.using("summariesdb").create(
-            summary=record,
-            outlook_calls=outlook_calls,
-        )
+    # 建立回測列（backtesting.py 內部會過濾 null timeframe 與無法解析的 ticker）
+    create_backtesting_rows(
+        summary_record=record,
+        episode_id=episode_id,
+        outlook_calls=outlook_calls,
+        published_at=published_at,
+    )
 
     return record
 
@@ -147,8 +152,8 @@ class SummarizeAPIView(APIView):
             record = _save_summary(
                 result,
                 mode=data["mode"],
-                model_name=data.get("model", "models/gemini-2.5-flash-lite"),
                 source_filename=source_filename,
+                api_key=api_key,
             )
 
             return Response(result | {"summary_id": record.id}, status=status.HTTP_200_OK)
@@ -199,15 +204,17 @@ class GenerateFromPodcastAPIView(APIView):
                 model=data.get("model", "models/gemini-2.5-flash-lite"),
                 chunk_threshold_chars=data.get("chunk_threshold_chars", 30000),
                 debug_chars=0,
+                published_at=episode.published_at,
             )
 
             record = _save_summary(
                 result,
                 mode=data["mode"],
-                model_name=data.get("model", "models/gemini-2.5-flash-lite"),
                 source_filename=episode.episode_title,
                 podcaster=episode.podcast.show_name,
                 published_at=episode.published_at,
+                episode_id=episode.id,
+                api_key=api_key,
             )
 
             return Response(result | {"summary_id": record.id}, status=status.HTTP_200_OK)

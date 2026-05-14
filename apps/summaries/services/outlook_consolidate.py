@@ -28,6 +28,14 @@ def _normalize_key_text(s: Any) -> str:
     return _normalize_text(s).lower().replace(" ", "")
 
 
+def _clean_quote(s: Any) -> str:
+    import re as _re
+    s = _normalize_text(s)
+    s = _re.sub(r"（\d+:\d{2}）", "", s)
+    s = _re.sub(r"\s+", " ", s).strip()
+    return s
+
+
 def _safe_list(v: Any) -> list:
     if v is None:
         return []
@@ -69,7 +77,8 @@ def _clean_reviewed_call(call: dict) -> Optional[dict]:
     direction = _normalize_text(call.get("direction")).lower()
     thesis = _normalize_text(call.get("thesis"))
     timeframe = _normalize_timeframe(call.get("timeframe"))
-    evidence_quote = _normalize_text(call.get("evidence_quote"))
+    evidence_quote = _clean_quote(call.get("evidence_quote"))
+    summary_label = _normalize_text(call.get("summary_label"))
 
     evidence_timestamps = _safe_list(call.get("evidence_timestamps"))
     evidence_timestamps = [_normalize_text(x) for x in evidence_timestamps if _normalize_text(x)]
@@ -83,11 +92,15 @@ def _clean_reviewed_call(call: dict) -> Optional[dict]:
     if not evidence_quote:
         return None
 
+    summary_label = _normalize_text(call.get("summary_label"))
+    evidence_quote = _clean_quote(call.get("evidence_quote"))
+
     return {
         "asset": asset,
         "direction": direction,
         "timeframe": timeframe,
         "thesis": thesis,
+        "summary_label": summary_label,
         "evidence_timestamps": evidence_timestamps,
         "evidence_quote": evidence_quote,
     }
@@ -174,12 +187,13 @@ def consolidate_outlook_payload(
         "{\n"
         '  "valid_calls": [\n'
         "    {\n"
-        '      "asset": "公司名",\n'
+        '      "asset": "標的名稱（公司/指數/商品）",\n'
         '      "direction": "bullish 或 bearish",\n'
         '      "timeframe": "null / 2025 / 2026 / 短中期 / 未來幾年 / 未來兩年 / 長期",\n'
         '      "thesis": "精煉後的一句完整投資判斷",\n'
+        '      "summary_label": "一句讓使用者第一眼看懂的預測摘要，含標的+方向+理由/時間，若 reviewed_calls 已有則直接沿用，否則自行生成",\n'
         '      "evidence_timestamps": ["m:ss"],\n'
-        '      "evidence_quote": "最能代表該 thesis 的原句"\n'
+        '      "evidence_quote": "最能代表該 thesis 的說話者原話，最多 60 字"\n'
         "    }\n"
         "  ]\n"
         "}\n\n"
@@ -193,7 +207,7 @@ def consolidate_outlook_payload(
         model=model,
         prompt_text=prompt,
         temperature=0.0,
-        max_output_tokens=2500,
+        max_output_tokens=4000,
         max_tries=6,
     )
 
