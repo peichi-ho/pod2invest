@@ -245,8 +245,8 @@ def save_to_db(json_data_str: str, summary_date: str, podcast_source: str):
 
         for node in data.get("nodes", []):
             llm_name = node.get("id") or node.get("name")
-            industry = node.get("industry", "未分類")
-            if not llm_name:
+            industry = node.get("industry")
+            if not llm_name or not industry:
                 continue
 
             canonical = _resolve_node_name(llm_name, existing_names)
@@ -286,13 +286,7 @@ def save_to_db(json_data_str: str, summary_date: str, podcast_source: str):
             if source not in all_nodes or target not in all_nodes:
                 print(f"  ⚠️  跳過 link（節點不存在）：{source} → {target}")
                 continue
-                # 確保 source 和 target 節點存在，否則自動補建
-            for node_name in [source, target]:
-                if not _node_exists(cursor, node_name):
-                    cursor.execute(
-                    "INSERT INTO nodes (name, industry) VALUES (%s, %s)",
-                    [node_name, "未分類"],
-                )
+                
 
             if _link_duplicate_exists(cursor, source, target, reason):
                 print(f"  ⏭️  link 重複，跳過：{source} → {target}")
@@ -321,11 +315,23 @@ def process_all_summaries():
     total = records.count()
     print(f"\n📚 共 {total} 筆摘要待處理")
 
+    # 查詢已處理過的 podcast_source，跳過重複處理
+    with connections["knowledge_graphdb"].cursor() as cursor:
+        cursor.execute("SELECT DISTINCT podcast_source FROM links")
+        processed_sources = {row[0] for row in cursor.fetchall()}
+    print(f"⏭️  已處理過：{len(processed_sources)} 筆")
+
+    skipped = 0
     for i, record in enumerate(records, 1):
+        podcast_source = record.source_filename or f"record-{record.id}"
+
+        if podcast_source in processed_sources:
+            skipped += 1
+            continue
+
         print(f"\n[{i}/{total}] 處理摘要 #{record.id}: {record.source_filename or '(無檔名)'}")
         summary_text = build_summary_text(record)
-        summary_date = record.created_at.date().isoformat()
-        podcast_source = record.source_filename or f"record-{record.id}"
+        summary_date = (record.published_at or record.created_at).date().isoformat()
 
         extracted_json = extract_graph_from_summary(summary_text)
         if extracted_json:
@@ -334,6 +340,8 @@ def process_all_summaries():
                 summary_date=summary_date,
                 podcast_source=podcast_source,
             )
+
+    print(f"\n✅ 完成！略過已處理 {skipped} 筆，共處理 {total - skipped} 筆。")
 
 
 def process_new_podcast(summary_text: str, summary_date: str, podcast_source: str):
