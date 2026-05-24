@@ -298,7 +298,8 @@
             <input type="date" id="input-end">
         </div>
         <button id="btn-query">查詢</button>
-        <span id="status-msg">預設顯示最近 7 天</span>
+        <span id="date-hint" style="font-size:11px; color:#666; white-space:nowrap;">（最多 7 天）</span>
+        <span id="status-msg">預設顯示資料庫最新 7 天</span>
     </div>
 
     <!-- 圖表區 -->
@@ -381,13 +382,53 @@
 
         // ── 狀態 ──
         let simulation = null;
+        let maxDate = null;   // 資料庫最新日期（YYYY-MM-DD）
+
+        // ── 日期工具函式 ──
+        function addDays(dateStr, days) {
+            const [y, m, d] = dateStr.split('-').map(Number);
+            const dt = new Date(y, m - 1, d);
+            dt.setDate(dt.getDate() + days);
+            const yy = dt.getFullYear();
+            const mm = String(dt.getMonth() + 1).padStart(2, '0');
+            const dd = String(dt.getDate()).padStart(2, '0');
+            return `${yy}-${mm}-${dd}`;
+        }
+
+        function diffDays(startStr, endStr) {
+            const s = new Date(startStr);
+            const e = new Date(endStr);
+            return Math.round((e - s) / 86400000);
+        }
 
         // ── UI refs ──
         const loadingEl  = document.getElementById("loading");
         const emptyEl    = document.getElementById("empty-msg");
         const statusMsg  = document.getElementById("status-msg");
+        const dateHint   = document.getElementById("date-hint");
         const btnQuery   = document.getElementById("btn-query");
+        const inputStart = document.getElementById("input-start");
+        const inputEnd   = document.getElementById("input-end");
         const tooltip    = d3.select("#tooltip");
+
+        // ── 日期輸入事件：只更新提示，不自動修正 ──
+        inputStart.addEventListener("change", updateDateHint);
+        inputEnd.addEventListener("change", () => {
+            if (maxDate && inputEnd.value > maxDate) inputEnd.value = maxDate;
+            updateDateHint();
+        });
+
+        function updateDateHint() {
+            if (inputStart.value && inputEnd.value) {
+                const span = diffDays(inputStart.value, inputEnd.value) + 1;
+                const over = span > 7;
+                dateHint.textContent = over ? `⚠ 超過 7 天（${span} 天）` : `（${span} 天）`;
+                dateHint.style.color = over ? "#f87171" : "#666";
+            } else {
+                dateHint.textContent = "（最多 7 天）";
+                dateHint.style.color = "#666";
+            }
+        }
 
         // ── 讓 Tooltip 跟隨滑鼠 ──
         svg.on("mousemove", (event) => {
@@ -554,8 +595,14 @@
         // ── 取得資料 ──
         function fetchAndRender() {
             const industry  = document.getElementById("input-industry").value.trim();
-            const startDate = document.getElementById("input-start").value;
-            const endDate   = document.getElementById("input-end").value;
+            const startDate = inputStart.value;
+            const endDate   = inputEnd.value;
+
+            // 驗證時間跨度不超過 7 天
+            if (startDate && endDate && diffDays(startDate, endDate) > 6) {
+                statusMsg.textContent = "⚠ 時間跨度不可超過 7 天，請重新選擇";
+                return;
+            }
 
             const params = new URLSearchParams();
             if (industry)  params.set("industry",   industry);
@@ -571,7 +618,7 @@
             if (startDate || endDate) {
                 labels.push(`${startDate || "最早"} ～ ${endDate || "最新"}`);
             } else {
-                labels.push("最近 7 天");
+                labels.push("資料庫最新 7 天");
             }
             statusMsg.textContent = labels.join("　");
 
@@ -684,26 +731,41 @@
             if (val) fetchAndRender();
         });
 
-        // ── 載入產業清單，並以第一個產業作為預設查詢 ──
-        fetch("/api/knowledge-graph/industries/")
+        // ── 載入產業清單 ──
+        function loadIndustries() {
+            fetch("/api/knowledge-graph/industries/")
+                .then(res => res.json())
+                .then(data => {
+                    const list = data.industries || [];
+                    list.forEach(ind => {
+                        const opt = document.createElement("option");
+                        opt.value = ind;
+                        opt.textContent = ind;
+                        selectIndustry.appendChild(opt);
+                    });
+                    if (list.length > 0) {
+                        document.getElementById("input-industry").value = list[0];
+                    }
+                    fetchAndRender();
+                })
+                .catch(() => fetchAndRender());
+        }
+
+        // ── 初始化：先取資料庫最新日期，設定預設日期區間，再載入產業 ──
+        fetch("/api/knowledge-graph/latest-date/")
             .then(res => res.json())
             .then(data => {
-                const list = data.industries || [];
-                list.forEach(ind => {
-                    const opt = document.createElement("option");
-                    opt.value = ind;
-                    opt.textContent = ind;
-                    selectIndustry.appendChild(opt);
-                });
-                // 預設選第一個產業並填入文字框，再觸發初始查詢
-                if (list.length > 0) {
-                    document.getElementById("input-industry").value = list[0];
-                }
-                fetchAndRender();
+                maxDate = data.latest_date;
+                inputStart.max = maxDate;
+                inputEnd.max   = maxDate;
+                inputEnd.value   = maxDate;
+                inputStart.value = addDays(maxDate, -6);
+                updateDateHint();
+                loadIndustries();
             })
             .catch(() => {
-                // 載入失敗則直接以空條件查詢
-                fetchAndRender();
+                // 取不到最新日期時退回不限制
+                loadIndustries();
             });
 
         // ── 視窗縮放 ──
