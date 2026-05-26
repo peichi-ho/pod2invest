@@ -127,6 +127,7 @@ class TickerMap(models.Model):
     sector     = models.CharField(max_length=30, blank=True)     # 半導體 / 科技硬體 / 航運 ...
     verified   = models.BooleanField(default=False)              # 人工確認過
     created_at = models.DateTimeField(auto_now_add=True)
+    zh_name    = models.CharField(max_length=50, blank=True)
 
     class Meta:
         db_table  = "ticker_map"

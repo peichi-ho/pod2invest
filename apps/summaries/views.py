@@ -8,7 +8,7 @@ from rest_framework import status
 from .serializers import SummarizeRequestSerializer, GenerateFromPodcastSerializer
 from .services.engine import summarize_from_srt_text
 from .services.backtesting import create_backtesting_rows
-from .models import SummaryRecord
+from .models import SummaryRecord, BacktestingRecord, TickerMap
 from apps.podcasts.models import PodcastEpisode
 from apps.glossary.services.annotator import annotate
 from apps.mindmap.services.gemini_mindmap import generate_mindmap_json
@@ -17,11 +17,6 @@ logger = logging.getLogger(__name__)
 
 
 def _build_enrichments(result: dict, api_key: str = "") -> tuple:
-    """
-    Run glossary matching and mind map generation on a summary result dict.
-    Returns (glossary_matches, mind_map). Both are non-fatal — failures return empty values.
-    """
-    # --- Glossary matching ---
     glossary_matches = []
     try:
         parts = []
@@ -49,7 +44,6 @@ def _build_enrichments(result: dict, api_key: str = "") -> tuple:
     except Exception:
         logger.exception("Glossary annotation failed")
 
-    # --- Mind map ---
     mind_map = {}
     try:
         mind_map = generate_mindmap_json(result, api_key=api_key)
@@ -59,34 +53,17 @@ def _build_enrichments(result: dict, api_key: str = "") -> tuple:
     return glossary_matches, mind_map
 
 
-def _save_summary(result: dict, *, mode: str,
-                  source_filename: str = "", podcaster: str = "",
-                  published_at=None, episode_id=None,
-                  api_key: str = "") -> SummaryRecord:
-    """
-    Build enrichments, save SummaryRecord + BacktestingRecord, and return the record.
-    Handles both single-mode result (dict) and both-mode result ({"novice":..., "pro":...}).
-    """
-    # For both-mode, use the pro sub-result for enrichment; fall back to novice
-    if mode == "both":
-        enrich_base = result.get("pro") or result.get("novice") or {}
-        one_sentence = enrich_base.get("one_sentence_summary", "")
-        investment_takeaways = enrich_base.get("investment_takeaways", {})
-        tags = enrich_base.get("tags", [])
-        entities = enrich_base.get("entities", {})
-        arguments = enrich_base.get("arguments", [])
-        outlook_calls = enrich_base.get("outlook_calls", [])
-    else:
-        enrich_base = result
-        one_sentence = result.get("one_sentence_summary", "")
-        investment_takeaways = result.get("investment_takeaways", {})
-        tags = result.get("tags", [])
-        entities = result.get("entities", {})
-        arguments = result.get("arguments", [])
-        outlook_calls = result.get("outlook_calls", [])
-
-    glossary_matches, mind_map = _build_enrichments(enrich_base, api_key=api_key)
-
+def _create_single_record(data: dict, *, mode: str,
+                           source_filename: str = "", podcaster: str = "",
+                           published_at=None, episode_id=None,
+                           api_key: str = "") -> SummaryRecord:
+    one_sentence = data.get("one_sentence_summary", "")
+    investment_takeaways = data.get("investment_takeaways", {})
+    tags = data.get("tags", [])
+    entities = data.get("entities", {})
+    arguments = data.get("arguments", [])
+    outlook_calls = data.get("outlook_calls", [])
+    glossary_matches, mind_map = _build_enrichments(data, api_key=api_key)
     record = SummaryRecord.objects.using("summariesdb").create(
         mode=mode,
         source_filename=source_filename,
@@ -102,16 +79,115 @@ def _save_summary(result: dict, *, mode: str,
         mind_map=mind_map,
         outlook_calls=outlook_calls,
     )
-
-    # 建立回測列（backtesting.py 內部會過濾 null timeframe 與無法解析的 ticker）
     create_backtesting_rows(
         summary_record=record,
         episode_id=episode_id,
         outlook_calls=outlook_calls,
         published_at=published_at,
     )
-
     return record
+
+
+def _save_summary(result: dict, *, mode: str,
+                  source_filename: str = "", podcaster: str = "",
+                  published_at=None, episode_id=None,
+                  api_key: str = "") -> SummaryRecord:
+    kwargs = dict(source_filename=source_filename, podcaster=podcaster,
+                  published_at=published_at, episode_id=episode_id, api_key=api_key)
+    if mode == "both":
+        novice_record = _create_single_record(
+            result.get("novice") or {}, mode="novice", **kwargs
+        )
+        _create_single_record(
+            result.get("pro") or {}, mode="pro", **kwargs
+        )
+        return novice_record
+    return _create_single_record(result, mode=mode, **kwargs)
+
+
+class AccuracyRankingAPIView(APIView):
+    """依 sector 篩選的講者準確率排名（去重邏輯與 showPodcaster 一致）"""
+
+    SECTOR_MAP = {
+        '半導體/電子元件': ['半導體/電子元件'],
+        '科技類':          ['科技硬體', '科技大廠', '軟體/雲端', '電子通路'],
+        '台股指數':        ['台股指數', '半導體指數'],
+        '海外指數':        ['美股指數', '中國指數'],
+        '大宗商品/外匯':   ['大宗商品', '外匯'],
+        'ETF':             ['ETF'],
+        '能源/電動車':     ['能源/電動車'],
+        '其他產業':        ['航運', '傳統產業', '金融', '生技/醫療', '其他'],
+    }
+
+    def get(self, request):
+        from collections import defaultdict
+        from django.db.models import Q
+
+        sector = request.query_params.get('sector', '').strip()
+
+        qs = (BacktestingRecord.objects.using('summariesdb')
+              .exclude(result='pending')
+              .select_related('summary'))
+
+        if sector:
+            sector_vals = self.SECTOR_MAP.get(sector)
+            if not sector_vals:
+                return Response([])
+            ticker_set = set(TickerMap.objects.filter(
+                sector__in=sector_vals).values_list('ticker', flat=True))
+            asset_set = set(TickerMap.objects.filter(
+                sector__in=sector_vals).values_list('asset_name', flat=True))
+            qs = qs.filter(Q(ticker__in=ticker_set) | Q(asset__in=asset_set))
+
+        # 去重：同一講者同一 thesis 只算一次
+        stats = defaultdict(lambda: {'pass': 0, 'fail': 0})
+        seen  = defaultdict(set)
+        for r in qs:
+            podcaster = (getattr(r.summary, 'podcaster', '') or '').strip()
+            if not podcaster:
+                continue
+            thesis = r.thesis or ''
+            if not thesis or thesis in seen[podcaster]:
+                continue
+            seen[podcaster].add(thesis)
+            if r.result == 'pass':
+                stats[podcaster]['pass'] += 1
+            elif r.result == 'fail':
+                stats[podcaster]['fail'] += 1
+
+        result = []
+        for podcaster, d in stats.items():
+            total = d['pass'] + d['fail']
+            if total == 0:
+                continue
+            result.append({
+                'podcaster': podcaster,
+                'pass':      d['pass'],
+                'fail':      d['fail'],
+                'total':     total,
+                'accuracy':  round(d['pass'] / total * 100),
+            })
+
+        result.sort(key=lambda x: (-x['accuracy'], -x['total']))
+        return Response(result)
+
+
+class PodcastersRankingAPIView(APIView):
+    def get(self, request):
+        limit = int(request.query_params.get("limit", 10))
+        from django.db import connections
+        with connections["summariesdb"].cursor() as c:
+            c.execute("""
+                SELECT podcaster, COUNT(DISTINCT source_filename) as episodes, MAX(created_at) as latest
+                FROM summaries_summaryrecord
+                WHERE podcaster IS NOT NULL AND podcaster != ''
+                GROUP BY podcaster
+                ORDER BY episodes DESC, latest DESC
+                LIMIT %s
+            """, [limit])
+            rows = c.fetchall()
+        result = [{"podcaster": r[0], "episodes": r[1], "latest": r[2].isoformat()} for r in rows]
+        return Response(result)
 
 
 class SummarizeAPIView(APIView):
@@ -163,6 +239,249 @@ class SummarizeAPIView(APIView):
                 {"detail": "摘要失敗", "error": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+
+class SummaryListAPIView(APIView):
+    def get(self, request):
+        source_filename = request.query_params.get("source_filename")
+        podcaster = request.query_params.get("podcaster")
+        mode = request.query_params.get("mode")
+
+        qs = SummaryRecord.objects.using("summariesdb").order_by("-created_at")
+        if source_filename:
+            qs = qs.filter(source_filename=source_filename)
+        if podcaster:
+            qs = qs.filter(podcaster=podcaster)
+        if mode:
+            qs = qs.filter(mode=mode)
+        if not source_filename and not podcaster:
+            limit = int(request.query_params.get("limit", 20))
+            qs = qs[:limit]
+        elif request.query_params.get("limit"):
+            qs = qs[:int(request.query_params.get("limit"))]
+
+        result = []
+        for s in qs:
+            result.append({
+                "id": s.id,
+                "mode": s.mode,
+                "source_filename": s.source_filename,
+                "podcaster": s.podcaster,
+                "one_sentence_summary": s.one_sentence_summary,
+                "tags": s.tags,
+                "entities": s.entities,
+                "created_at": s.created_at.isoformat(),
+                "outlook_calls": s.outlook_calls or [],
+            })
+        return Response(result)
+
+
+class SummaryDetailAPIView(APIView):
+    def get(self, request, pk):
+        try:
+            s = SummaryRecord.objects.using("summariesdb").get(pk=pk)
+        except SummaryRecord.DoesNotExist:
+            return Response({"detail": "not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        outlook_calls = s.outlook_calls or []
+
+        audio_url = ""
+        if s.source_filename:
+            try:
+                episode = PodcastEpisode.objects.using("podcasts").filter(
+                    episode_title=s.source_filename
+                ).first()
+                if episode:
+                    audio_url = episode.audio_url
+            except Exception:
+                logger.exception("Failed to fetch audio_url from podcasts DB")
+
+        return Response({
+            "id": s.id,
+            "source_filename": s.source_filename,
+            "podcaster": s.podcaster,
+            "mode": s.mode,
+            "one_sentence_summary": s.one_sentence_summary,
+            "investment_takeaways": s.investment_takeaways,
+            "tags": s.tags,
+            "entities": s.entities,
+            "arguments": s.arguments,
+            "outlook_calls": outlook_calls,
+            "audio_url": audio_url,
+            "published_at": s.published_at.isoformat() if s.published_at else None,
+            "created_at": s.created_at.isoformat(),
+        })
+
+
+class BacktestingBySummaryAPIView(APIView):
+    """回傳某集摘要的所有 backtesting 紀錄（排除 skip）"""
+    def get(self, request, pk):
+        records = BacktestingRecord.objects.using("summariesdb").filter(
+            summary_id=pk
+        ).exclude(result="skip").order_by("id")
+        data = [
+            {
+                "id": r.id,
+                "ticker": r.ticker,
+                "asset": r.asset,
+                "direction": r.direction,
+                "thesis": r.thesis,
+                "timeframe_raw": r.timeframe_raw,
+                "start_time": r.start_time.isoformat() if r.start_time else None,
+                "end_time": r.end_time.isoformat() if r.end_time else None,
+                "result": r.result,
+            }
+            for r in records
+        ]
+        return Response(data)
+
+
+class AllBacktestingAPIView(APIView):
+    """全部 backtesting 紀錄（排除 skip），附帶 podcaster / source_filename。"""
+    def get(self, request):
+        limit = int(request.query_params.get("limit", 300))
+        podcaster = request.query_params.get("podcaster", "").strip()
+
+        qs = BacktestingRecord.objects.using("summariesdb").exclude(
+            result="skip"
+        ).order_by("-id")
+
+        if podcaster:
+            # 透過 summary 的 podcaster 欄位過濾
+            from django.db import connections
+            with connections["summariesdb"].cursor() as c:
+                c.execute("""
+                    SELECT b.id, b.summary_id, b.ticker, b.asset, b.direction,
+                           b.thesis, b.timeframe_raw,
+                           b.start_time, b.end_time, b.result,
+                           s.podcaster, s.source_filename
+                    FROM backtesting b
+                    JOIN summaries_summaryrecord s ON b.summary_id = s.id
+                    WHERE b.result != 'skip'
+                      AND s.podcaster = %s
+                    ORDER BY b.id DESC
+                    LIMIT %s
+                """, [podcaster, limit])
+                rows = c.fetchall()
+            cols = ["id","summary_id","ticker","asset","direction","thesis",
+                    "timeframe_raw","start_time","end_time","result",
+                    "podcaster","source_filename"]
+            data = [dict(zip(cols, r)) for r in rows]
+            for d in data:
+                d["start_time"] = d["start_time"].isoformat() if d["start_time"] else None
+                d["end_time"]   = d["end_time"].isoformat()   if d["end_time"]   else None
+            return Response(data)
+
+        # 不指定 podcaster：抓全部，JOIN summary 取 podcaster
+        from django.db import connections
+        with connections["summariesdb"].cursor() as c:
+            c.execute("""
+                SELECT b.id, b.summary_id, b.ticker, b.asset, b.direction,
+                       b.thesis, b.timeframe_raw,
+                       b.start_time, b.end_time, b.result,
+                       s.podcaster, s.source_filename
+                FROM backtesting b
+                JOIN summaries_summaryrecord s ON b.summary_id = s.id
+                WHERE b.result != 'skip'
+                ORDER BY b.id DESC
+                LIMIT %s
+            """, [limit])
+            rows = c.fetchall()
+        cols = ["id","summary_id","ticker","asset","direction","thesis",
+                "timeframe_raw","start_time","end_time","result",
+                "podcaster","source_filename"]
+        data = [dict(zip(cols, r)) for r in rows]
+        for d in data:
+            d["start_time"] = d["start_time"].isoformat() if d["start_time"] else None
+            d["end_time"]   = d["end_time"].isoformat()   if d["end_time"]   else None
+        return Response(data)
+
+
+class SearchAPIView(APIView):
+    """搜尋節目名稱 / 集數標題（含股票代號轉換）"""
+    def get(self, request):
+        from django.db.models import Q
+        q     = request.query_params.get('q', '').strip()
+        limit = min(int(request.query_params.get('limit', 12)), 30)
+
+        if not q:
+            return Response([])
+
+        # ── TickerMap：股票代號 → 中文名稱（只在標題裡找，不展開到內容）──
+        extra_terms = set()
+        try:
+            ticker_hits = TickerMap.objects.filter(
+                Q(ticker__iexact=q) |
+                Q(asset_name__icontains=q) |
+                Q(zh_name__icontains=q)
+            ).values('asset_name', 'zh_name')[:5]
+            for row in ticker_hits:
+                if row['asset_name']: extra_terms.add(row['asset_name'])
+                if row['zh_name']:    extra_terms.add(row['zh_name'])
+        except Exception:
+            logger.exception("TickerMap search failed")
+
+        all_terms = [q] + list(extra_terms - {q})
+
+        # ── 比對節目名稱、集數標題、Critical Thesis Points ──
+        q_filter       = Q()   # 全部條件（用來篩選）
+        q_title_filter = Q()   # 僅標題條件（用來排序優先）
+        for term in all_terms:
+            q_filter |= (
+                Q(podcaster__icontains=term)       |
+                Q(source_filename__icontains=term) |
+                Q(arguments__icontains=term)
+            )
+            q_title_filter |= (
+                Q(podcaster__icontains=term)       |
+                Q(source_filename__icontains=term)
+            )
+
+        from django.db.models import Case, When, IntegerField, Value
+        qs = (
+            SummaryRecord.objects.using('summariesdb')
+            .filter(q_filter)
+            .annotate(
+                relevance=Case(
+                    When(q_title_filter, then=Value(1)),  # 標題命中 → 排前面
+                    default=Value(2),                      # 僅 arguments 命中 → 排後面
+                    output_field=IntegerField(),
+                )
+            )
+            .order_by('relevance', '-created_at')[:limit * 4]  # 多抓一些供去重後仍夠 limit 筆
+        )
+
+        # 同一集數（source_filename）只保留第一筆（relevance 最高）
+        seen_filenames = set()
+        result = []
+        for s in qs:
+            key = s.source_filename or str(s.id)
+            if key in seen_filenames:
+                continue
+            seen_filenames.add(key)
+            result.append({
+                'id':                   s.id,
+                'mode':                 s.mode,
+                'podcaster':            s.podcaster,
+                'source_filename':      s.source_filename,
+                'one_sentence_summary': s.one_sentence_summary,
+                'tags':                 s.tags,
+                'entities':             s.entities,
+                'created_at':           s.created_at.isoformat(),
+            })
+            if len(result) >= limit:
+                break
+
+        return Response(result)
+
+
+class SummaryMindmapAPIView(APIView):
+    def get(self, request, pk):
+        try:
+            s = SummaryRecord.objects.using("summariesdb").get(pk=pk)
+        except SummaryRecord.DoesNotExist:
+            return Response({"detail": "not found"}, status=status.HTTP_404_NOT_FOUND)
+        return Response({"mindmap": s.mind_map})
 
 
 class GenerateFromPodcastAPIView(APIView):
