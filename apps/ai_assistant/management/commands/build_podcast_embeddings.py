@@ -17,7 +17,7 @@ import logging
 from typing import List, Dict, Any, Optional
 
 from django.core.management.base import BaseCommand
-from django.db import connections
+from django.db import connections, transaction
 
 logger = logging.getLogger(__name__)
 
@@ -320,6 +320,10 @@ class Command(BaseCommand):
                 """)
                 already_embedded = {row[0] for row in dst_cursor.fetchall()}
 
+        processed_records = 0
+        skipped_records = 0
+        inserted_chunks = 0
+
         with connections["summariesdb"].cursor() as src_cursor:
             if only_record_id:
                 src_cursor.execute("""
@@ -330,7 +334,6 @@ class Command(BaseCommand):
                     WHERE id = %s
                 """, [only_record_id])
             else:
-                # 跳過已經 embedded 的 record
                 src_cursor.execute("""
                     SELECT id, one_sentence_summary, investment_takeaways,
                            tags, entities, arguments, source_filename,
@@ -340,41 +343,51 @@ class Command(BaseCommand):
                 """)
 
             columns = [col[0] for col in src_cursor.description]
-            rows = src_cursor.fetchall()
 
-        records = [
-            dict(zip(columns, row)) for row in rows
-            if row[0] not in already_embedded
-        ]
-        self.stdout.write(f"  → 找到 {len(records)} 筆待處理 record")
+            while True:
+                row = src_cursor.fetchone()
+                if row is None:
+                    break
 
-        if not records:
+                if row[0] in already_embedded:
+                    skipped_records += 1
+                    continue
+
+                record = dict(zip(columns, row))
+                record_id = record["id"]
+
+                # --- Step 2: 切 chunk ---
+                chunks = build_chunks_from_record(record)
+                if not chunks:
+                    skipped_records += 1
+                    self.stdout.write(f"  → record_id={record_id} 沒有可用 chunk，跳過")
+                    continue
+
+                # --- Step 3: Embedding ---
+                self.stdout.write(
+                    f"  → record_id={record_id}: {len(chunks)} 個 chunk，開始 embedding（batch_size={batch_size}）..."
+                )
+                texts = [c["chunk_text"] for c in chunks]
+                embeddings = embed_texts(texts, batch_size=batch_size)
+
+                for chunk, emb in zip(chunks, embeddings):
+                    chunk["embedding"] = emb
+
+                # --- Step 4: 寫入 ai_assistant_db ---
+                with transaction.atomic(using="ai_assistant_db"):
+                    with connections["ai_assistant_db"].cursor() as dst_cursor:
+                        insert_chunks(chunks, dst_cursor)
+
+                processed_records += 1
+                inserted_chunks += len(chunks)
+                self.stdout.write(
+                    f"  → record_id={record_id}: 已寫入 {len(chunks)} 筆 chunk"
+                )
+
+        if processed_records == 0:
             self.stdout.write(self.style.SUCCESS("沒有需要處理的 record，結束。"))
             return
 
-        # --- Step 2: 切 chunk ---
-        self.stdout.write("Step 2: 切 chunk ...")
-        all_chunks = []
-        for rec in records:
-            chunks = build_chunks_from_record(rec)
-            all_chunks.extend(chunks)
-        self.stdout.write(f"  → 共產生 {len(all_chunks)} 個 chunk")
-
-        # --- Step 3: Embedding ---
-        self.stdout.write(f"Step 3: bge-m3 embedding（batch_size={batch_size}）...")
-        texts = [c["chunk_text"] for c in all_chunks]
-        embeddings = embed_texts(texts, batch_size=batch_size)
-
-        for chunk, emb in zip(all_chunks, embeddings):
-            chunk["embedding"] = emb
-
-        self.stdout.write(f"  → embedding 完成")
-
-        # --- Step 4: 寫入 ai_assistant_db ---
-        self.stdout.write("Step 4: 寫入 podcast_embedded_chunks ...")
-        with connections["ai_assistant_db"].cursor() as dst_cursor:
-            insert_chunks(all_chunks, dst_cursor)
-
         self.stdout.write(self.style.SUCCESS(
-            f"完成！共寫入 {len(all_chunks)} 筆 chunk。"
+            f"完成！共處理 {processed_records} 筆 record，寫入 {inserted_chunks} 筆 chunk，跳過 {skipped_records} 筆 record。"
         ))
