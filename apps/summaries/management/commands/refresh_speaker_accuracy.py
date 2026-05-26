@@ -21,44 +21,61 @@ from apps.summaries.models import SpeakerAccuracy
 
 # ── SQL ─────────────────────────────────────────────────────────────────────
 
-# 全體準確率（sector = ''）
+# 全體準確率（sector = ''），相同 podcaster + thesis 只算一次
 _SQL_OVERALL = """
+WITH deduped AS (
+    SELECT DISTINCT ON (sr.podcaster, b.thesis)
+        sr.podcaster,
+        b.result
+    FROM backtesting b
+    JOIN summaries_summaryrecord sr ON b.summary_id = sr.id
+    WHERE b.result IN ('pass','fail','skip')
+      AND sr.podcaster != ''
+      AND b.thesis != ''
+    ORDER BY sr.podcaster, b.thesis, b.id
+)
 SELECT
-    sr.podcaster,
+    podcaster,
     '' AS sector,
-    SUM(CASE WHEN b.result = 'pass' THEN 1 ELSE 0 END) AS pass_count,
-    SUM(CASE WHEN b.result = 'fail' THEN 1 ELSE 0 END) AS fail_count,
-    SUM(CASE WHEN b.result = 'skip' THEN 1 ELSE 0 END) AS skip_count,
-    SUM(CASE WHEN b.result IN ('pass','fail') THEN 1 ELSE 0 END) AS evaluatable
-FROM backtesting b
-JOIN summaries_summaryrecord sr ON b.summary_id = sr.id
-WHERE b.result IN ('pass','fail','skip')
-  AND sr.podcaster != ''
-GROUP BY sr.podcaster
-ORDER BY sr.podcaster;
+    SUM(CASE WHEN result = 'pass' THEN 1 ELSE 0 END) AS pass_count,
+    SUM(CASE WHEN result = 'fail' THEN 1 ELSE 0 END) AS fail_count,
+    SUM(CASE WHEN result = 'skip' THEN 1 ELSE 0 END) AS skip_count,
+    SUM(CASE WHEN result IN ('pass','fail') THEN 1 ELSE 0 END) AS evaluatable
+FROM deduped
+GROUP BY podcaster
+ORDER BY podcaster;
 """
 
-# 分產業準確率（sector 取自 ticker_map；無法對應的略去）
+# 分產業準確率，同樣對 (podcaster, sector, thesis) 去重
 _SQL_BY_SECTOR = """
+WITH deduped AS (
+    SELECT DISTINCT ON (sr.podcaster, tm_agg.sector, b.thesis)
+        sr.podcaster,
+        tm_agg.sector,
+        b.result
+    FROM backtesting b
+    JOIN summaries_summaryrecord sr ON b.summary_id = sr.id
+    JOIN (
+        SELECT ticker, MAX(sector) AS sector
+        FROM ticker_map
+        WHERE ticker != '' AND sector != ''
+        GROUP BY ticker
+    ) tm_agg ON b.ticker = tm_agg.ticker
+    WHERE b.result IN ('pass','fail','skip')
+      AND sr.podcaster != ''
+      AND b.thesis != ''
+    ORDER BY sr.podcaster, tm_agg.sector, b.thesis, b.id
+)
 SELECT
-    sr.podcaster,
-    tm_agg.sector,
-    SUM(CASE WHEN b.result = 'pass' THEN 1 ELSE 0 END) AS pass_count,
-    SUM(CASE WHEN b.result = 'fail' THEN 1 ELSE 0 END) AS fail_count,
-    SUM(CASE WHEN b.result = 'skip' THEN 1 ELSE 0 END) AS skip_count,
-    SUM(CASE WHEN b.result IN ('pass','fail') THEN 1 ELSE 0 END) AS evaluatable
-FROM backtesting b
-JOIN summaries_summaryrecord sr ON b.summary_id = sr.id
-JOIN (
-    SELECT ticker, MAX(sector) AS sector
-    FROM ticker_map
-    WHERE ticker != '' AND sector != ''
-    GROUP BY ticker
-) tm_agg ON b.ticker = tm_agg.ticker
-WHERE b.result IN ('pass','fail','skip')
-  AND sr.podcaster != ''
-GROUP BY sr.podcaster, tm_agg.sector
-ORDER BY sr.podcaster, tm_agg.sector;
+    podcaster,
+    sector,
+    SUM(CASE WHEN result = 'pass' THEN 1 ELSE 0 END) AS pass_count,
+    SUM(CASE WHEN result = 'fail' THEN 1 ELSE 0 END) AS fail_count,
+    SUM(CASE WHEN result = 'skip' THEN 1 ELSE 0 END) AS skip_count,
+    SUM(CASE WHEN result IN ('pass','fail') THEN 1 ELSE 0 END) AS evaluatable
+FROM deduped
+GROUP BY podcaster, sector
+ORDER BY podcaster, sector;
 """
 
 
