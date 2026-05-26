@@ -36,6 +36,18 @@ from apps.podcasts.service import (
 DEFAULT_LIMIT = 5  # 未指定日期時，每個節目預設抓最新幾集
 
 
+def notify(message: str) -> None:
+    """發送 Discord 通知，失敗不影響主流程"""
+    import requests as req
+    webhook_url = os.getenv("DISCORD_WEBHOOK_URL", "")
+    if not webhook_url:
+        return
+    try:
+        req.post(webhook_url, json={"content": message}, timeout=10)
+    except Exception:
+        pass
+
+
 def get_published(entry) -> datetime:
     if getattr(entry, "published_parsed", None):
         return datetime(*entry.published_parsed[:6], tzinfo=timezone.utc)
@@ -58,8 +70,10 @@ def is_in_db(show_name: str, episode_title: str) -> bool:
         return False
 
 
-def matches_filter(title: str, filters: list) -> bool:
-    """filter 是空的就全抓，有值才比對關鍵字"""
+def matches_filter(title: str, filters: list, excludes: list) -> bool:
+    """filter 是空的就全抓，有值才比對關鍵字；exclude 有符合就排除"""
+    if any(e in title for e in excludes):
+        return False
     if not filters:
         return True
     return any(f in title for f in filters)
@@ -97,7 +111,8 @@ def process_show(show_cfg: dict, start_date: datetime | None, outdir: Path) -> d
     else:
         candidates = entries[-DEFAULT_LIMIT:]
 
-    candidates = [e for e in candidates if matches_filter(e.get("title", ""), filters)]
+    excludes = show_cfg.get("exclude", [])
+    candidates = [e for e in candidates if matches_filter(e.get("title", ""), filters, excludes)]
 
     if not candidates:
         print(f"   沒有符合條件的集數")
@@ -141,6 +156,7 @@ def process_show(show_cfg: dict, start_date: datetime | None, outdir: Path) -> d
             except GeminiCorrectionError:
                 print(f"   [!] Gemini 校正失敗，略過資料庫寫入")
                 result["failed"].append(title)
+                notify(f"❌ [{name}] {title} 處理失敗（Gemini 校正失敗）")
                 continue
 
             insert_to_db(
@@ -152,12 +168,14 @@ def process_show(show_cfg: dict, start_date: datetime | None, outdir: Path) -> d
             )
             print(f"   [✓] 完成")
             result["success"].append(title)
+            notify(f"✅ [{name}] {title} 處理完成")
 
         except Exception as e:
             import traceback
             traceback.print_exc()
             print(f"   [!] 失敗：{e}")
             result["failed"].append(title)
+            notify(f"❌ [{name}] {title} 處理失敗（{e}）")
 
     return result
 
@@ -199,18 +217,28 @@ def main():
         all_results.append(result)
 
     # 執行摘要
-    print(f"\n{'='*60}")
-    print(f"=== 執行完成 ===")
     total_success = sum(len(r["success"]) for r in all_results)
     total_skipped = sum(len(r["skipped"]) for r in all_results)
     total_failed  = sum(len(r["failed"])  for r in all_results)
+
+    print(f"\n{'='*60}")
+    print(f"=== 執行完成 ===")
     print(f"成功：{total_success} 集  |  已跳過：{total_skipped} 集  |  失敗：{total_failed} 集")
 
+    # Discord 統計摘要
+    summary_lines = [
+        f"📊 **執行完成**",
+        f"成功：{total_success} 集　|　跳過：{total_skipped} 集　|　失敗：{total_failed} 集",
+    ]
     if total_failed > 0:
         print(f"\n失敗的集數：")
+        summary_lines.append("\n**失敗的集數：**")
         for r in all_results:
             for t in r["failed"]:
                 print(f"  - [{r['show']}] {t}")
+                summary_lines.append(f"- [{r['show']}] {t}")
+
+    notify("\n".join(summary_lines))
 
 
 if __name__ == "__main__":
