@@ -48,3 +48,4 @@ class PodcastTranscript(models.Model):
 
     def __str__(self):
         return f"Transcript: {self.episode.episode_title}"
+    
