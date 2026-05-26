@@ -68,8 +68,21 @@ class PodcastRetrieverTool(Tool):
     def __init__(self, search_fn: Callable):
         self.search_fn = search_fn
 
-    def run(self, query: str, top_k: int = 5, filters: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-        hits = self.search_fn(query, top_k, filters)
+    def run(
+        self,
+        query: str,
+        top_k: Optional[int] = None,
+        filters: Optional[Dict[str, Any]] = None,
+        question_type: Optional[str] = None,
+        must_cover_points: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        hits = self.search_fn(
+            query=query,
+            top_k=top_k,
+            filters=filters,
+            question_type=question_type,
+            must_cover_points=must_cover_points,
+        )
         return [asdict(h) for h in hits]
 
 
@@ -132,6 +145,80 @@ _MULTI_QUERY_PROMPT = """\
 """
 
 
+RETRIEVAL_CFG_BY_TYPE = {
+    "A": {"top_k": 3, "n_candidates": 30, "max_per_episode": None, "multi_query": True, "use_reranker": False},
+    "B": {"top_k": 10, "n_candidates": 50, "max_per_episode": 4, "multi_query": True, "use_reranker": True},
+    "C": {"top_k": 10, "n_candidates": 50, "max_per_episode": 4, "multi_query": True, "use_reranker": True},
+}
+
+
+RETRIEVAL_PLAN_PROMPT = """\
+你是一個 Podcast 內容分析助手，負責為 RAG 系統判斷使用者問題的題型，並定義「完整回答該問題應涵蓋的關鍵面向」。
+
+【題型說明】
+- A（single）：答案主要來自單一集數或少數相鄰 chunk，重點在精準資訊
+- B（multi）：答案需要整合多集 podcast 的內容，重點在多來源整理
+- C（comparison）：答案需要比較不同集數 / 來賓 / 時間點的觀點或變化
+
+---
+
+【使用者問題】
+{question}
+
+---
+
+【任務 1：判斷題型】
+
+請根據使用者問題判斷題型，並遵守以下規則：
+
+### 若題型為 A（single）：
+1. 問題應可由單一集數或少數 chunk 回答
+2. 問題聚焦於具體觀點、解釋或細節
+3. 不需要跨集整合
+
+---
+
+### 若題型為 B（multi）：
+1. 問題應需要多個 chunk / 多集資訊共同回答
+2. 問題為主題型、整理型問題
+3. 避免單一 chunk 就能完整回答
+
+---
+
+### 若題型為 C（comparison）：
+1. 問題必須涉及「比較」或「變化」
+2. 必須涉及不同集數 / 來賓 / 時間點
+3. 問題不能只是列舉，而是要求差異或趨勢
+
+---
+
+【任務 2：生成 must_cover_points】
+
+請定義「完整回答該問題時，應涵蓋的 3~6 個關鍵面向」。
+
+要求：
+1. 每個面向是「資訊類別」，不是句子
+2. 面向之間不可重複
+3. 面向要可用於評估（可以判斷是否被涵蓋）
+4. 面向必須與問題一致，不可偏離
+
+---
+
+【輸出格式】
+
+請輸出 JSON：
+
+{
+  "question_type": "A/B/C",
+  "must_cover_points": [
+    "...",
+    "...",
+    "..."
+  ]
+}
+"""
+
+
 def _expand_queries(query: str) -> List[str]:
     """Multi-Query：用 Gemini 生成 2 個查詢變體，回傳含原始 query 共 3 個。失敗時只回傳原始 query。"""
     try:
@@ -147,6 +234,31 @@ def _expand_queries(query: str) -> List[str]:
     except Exception as e:
         logger.warning(f"multi-query expansion failed: {e}")
         return [query]
+
+
+def _plan_retrieval_query(query: str) -> Dict[str, Any]:
+    """判斷 A/B/C 題型，並產生 B/C query decomposition 用的 must_cover_points。"""
+    try:
+        client = get_gemini_client()
+        resp = client.models.generate_content(
+            model=_get_model_name(),
+            contents=RETRIEVAL_PLAN_PROMPT.replace("{question}", query),
+            config={"response_mime_type": "application/json", "temperature": 0.0},
+        )
+        data = json.loads(resp.text)
+        question_type = str(data.get("question_type") or "A").strip().upper()
+        if question_type not in RETRIEVAL_CFG_BY_TYPE:
+            question_type = "A"
+        must_cover_points = data.get("must_cover_points") or []
+        if not isinstance(must_cover_points, list):
+            must_cover_points = []
+        return {
+            "question_type": question_type,
+            "must_cover_points": [str(p).strip() for p in must_cover_points if str(p).strip()][:6],
+        }
+    except Exception as e:
+        logger.warning(f"retrieval query planning failed: {e}")
+        return {"question_type": "A", "must_cover_points": []}
 
 
 def _cross_encoder_rerank(candidates: List[Dict[str, Any]], query: str, top_n: int = 30) -> List[Dict[str, Any]]:
@@ -181,7 +293,7 @@ def _tokenize_cn(text: str) -> List[str]:
     return tokens
 
 
-def _hybrid_rerank(candidates: List[Dict[str, Any]], query: str, alpha: float = 0.7) -> List[Dict[str, Any]]:
+def _hybrid_rerank(candidates: List[Dict[str, Any]], query: str, alpha: float = 0.6) -> List[Dict[str, Any]]:
     """BM25 + vector 混合重排；combined_score 寫入每筆 candidate。"""
     if not candidates:
         return candidates
@@ -223,26 +335,47 @@ def _apply_diversity(candidates: List[Dict[str, Any]], top_k: int, max_per_episo
 
 def search_podcast_transcript(
     query: str,
-    top_k: int = 5,
+    top_k: Optional[int] = None,
     filters: Optional[Dict[str, Any]] = None,
     n_candidates: Optional[int] = None,
     max_per_episode: Optional[int] = None,
-    use_multi_query: bool = True,
-    use_reranker: bool = True,
+    use_multi_query: Optional[bool] = None,
+    use_reranker: Optional[bool] = None,
+    question_type: Optional[str] = None,
+    must_cover_points: Optional[List[str]] = None,
 ) -> List[PodcastHit]:
     """
     Hybrid (BM25 + vector) search with optional metadata filter and diversity control.
 
     filters:         entity_companies / entity_people / entity_regions / date_from / date_to
-    n_candidates:    candidate pool size per query before reranking（default: max(top_k * 4, 50)）
+    question_type:   A uses multi-query; B/C prefer must_cover_points as sub queries
+    n_candidates:    candidate pool size per query before reranking
     max_per_episode: max chunks per episode for diversity（None = no limit）
-    use_multi_query: expand query into 3 variants and merge results
+    use_multi_query: expand query into 3 variants and merge results（A 題型預設開啟）
     use_reranker:    apply cross-encoder reranking after BM25 hybrid
     """
     from django.db import connections
 
+    retrieval_plan: Dict[str, Any] = {}
+    normalized_qtype = (question_type or "").strip().upper()
+    if normalized_qtype not in RETRIEVAL_CFG_BY_TYPE:
+        retrieval_plan = _plan_retrieval_query(query)
+        normalized_qtype = retrieval_plan["question_type"]
+
+    if must_cover_points is None:
+        must_cover_points = retrieval_plan.get("must_cover_points") or []
+
+    cfg = RETRIEVAL_CFG_BY_TYPE[normalized_qtype]
+    if top_k is None:
+        top_k = cfg["top_k"]
     if n_candidates is None:
-        n_candidates = max(top_k * 4, 50)
+        n_candidates = cfg["n_candidates"]
+    if max_per_episode is None:
+        max_per_episode = cfg["max_per_episode"]
+    if use_multi_query is None:
+        use_multi_query = cfg["multi_query"]
+    if use_reranker is None:
+        use_reranker = cfg["use_reranker"]
 
     try:
         # Build WHERE（所有 query 變體共用同一組 filter）
@@ -300,8 +433,13 @@ def search_podcast_transcript(
                 cur.execute(sql, [vec_str] + wparams + [vec_str, limit])
                 return cur.fetchall()
 
-        # Multi-query 展開（失敗時自動 fallback 成單一 query）
-        queries = _expand_queries(query) if use_multi_query else [query]
+        # A 型：用 multi-query 改寫。B/C 型：優先用 must_cover_points 做 query decomposition。
+        if normalized_qtype in ("B", "C") and must_cover_points:
+            queries = [query] + [str(p).strip() for p in must_cover_points if str(p).strip()][:4]
+        elif use_multi_query:
+            queries = _expand_queries(query)
+        else:
+            queries = [query]
 
         # 對每個 query 各自 retrieve，合并取各 chunk 最高分
         merged: Dict[int, Dict[str, Any]] = {}
