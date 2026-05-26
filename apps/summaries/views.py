@@ -8,7 +8,7 @@ from rest_framework import status
 from .serializers import SummarizeRequestSerializer, GenerateFromPodcastSerializer
 from .services.engine import summarize_from_srt_text
 from .services.backtesting import create_backtesting_rows
-from .models import SummaryRecord, BacktestingRecord, TickerMap
+from .models import SummaryRecord, BacktestingRecord, TickerMap, SpeakerAccuracy
 from apps.podcasts.models import PodcastEpisode
 from apps.glossary.services.annotator import annotate
 from apps.mindmap.services.gemini_mindmap import generate_mindmap_json
@@ -106,69 +106,26 @@ def _save_summary(result: dict, *, mode: str,
 
 
 class AccuracyRankingAPIView(APIView):
-    """依 sector 篩選的講者準確率排名（去重邏輯與 showPodcaster 一致）"""
-
-    SECTOR_MAP = {
-        '半導體/電子元件': ['半導體/電子元件'],
-        '科技類':          ['科技硬體', '科技大廠', '軟體/雲端', '電子通路'],
-        '台股指數':        ['台股指數', '半導體指數'],
-        '海外指數':        ['美股指數', '中國指數'],
-        '大宗商品/外匯':   ['大宗商品', '外匯'],
-        'ETF':             ['ETF'],
-        '能源/電動車':     ['能源/電動車'],
-        '其他產業':        ['航運', '傳統產業', '金融', '生技/醫療', '其他'],
-    }
+    """從 speaker_accuracy 快照表取得講者準確率排名"""
 
     def get(self, request):
-        from collections import defaultdict
-        from django.db.models import Q
-
         sector = request.query_params.get('sector', '').strip()
 
-        qs = (BacktestingRecord.objects.using('summariesdb')
-              .exclude(result='pending')
-              .select_related('summary'))
+        qs = (SpeakerAccuracy.objects.using('summariesdb')
+              .filter(sector=sector)
+              .exclude(accuracy=None)
+              .order_by('-accuracy', '-evaluatable'))
 
-        if sector:
-            sector_vals = self.SECTOR_MAP.get(sector)
-            if not sector_vals:
-                return Response([])
-            ticker_set = set(TickerMap.objects.filter(
-                sector__in=sector_vals).values_list('ticker', flat=True))
-            asset_set = set(TickerMap.objects.filter(
-                sector__in=sector_vals).values_list('asset_name', flat=True))
-            qs = qs.filter(Q(ticker__in=ticker_set) | Q(asset__in=asset_set))
-
-        # 去重：同一講者同一 thesis 只算一次
-        stats = defaultdict(lambda: {'pass': 0, 'fail': 0})
-        seen  = defaultdict(set)
-        for r in qs:
-            podcaster = (getattr(r.summary, 'podcaster', '') or '').strip()
-            if not podcaster:
-                continue
-            thesis = r.thesis or ''
-            if not thesis or thesis in seen[podcaster]:
-                continue
-            seen[podcaster].add(thesis)
-            if r.result == 'pass':
-                stats[podcaster]['pass'] += 1
-            elif r.result == 'fail':
-                stats[podcaster]['fail'] += 1
-
-        result = []
-        for podcaster, d in stats.items():
-            total = d['pass'] + d['fail']
-            if total == 0:
-                continue
-            result.append({
-                'podcaster': podcaster,
-                'pass':      d['pass'],
-                'fail':      d['fail'],
-                'total':     total,
-                'accuracy':  round(d['pass'] / total * 100),
-            })
-
-        result.sort(key=lambda x: (-x['accuracy'], -x['total']))
+        result = [
+            {
+                'podcaster': row.podcaster,
+                'pass':      row.pass_count,
+                'fail':      row.fail_count,
+                'total':     row.evaluatable,
+                'accuracy':  round(row.accuracy * 100) if row.accuracy is not None else None,
+            }
+            for row in qs
+        ]
         return Response(result)
 
 
