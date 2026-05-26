@@ -1,9 +1,12 @@
 import json
 import re
 import os
+import time
+import concurrent.futures
 from datetime import datetime, timedelta, timezone
 
 from google import genai
+from google.genai import errors as genai_errors
 from django.conf import settings
 from django.db import connections
 
@@ -25,6 +28,58 @@ def get_client():
             location=settings.VERTEX_LOCATION,
         )
     return _client
+
+
+_GEMINI_TIMEOUT = 90  # 秒，單次 API 呼叫超過此時間視為 hang
+
+
+def _call_gemini_with_retry(contents: str, max_retries: int = 5) -> str:
+    """
+    呼叫 Gemini API。
+    - 超過 90 秒沒回應（hang）：重試，等待 30 → 60 → 90 秒
+    - 429 RESOURCE_EXHAUSTED：等待 60 → 120 → 180 秒
+    - 其他錯誤：等待 2 → 4 → 8 秒
+    """
+    client = get_client()
+    model_name = getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash-lite")
+
+    for attempt in range(1, max_retries + 1):
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        try:
+            future = executor.submit(
+                client.models.generate_content, model=model_name, contents=contents
+            )
+            response = future.result(timeout=_GEMINI_TIMEOUT)
+            executor.shutdown(wait=False)
+            return response.text
+
+        except concurrent.futures.TimeoutError:
+            executor.shutdown(wait=False)  # 不等背景執行緒，直接放棄
+            if attempt == max_retries:
+                raise TimeoutError(f"Gemini API 連續 {max_retries} 次超時（{_GEMINI_TIMEOUT}s）")
+            wait = 30 * attempt
+            print(f"  ⚠️  Gemini API 超時（第 {attempt} 次），{wait}s 後重試...")
+            time.sleep(wait)
+
+        except genai_errors.ClientError as e:
+            executor.shutdown(wait=False)
+            if attempt == max_retries:
+                raise
+            if e.code == 429:
+                wait = 60 * attempt
+                print(f"  ⚠️  Gemini API 429 Quota 耗盡（第 {attempt} 次），{wait}s 後重試...")
+            else:
+                wait = 2 ** attempt
+                print(f"  ⚠️  Gemini API 錯誤（第 {attempt} 次），{wait}s 後重試。錯誤：{e}")
+            time.sleep(wait)
+
+        except Exception as e:
+            executor.shutdown(wait=False)
+            if attempt == max_retries:
+                raise
+            wait = 2 ** attempt
+            print(f"  ⚠️  Gemini API 失敗（第 {attempt} 次），{wait}s 後重試。錯誤：{e}")
+            time.sleep(wait)
 
 
 # ==========================================
@@ -135,10 +190,7 @@ def extract_graph_from_summary(podcast_summary: str) -> str | None:
     print("\n🧠 [階段一] 呼叫 LLM 萃取 JSON 結構資料...")
     request_content = f"{prompt}\n\n【Podcast 摘要內容】：\n{podcast_summary}"
 
-    client = get_client()
-    model_name = getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash-lite")
-    response = client.models.generate_content(model=model_name, contents=request_content)
-    output_text = response.text
+    output_text = _call_gemini_with_retry(request_content)
 
     json_match = re.search(r'```json\n(.*?)\n```', output_text, re.DOTALL | re.IGNORECASE)
     if json_match:
@@ -178,10 +230,7 @@ def _resolve_node_name(llm_name: str, existing_names: list) -> str:
         "若清單中沒有符合的，請只回覆 NONE。不要解釋。"
     )
     try:
-        client = get_client()
-        model_name = getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash-lite")
-        response = client.models.generate_content(model=model_name, contents=prompt)
-        result = response.text.strip()
+        result = _call_gemini_with_retry(prompt).strip()
         if result != "NONE" and result in existing_names:
             return result
     except Exception as e:
@@ -196,10 +245,11 @@ def _is_similar_reason(reason1: str, reason2: str) -> bool:
         f"描述一：{reason1}\n"
         f"描述二：{reason2}"
     )
-    client = get_client()
-    model_name = getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash-lite")
-    response = client.models.generate_content(model=model_name, contents=prompt)
-    return response.text.strip().upper().startswith("YES")
+    try:
+        return _call_gemini_with_retry(prompt).strip().upper().startswith("YES")
+    except Exception as e:
+        print(f"⚠️ reason 比對失敗，視為不重複。錯誤：{e}")
+        return False
 
 
 def _link_duplicate_exists(cursor, source: str, target: str, reason: str) -> bool:
@@ -245,8 +295,8 @@ def save_to_db(json_data_str: str, summary_date: str, podcast_source: str):
 
         for node in data.get("nodes", []):
             llm_name = node.get("id") or node.get("name")
-            industry = node.get("industry", "未分類")
-            if not llm_name:
+            industry = node.get("industry")
+            if not llm_name or not industry:
                 continue
 
             canonical = _resolve_node_name(llm_name, existing_names)
@@ -286,13 +336,6 @@ def save_to_db(json_data_str: str, summary_date: str, podcast_source: str):
             if source not in all_nodes or target not in all_nodes:
                 print(f"  ⚠️  跳過 link（節點不存在）：{source} → {target}")
                 continue
-                # 確保 source 和 target 節點存在，否則自動補建
-            for node_name in [source, target]:
-                if not _node_exists(cursor, node_name):
-                    cursor.execute(
-                    "INSERT INTO nodes (name, industry) VALUES (%s, %s)",
-                    [node_name, "未分類"],
-                )
 
             if _link_duplicate_exists(cursor, source, target, reason):
                 print(f"  ⏭️  link 重複，跳過：{source} → {target}")
@@ -321,19 +364,36 @@ def process_all_summaries():
     total = records.count()
     print(f"\n📚 共 {total} 筆摘要待處理")
 
+    # 查詢已處理過的 podcast_source，跳過重複處理
+    with connections["knowledge_graphdb"].cursor() as cursor:
+        cursor.execute("SELECT DISTINCT podcast_source FROM links")
+        processed_sources = {row[0] for row in cursor.fetchall()}
+    print(f"⏭️  已處理過：{len(processed_sources)} 筆")
+
+    skipped = 0
     for i, record in enumerate(records, 1):
-        print(f"\n[{i}/{total}] 處理摘要 #{record.id}: {record.source_filename or '(無檔名)'}")
-        summary_text = build_summary_text(record)
-        summary_date = record.created_at.date().isoformat()
         podcast_source = record.source_filename or f"record-{record.id}"
 
-        extracted_json = extract_graph_from_summary(summary_text)
-        if extracted_json:
-            save_to_db(
-                json_data_str=extracted_json,
-                summary_date=summary_date,
-                podcast_source=podcast_source,
-            )
+        if podcast_source in processed_sources:
+            skipped += 1
+            continue
+
+        print(f"\n[{i}/{total}] 處理摘要 #{record.id}: {record.source_filename or '(無檔名)'}")
+        try:
+            summary_text = build_summary_text(record)
+            summary_date = (record.published_at or record.created_at).date().isoformat()
+
+            extracted_json = extract_graph_from_summary(summary_text)
+            if extracted_json:
+                save_to_db(
+                    json_data_str=extracted_json,
+                    summary_date=summary_date,
+                    podcast_source=podcast_source,
+                )
+        except Exception as e:
+            print(f"❌ [{i}/{total}] 處理失敗，跳過此筆。錯誤：{e}")
+
+    print(f"\n✅ 完成！略過已處理 {skipped} 筆，共處理 {total - skipped} 筆。")
 
 
 def process_new_podcast(summary_text: str, summary_date: str, podcast_source: str):

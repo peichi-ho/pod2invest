@@ -1,11 +1,26 @@
 import json
 import re
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, date as date_type
 
 from google import genai
 from django.conf import settings
 from django.db import connections
+
+
+# ==========================================
+# 輔助：取得資料庫最新日期
+# ==========================================
+def get_latest_date_in_db() -> date_type:
+    """從 knowledge_graphdb 取得 links 表中最新的 summary_date。"""
+    with connections["knowledge_graphdb"].cursor() as cursor:
+        cursor.execute("SELECT MAX(summary_date) FROM links")
+        result = cursor.fetchone()[0]
+    if result is None:
+        return datetime.now(timezone.utc).date()
+    if isinstance(result, str):
+        return datetime.fromisoformat(result).date()
+    return result
 
 
 # ==========================================
@@ -71,17 +86,19 @@ def get_graph_data(
 
     Links 的 reason 會透過 LLM 合併語意相似項目。
     """
-    # 日期預設值：最近 7 天
+    # 日期預設值：以資料庫最新日期為錨點，往前推 6 天（共 7 天）
+    latest_date = get_latest_date_in_db()
+
     if not start_date and not end_date:
-        today = datetime.now(timezone.utc).date()
-        end_date = today.isoformat()
-        start_date = (today - timedelta(days=7)).isoformat()
+        end_date = latest_date.isoformat()
+        start_date = (latest_date - timedelta(days=6)).isoformat()
     elif start_date and not end_date:
-        start_date_obj = datetime.fromisoformat(start_date) 
-        end_date = (start_date_obj + timedelta(days=7)).isoformat()
+        start_obj = datetime.fromisoformat(start_date).date()
+        computed_end = start_obj + timedelta(days=6)
+        end_date = min(computed_end, latest_date).isoformat()
     elif end_date and not start_date:
-        end_date_obj = datetime.fromisoformat(end_date)
-        start_date = (end_date_obj - timedelta(days=7)).isoformat()
+        end_obj = datetime.fromisoformat(end_date).date()
+        start_date = (end_obj - timedelta(days=6)).isoformat()
 
     filter_parts = [f"日期 {start_date} ～ {end_date}"]
     if industry:
@@ -181,7 +198,7 @@ def generate_graph_narrative(nodes: list, links: list, filters: dict) -> str:
         f"【所有節點】\n{nodes_text}\n\n"
         f"【所有連線】\n{links_text}\n\n"
         "請用繁體中文，以專業投資人的角度，撰寫圖譜解讀：\n"
-        "1. 以最關鍵的節點是誰、為何連線最多，去解釋這張圖譜值得注意的訊號\n"
+        "1. 從最關鍵的節點與連線，去解釋這張圖譜值得注意的訊號\n"
         "2. 對投資人最重要的啟示\n"
         "語氣：專業但簡潔易讀，用連貫段落，不要用條列，字數不要太多。"
     )
@@ -193,3 +210,165 @@ def generate_graph_narrative(nodes: list, links: list, filters: dict) -> str:
         return response.text.strip()
     except Exception as e:
         raise RuntimeError(f"圖譜解讀生成失敗: {e}")
+
+
+# ==========================================
+# 模組 4: 兩期差異比較
+# ==========================================
+def get_graph_diff(
+    a_start: str,
+    a_end: str,
+    b_start: str,
+    b_end: str,
+    industry: str = None,
+) -> dict:
+    """
+    比較期間 A 與期間 B 的知識圖譜差異。
+
+    比較單位為 (source, target, relation_type)，與原有圖譜一致：
+    每條連線只有一種關係類型，不會出現 old_types / new_types 陣列。
+
+    回傳 status：
+      - "new"      : 只在期間 B 出現
+      - "removed"  : 只在期間 A 出現
+      - "unchanged": 兩期皆有（relation_type 完全相同）
+
+    每條 link 附帶 reasons（來自 DB）與 weight（該期間出現次數）。
+    """
+    with connections["knowledge_graphdb"].cursor() as cursor:
+        cursor.execute("SELECT name, industry FROM nodes")
+        node_info = {row[0]: row[1] for row in cursor.fetchall()}
+
+        def fetch_links(start, end):
+            cursor.execute(
+                "SELECT source, target, relation_type, reason FROM links "
+                "WHERE summary_date BETWEEN %s AND %s",
+                [start, end],
+            )
+            return cursor.fetchall()
+
+        raw_a = fetch_links(a_start, a_end)
+        raw_b = fetch_links(b_start, b_end)
+
+    def apply_filter(raw):
+        if not industry:
+            return raw
+        kw = industry.lower()
+        return [
+            (s, t, rt, r) for s, t, rt, r in raw
+            if kw in node_info.get(s, "").lower() or kw in s.lower()
+            or kw in node_info.get(t, "").lower() or kw in t.lower()
+        ]
+
+    links_a = apply_filter(raw_a)
+    links_b = apply_filter(raw_b)
+
+    # 以 (source, target, relation_type) 為 key，收集 reasons 並計算 weight
+    def group_links(links):
+        grouped: dict[tuple, dict] = {}
+        for s, t, rt, reason in links:
+            key = (s, t, rt)
+            if key not in grouped:
+                grouped[key] = {"reasons": [], "weight": 0}
+            if reason:
+                grouped[key]["reasons"].append(reason)
+            grouped[key]["weight"] += 1
+        return grouped
+
+    grouped_a = group_links(links_a)
+    grouped_b = group_links(links_b)
+
+    nodes_in_a = {n for (s, t, rt) in grouped_a for n in (s, t)}
+    nodes_in_b = {n for (s, t, rt) in grouped_b for n in (s, t)}
+
+    all_keys = set(grouped_a) | set(grouped_b)
+    final_links = []
+
+    for (source, target, relation_type) in all_keys:
+        in_a = (source, target, relation_type) in grouped_a
+        in_b = (source, target, relation_type) in grouped_b
+
+        if in_a and in_b:
+            d = grouped_b[(source, target, relation_type)]
+            status = "unchanged"
+        elif in_b:
+            d = grouped_b[(source, target, relation_type)]
+            status = "new"
+        else:
+            d = grouped_a[(source, target, relation_type)]
+            status = "removed"
+
+        final_links.append({
+            "source":        source,
+            "target":        target,
+            "relation_type": relation_type,
+            "status":        status,
+            "weight":        d["weight"],
+            "reasons":       d["reasons"],
+        })
+
+    def node_status(name):
+        in_a = name in nodes_in_a
+        in_b = name in nodes_in_b
+        if in_a and in_b:
+            return "unchanged"
+        return "new" if in_b else "removed"
+
+    all_nodes = nodes_in_a | nodes_in_b
+    final_nodes = [
+        {"id": n, "industry": node_info.get(n, "未分類"), "status": node_status(n)}
+        for n in all_nodes
+    ]
+
+    summary = {
+        "new":       sum(1 for l in final_links if l["status"] == "new"),
+        "removed":   sum(1 for l in final_links if l["status"] == "removed"),
+        "unchanged": sum(1 for l in final_links if l["status"] == "unchanged"),
+    }
+
+    print(f"✅ Diff 完成：{summary}")
+    return {"nodes": final_nodes, "links": final_links, "summary": summary}
+
+
+# ==========================================
+# 模組 5: 差異圖譜 AI 解讀
+# ==========================================
+def generate_graph_diff_narrative(
+    nodes: list,
+    links: list,
+    filters: dict,
+) -> str:
+    """
+    根據兩期 Diff 資料，用 Gemini 生成投資人視角的變化解讀。
+    """
+    new_links     = [l for l in links if l.get("status") == "new"]
+    removed_links = [l for l in links if l.get("status") == "removed"]
+
+    def fmt(link_list):
+        return json.dumps(
+            [{"來源": l["source"], "目標": l["target"],
+              "關係": l.get("relation_type", ""),
+              "提及次數": l.get("weight", 1),
+              "原因摘要": (l.get("reasons") or [])}
+             for l in link_list],
+            ensure_ascii=False, indent=2,
+        )
+
+
+    prompt = (
+        "你是一位財經分析師，正在比較兩個時間區間的產業關聯知識圖譜變化。\n\n"
+        f"【新增連線（期間 B 才出現）】\n{fmt(new_links)}\n\n"
+        f"【消失連線（期間 A 有但 B 沒有）】\n{fmt(removed_links)}\n\n"
+        "請用繁體中文，以投資人的角度解讀這段期間的結構變化：\n"
+        "哪些新興或消失關係值得關注？背後代表的是新的產業合作或是邊緣化\n"
+        "只挑選最具有「商業與投資解讀價值」的 Top 3 差異點\n"
+        "語氣：專業簡潔，用連貫段落，字數不要太多。"
+    )
+
+    try:
+        client = _get_client()
+        model_name = getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash-lite")
+        response = client.models.generate_content(model=model_name, contents=prompt)
+        return response.text.strip()
+    except Exception as e:
+        raise RuntimeError(f"差異解讀生成失敗: {e}")

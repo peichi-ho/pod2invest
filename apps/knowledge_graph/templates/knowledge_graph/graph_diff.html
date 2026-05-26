@@ -1,0 +1,749 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>圖譜變化比較</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            background-color: #1a1a1a;
+            color: #ffffff;
+            font-family: "PingFang TC", "Microsoft JhengHei", sans-serif;
+            overflow: hidden;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* ── 頂部控制列 ── */
+        #control-bar {
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 10px 20px;
+            background: rgba(10, 10, 10, 0.90);
+            border-bottom: 1px solid #333;
+            backdrop-filter: blur(6px);
+            flex-wrap: wrap;
+        }
+
+        #control-bar label {
+            font-size: 12px;
+            color: #aaa;
+            white-space: nowrap;
+        }
+
+        .period-group {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 10px;
+            border-radius: 8px;
+            border: 1px solid #333;
+        }
+        .period-group.period-a { border-color: #555; }
+        .period-group.period-b { border-color: #1a6fb5; }
+
+        .period-label {
+            font-size: 11px;
+            font-weight: bold;
+            padding: 2px 7px;
+            border-radius: 4px;
+            white-space: nowrap;
+        }
+        .period-a .period-label { background: #3a3a3a; color: #aaa; }
+        .period-b .period-label { background: #1a3a5c; color: #7ec8ff; }
+
+        #control-bar input[type="text"],
+        #control-bar input[type="date"] {
+            background: #2a2a2a;
+            border: 1px solid #444;
+            border-radius: 6px;
+            color: #eee;
+            font-size: 12px;
+            padding: 5px 8px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+        #control-bar input[type="text"] { width: 140px; }
+        #control-bar input[type="date"] { width: 130px; cursor: pointer; }
+        #control-bar input:focus { border-color: #4db8ff; }
+        #control-bar input[type="date"]::-webkit-calendar-picker-indicator {
+            filter: invert(0.7); cursor: pointer;
+        }
+
+        #control-bar select {
+            background: #2a2a2a;
+            border: 1px solid #444;
+            border-radius: 6px;
+            color: #eee;
+            font-size: 12px;
+            padding: 5px 8px;
+            outline: none;
+            cursor: pointer;
+            max-width: 130px;
+        }
+
+        #btn-query {
+            padding: 7px 18px;
+            background: #1a6fb5;
+            border: none;
+            border-radius: 6px;
+            color: #fff;
+            font-size: 13px;
+            cursor: pointer;
+            transition: background 0.2s;
+            white-space: nowrap;
+        }
+        #btn-query:hover { background: #2585d4; }
+        #btn-query:disabled { background: #444; cursor: not-allowed; }
+
+        #status-msg {
+            font-size: 12px;
+            color: #666;
+            margin-left: auto;
+            white-space: nowrap;
+        }
+
+        /* ── 圖表區 ── */
+        #chart-container {
+            flex: 1;
+            position: relative;
+            overflow: hidden;
+        }
+        #chart-container svg { display: block; }
+
+        /* ── Loading ── */
+        #loading {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(26,26,26,0.75);
+            font-size: 18px;
+            color: #888;
+            z-index: 50;
+        }
+        #loading.hidden { display: none; }
+
+        #empty-msg {
+            position: absolute;
+            inset: 0;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+            color: #666;
+        }
+        #empty-msg.visible { display: flex; }
+
+        /* ── Tooltip ── */
+        #tooltip {
+            position: absolute;
+            padding: 12px;
+            background: rgba(20, 20, 20, 0.97);
+            border: 1px solid #555;
+            border-radius: 8px;
+            pointer-events: none;
+            font-size: 13px;
+            line-height: 1.6;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.7);
+            display: none;
+            z-index: 100;
+            max-width: 300px;
+        }
+        .tooltip-title { font-weight: bold; color: #4db8ff; margin-bottom: 6px; font-size: 14px; }
+        .tag-new       { color: #4CAF50; font-weight: bold; }
+        .tag-removed   { color: #F44336; font-weight: bold; }
+        .tag-unchanged { color: #888; }
+
+        /* ── 差異摘要面板 ── */
+        #diff-summary {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(0,0,0,0.70);
+            padding: 14px 16px;
+            border-radius: 8px;
+            font-size: 13px;
+            border: 1px solid #383838;
+            min-width: 170px;
+        }
+        .diff-title {
+            color: #888;
+            font-size: 11px;
+            margin-bottom: 10px;
+            letter-spacing: 0.5px;
+        }
+        .diff-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 7px;
+            gap: 12px;
+        }
+        .diff-dot {
+            width: 10px; height: 10px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+        .diff-label { color: #ccc; flex: 1; }
+        .diff-count { font-weight: bold; font-size: 15px; }
+
+        /* ── 圖例 ── */
+        #legend {
+            position: absolute;
+            bottom: 20px;
+            left: 210px;
+            background: rgba(0,0,0,0.65);
+            padding: 14px 16px;
+            border-radius: 8px;
+            font-size: 12px;
+            pointer-events: none;
+            border: 1px solid #383838;
+        }
+        .legend-title { color: #888; font-size: 11px; margin-bottom: 8px; }
+        .legend-item  { display: flex; align-items: center; margin-bottom: 5px; gap: 8px; }
+        .legend-line  { width: 28px; height: 3px; flex-shrink: 0; border-radius: 2px; }
+        .legend-line.dashed {
+            background: repeating-linear-gradient(
+                to right, #F44336 0, #F44336 5px, transparent 5px, transparent 9px
+            );
+        }
+
+        /* ── AI 解讀面板 ── */
+        #narrative-panel {
+            position: absolute;
+            top: 16px;
+            right: 16px;
+            width: 320px;
+            max-height: calc(100vh - 120px);
+            background: rgba(10, 10, 10, 0.92);
+            border: 1px solid #3a3a3a;
+            border-radius: 10px;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 4px 24px rgba(0,0,0,0.6);
+            transition: width 0.25s ease, opacity 0.25s ease;
+            z-index: 50;
+        }
+        #narrative-panel.collapsed { width: 42px; overflow: hidden; }
+        #narrative-panel.collapsed #narrative-header-title,
+        #narrative-panel.collapsed #narrative-body { display: none; }
+
+        #narrative-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 14px;
+            border-bottom: 1px solid #333;
+            cursor: pointer;
+            flex-shrink: 0;
+            user-select: none;
+        }
+        #narrative-header-title { font-size: 13px; font-weight: bold; color: #FF9800; white-space: nowrap; }
+        #narrative-toggle-btn  { background: none; border: none; color: #888; font-size: 16px; cursor: pointer; padding: 0; }
+
+        #narrative-body { overflow-y: auto; padding: 12px 14px; flex: 1; }
+        #narrative-body::-webkit-scrollbar { width: 4px; }
+        #narrative-body::-webkit-scrollbar-thumb { background: #444; border-radius: 2px; }
+        #narrative-loading { color: #666; font-size: 13px; text-align: center; padding: 20px 0; display: none; }
+        #narrative-text    { font-size: 13px; line-height: 1.8; color: #ccc; white-space: pre-wrap; }
+        #narrative-filter-label { font-size: 11px; color: #555; margin-bottom: 10px; }
+
+        /* 連線 hover */
+        .link-group:hover .link-visible { stroke-opacity: 1 !important; }
+    </style>
+</head>
+<body>
+
+<!-- 控制列 -->
+<div id="control-bar">
+    <div class="ctrl-group" style="display:flex;align-items:center;gap:8px;">
+        <label>產業 / 公司</label>
+        <input type="text" id="input-industry" placeholder="不填表示全部">
+        <select id="select-industry">
+            <option value="">-- 快速選擇 --</option>
+        </select>
+    </div>
+
+    <div class="period-group period-a">
+        <span class="period-label">期間 A（前）</span>
+        <label>從</label>
+        <input type="date" id="a-start">
+        <label>至</label>
+        <input type="date" id="a-end">
+    </div>
+
+    <div class="period-group period-b">
+        <span class="period-label">期間 B（後）</span>
+        <label>從</label>
+        <input type="date" id="b-start">
+        <label>至</label>
+        <input type="date" id="b-end">
+    </div>
+
+    <button id="btn-query">比較</button>
+    <span id="status-msg">載入中...</span>
+</div>
+
+<!-- 圖表區 -->
+<div id="chart-container">
+    <div id="loading">載入比較資料中...</div>
+    <div id="empty-msg">無符合條件的資料</div>
+    <div id="tooltip"></div>
+
+    <!-- AI 解讀 -->
+    <div id="narrative-panel">
+        <div id="narrative-header">
+            <button id="narrative-toggle-btn" title="收合/展開">◀</button>
+            <span id="narrative-header-title">✦ AI 變化解讀</span>
+        </div>
+        <div id="narrative-body">
+            <div id="narrative-filter-label"></div>
+            <div id="narrative-loading">AI 解讀生成中...</div>
+            <div id="narrative-text"></div>
+        </div>
+    </div>
+
+    <!-- 差異摘要 -->
+    <div id="diff-summary">
+        <div class="diff-title">連線變化摘要</div>
+        <div class="diff-row">
+            <div class="diff-dot" style="background:#4CAF50"></div>
+            <span class="diff-label">新增</span>
+            <span class="diff-count" id="count-new" style="color:#4CAF50">—</span>
+        </div>
+        <div class="diff-row">
+            <div class="diff-dot" style="background:#F44336"></div>
+            <span class="diff-label">消失</span>
+            <span class="diff-count" id="count-removed" style="color:#F44336">—</span>
+        </div>
+        <div class="diff-row">
+            <div class="diff-dot" style="background:#555"></div>
+            <span class="diff-label">維持不變</span>
+            <span class="diff-count" id="count-unchanged" style="color:#555">—</span>
+        </div>
+    </div>
+
+    <!-- 圖例 -->
+    <div id="legend">
+        <div class="legend-title">連線顏色 = 變化狀態</div>
+        <div class="legend-item"><div class="legend-line" style="background:#4CAF50"></div><span style="color:#ccc">新增（期間 B 才出現）</span></div>
+        <div class="legend-item"><div class="legend-line dashed"></div><span style="color:#ccc">消失（期間 A 有，B 沒有）</span></div>
+        <div class="legend-item"><div class="legend-line" style="background:#444"></div><span style="color:#ccc">維持不變</span></div>
+        <div class="legend-title" style="margin-top:10px">節點顏色 = 出現狀態</div>
+        <div class="legend-item"><div class="diff-dot" style="background:#4CAF50;width:12px;height:12px;border-radius:2px"></div><span style="color:#ccc">新節點</span></div>
+        <div class="legend-item"><div class="diff-dot" style="background:#F44336;width:12px;height:12px;border-radius:2px"></div><span style="color:#ccc">消失節點</span></div>
+        <div class="legend-item"><div class="diff-dot" style="background:#888;width:12px;height:12px;border-radius:2px"></div><span style="color:#ccc">兩期均有</span></div>
+    </div>
+</div>
+
+<script>
+(() => {
+    // ── 顏色常數 ──
+    const STATUS_COLORS = {
+        new:       "#4CAF50",
+        removed:   "#F44336",
+        unchanged: "#444444",
+    };
+    const NODE_COLORS = {
+        new:       "#4CAF50",
+        removed:   "#F44336",
+        unchanged: "#888888",
+    };
+
+    // ── SVG 初始化 ──
+    const container = document.getElementById("chart-container");
+    let width  = container.clientWidth;
+    let height = container.clientHeight;
+
+    const svg = d3.select("#chart-container")
+        .append("svg")
+        .attr("width", width)
+        .attr("height", height);
+
+    // 箭頭 markers
+    const defs = svg.append("defs");
+    Object.entries(STATUS_COLORS).forEach(([status, color]) => {
+        defs.append("marker")
+            .attr("id", `marker-${status}`)
+            .attr("viewBox", "0 -5 10 10")
+            .attr("refX", 30).attr("refY", 0)
+            .attr("markerUnits", "userSpaceOnUse")
+            .attr("markerWidth", 10).attr("markerHeight", 10)
+            .attr("orient", "auto")
+            .append("path")
+            .attr("fill", color)
+            .attr("d", "M0,-5L10,0L0,5");
+    });
+
+    const g   = svg.append("g");
+    const zoom = d3.zoom().scaleExtent([0.1, 4])
+        .on("zoom", e => g.attr("transform", e.transform));
+    svg.call(zoom);
+
+    let simulation = null;
+    let maxDate    = null;
+
+    // ── UI refs ──
+    const loadingEl = document.getElementById("loading");
+    const emptyEl   = document.getElementById("empty-msg");
+    const statusMsg = document.getElementById("status-msg");
+    const btnQuery  = document.getElementById("btn-query");
+    const tooltip   = d3.select("#tooltip");
+
+    const aStart = document.getElementById("a-start");
+    const aEnd   = document.getElementById("a-end");
+    const bStart = document.getElementById("b-start");
+    const bEnd   = document.getElementById("b-end");
+
+    // ── 日期工具 ──
+    function addDays(dateStr, days) {
+        const [y, m, d] = dateStr.split('-').map(Number);
+        const dt = new Date(y, m - 1, d);
+        dt.setDate(dt.getDate() + days);
+        return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`;
+    }
+    function diffDays(s, e) {
+        return Math.round((new Date(e) - new Date(s)) / 86400000);
+    }
+
+    // 每個期間的 change handler：只在超過 6 天時更新提示，不強制修正
+    function makeChangeHandler(startEl, endEl) {
+        return () => {
+            if (!startEl.value || !endEl.value) return;
+            const span = diffDays(startEl.value, endEl.value) + 1;
+            if (span > 7) {
+                statusMsg.textContent = `⚠ 某個期間跨度為 ${span} 天，請調整至 7 天以內`;
+                statusMsg.style.color = "#f87171";
+            } else {
+                statusMsg.style.color = "#666";
+            }
+        };
+    }
+    aStart.addEventListener("change", makeChangeHandler(aStart, aEnd));
+    aEnd.addEventListener("change",   () => {
+        if (maxDate && aEnd.value > maxDate) aEnd.value = maxDate;
+        makeChangeHandler(aStart, aEnd)();
+    });
+    bStart.addEventListener("change", makeChangeHandler(bStart, bEnd));
+    bEnd.addEventListener("change",   () => {
+        if (maxDate && bEnd.value > maxDate) bEnd.value = maxDate;
+        makeChangeHandler(bStart, bEnd)();
+    });
+
+    // ── Tooltip helpers ──
+    svg.on("mousemove", event => {
+        tooltip.style("left", (event.pageX + 18) + "px")
+               .style("top",  (event.pageY - 18) + "px");
+    });
+
+    const STATUS_LABEL = { new: "新增", removed: "消失", unchanged: "維持不變" };
+
+    function showNodeTooltip(event, d) {
+        d3.select(this).transition().duration(150).attr("r", 26);
+        const statusLabel = STATUS_LABEL[d.status] ?? d.status;
+        const tagClass    = `tag-${d.status}`;
+        tooltip.style("display", "block").html(`
+            <div class="tooltip-title">${d.id}</div>
+            <div><b>所屬產業：</b>${d.industry ?? "未分類"}</div>
+            <div><b>狀態：</b><span class="${tagClass}">${statusLabel}</span></div>
+        `);
+    }
+
+    function showLinkTooltip(event, d) {
+        const status  = d.status ?? "unchanged";
+        const tagCls  = `tag-${status}`;
+        const weight  = d.weight ?? 1;
+        const reasons = Array.isArray(d.reasons) ? d.reasons : [];
+        const reasonsHtml = reasons.length
+            ? `<ul style="margin:4px 0 0 16px;padding:0;color:#bbb;font-size:12px">${
+                reasons.map(r => `<li style="margin-bottom:3px">${r}</li>`).join("")
+              }</ul>`
+            : "";
+        tooltip.style("display", "block").html(`
+            <div class="tooltip-title">
+                ${d.source.id ?? d.source} ➔ ${d.target.id ?? d.target}
+            </div>
+            <div style="margin-bottom:4px"><b>狀態：</b><span class="${tagCls}">${STATUS_LABEL[status] ?? status}</span></div>
+            <div><b>關係類型：</b>${d.relation_type ?? ""}</div>
+            <div><b>提及次數：</b>${weight}</div>
+            ${reasons.length ? `<div style="margin-top:6px"><b>原因摘要：</b>${reasonsHtml}</div>` : ""}
+        `);
+    }
+
+    function hideTooltip() {
+        d3.selectAll(".node circle").transition().duration(150).attr("r", 20);
+        tooltip.style("display", "none");
+    }
+
+    // ── 主繪圖 ──
+    function renderGraph(data) {
+        if (simulation) simulation.stop();
+        g.selectAll("*").remove();
+
+        if (!data.nodes || data.nodes.length === 0) {
+            emptyEl.classList.add("visible");
+            return;
+        }
+        emptyEl.classList.remove("visible");
+
+        width  = container.clientWidth;
+        height = container.clientHeight;
+        svg.attr("width", width).attr("height", height);
+
+        // 連線群組
+        const linkGroup = g.append("g")
+            .selectAll(".link-group")
+            .data(data.links)
+            .enter().append("g")
+            .attr("class", "link-group")
+            .on("mouseover", showLinkTooltip)
+            .on("mouseout",  hideTooltip);
+
+        linkGroup.append("line")
+            .attr("class", "link-visible")
+            .attr("fill", "none")
+            .attr("stroke", d => STATUS_COLORS[d.status] ?? STATUS_COLORS.unchanged)
+            .attr("stroke-width", d => d.status === "unchanged"
+                ? Math.max(1, (d.weight ?? 1) * 0.8)
+                : Math.max(2, (d.weight ?? 1) * 1.8)
+            )
+            .attr("stroke-opacity", d => d.status === "unchanged" ? 0.35 : 0.85)
+            .attr("stroke-dasharray", d => d.status === "removed" ? "6,4" : null)
+            .attr("marker-end", d => `url(#marker-${d.status})`);
+
+        // 透明感應區
+        linkGroup.append("line")
+            .attr("fill", "none")
+            .attr("stroke", "transparent")
+            .attr("stroke-width", 18)
+            .style("cursor", "help");
+
+        // 節點群組
+        const node = g.append("g")
+            .selectAll(".node")
+            .data(data.nodes)
+            .enter().append("g")
+            .attr("class", "node")
+            .call(d3.drag()
+                .on("start", (e, d) => { if (!e.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+                .on("drag",  (e, d) => { d.fx = e.x; d.fy = e.y; })
+                .on("end",   (e, d) => { if (!e.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; })
+            );
+
+        node.append("circle")
+            .attr("r", 20)
+            .attr("fill", d => NODE_COLORS[d.status] ?? NODE_COLORS.unchanged)
+            .attr("stroke", "#fff")
+            .attr("stroke-width", 1.5)
+            .attr("stroke-opacity", d => d.status === "removed" ? 0.5 : 1)
+            .attr("fill-opacity",   d => d.status === "removed" ? 0.5 : 1)
+            .style("cursor", "pointer")
+            .on("mouseover", showNodeTooltip)
+            .on("mouseout",  hideTooltip);
+
+        node.append("text")
+            .attr("dy", 38)
+            .attr("text-anchor", "middle")
+            .attr("font-size", "12px")
+            .attr("font-weight", "bold")
+            .attr("fill", d => d.status === "removed" ? "#888" : "#eee")
+            .style("pointer-events", "none")
+            .style("text-shadow", "1px 1px 2px #000")
+            .text(d => d.id);
+
+        // 力模擬
+        simulation = d3.forceSimulation(data.nodes)
+            .force("link",    d3.forceLink(data.links).id(d => d.id).distance(220))
+            .force("charge",  d3.forceManyBody().strength(-650))
+            .force("center",  d3.forceCenter(width / 2, height / 2))
+            .force("collide", d3.forceCollide().radius(55))
+            .force("x", d3.forceX(width  / 2).strength(0.04))
+            .force("y", d3.forceY(height / 2).strength(0.04));
+
+        const r = 28;
+        simulation.on("tick", () => {
+            data.nodes.forEach(d => {
+                d.x = Math.max(r, Math.min(width  - r, d.x));
+                d.y = Math.max(r, Math.min(height - r, d.y));
+            });
+            linkGroup.selectAll("line")
+                .attr("x1", d => d.source.x).attr("y1", d => d.source.y)
+                .attr("x2", d => d.target.x).attr("y2", d => d.target.y);
+            node.attr("transform", d => `translate(${d.x},${d.y})`);
+        });
+
+        // 更新摘要數字
+        const s = data.summary || {};
+        document.getElementById("count-new").textContent       = s.new       ?? 0;
+        document.getElementById("count-removed").textContent   = s.removed   ?? 0;
+        document.getElementById("count-unchanged").textContent = s.unchanged ?? 0;
+    }
+
+    // ── 查詢並渲染 ──
+    function fetchAndRender() {
+        const industry = document.getElementById("input-industry").value.trim();
+
+        // 驗證每個期間不超過 7 天
+        if (aStart.value && aEnd.value && diffDays(aStart.value, aEnd.value) > 6) {
+            statusMsg.textContent = "⚠ 期間 A 超過 7 天，請重新選擇";
+            statusMsg.style.color = "#f87171";
+            return;
+        }
+        if (bStart.value && bEnd.value && diffDays(bStart.value, bEnd.value) > 6) {
+            statusMsg.textContent = "⚠ 期間 B 超過 7 天，請重新選擇";
+            statusMsg.style.color = "#f87171";
+            return;
+        }
+        if (!aStart.value || !aEnd.value || !bStart.value || !bEnd.value) {
+            statusMsg.textContent = "⚠ 請填寫四個日期";
+            statusMsg.style.color = "#f87171";
+            return;
+        }
+        statusMsg.style.color = "#666";
+
+        const params = new URLSearchParams({
+            a_start: aStart.value, a_end: aEnd.value,
+            b_start: bStart.value, b_end: bEnd.value,
+        });
+        if (industry) params.set("industry", industry);
+
+        statusMsg.textContent = `A：${aStart.value}～${aEnd.value}　B：${bStart.value}～${bEnd.value}`;
+        loadingEl.classList.remove("hidden");
+        emptyEl.classList.remove("visible");
+        btnQuery.disabled = true;
+
+        fetch(`/api/knowledge-graph/graph-diff-data/?${params}`)
+            .then(res => { if (!res.ok) throw new Error(`HTTP ${res.status}`); return res.json(); })
+            .then(data => {
+                loadingEl.classList.add("hidden");
+                btnQuery.disabled = false;
+                renderGraph(data);
+                fetchNarrative(data, { industry, a_start: aStart.value, a_end: aEnd.value, b_start: bStart.value, b_end: bEnd.value });
+            })
+            .catch(err => {
+                loadingEl.classList.add("hidden");
+                btnQuery.disabled = false;
+                statusMsg.textContent = `❌ 查詢失敗：${err.message}`;
+                statusMsg.style.color = "#f87171";
+            });
+    }
+
+    // ── AI 變化解讀 ──
+    const narrativePanel   = document.getElementById("narrative-panel");
+    const narrativeLoading = document.getElementById("narrative-loading");
+    const narrativeText    = document.getElementById("narrative-text");
+    const narrativeFilter  = document.getElementById("narrative-filter-label");
+    const narrativeToggle  = document.getElementById("narrative-toggle-btn");
+
+    narrativeToggle.addEventListener("click", () => {
+        const collapsed = narrativePanel.classList.toggle("collapsed");
+        narrativeToggle.textContent = collapsed ? "▶" : "◀";
+    });
+
+    function fetchNarrative(graphData, filters) {
+        narrativeFilter.textContent =
+            `A：${filters.a_start}～${filters.a_end}　B：${filters.b_start}～${filters.b_end}`;
+        narrativePanel.classList.remove("collapsed");
+        narrativeToggle.textContent = "◀";
+        narrativeText.textContent = "";
+        narrativeLoading.style.display = "block";
+
+        const safeNodes = graphData.nodes.map(n => ({ id: n.id, industry: n.industry ?? "", status: n.status }));
+        const safeLinks = graphData.links.map(l => ({
+            source:        typeof l.source === "object" ? l.source.id : l.source,
+            target:        typeof l.target === "object" ? l.target.id : l.target,
+            relation_type: l.relation_type ?? "",
+            status:        l.status ?? "unchanged",
+            weight:        l.weight  ?? 1,
+            reasons:       Array.isArray(l.reasons) ? l.reasons : [],
+        }));
+
+        fetch("/api/knowledge-graph/graph-diff-narrative/", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ nodes: safeNodes, links: safeLinks, filters }),
+        })
+            .then(res => res.json())
+            .then(result => {
+                narrativeLoading.style.display = "none";
+                narrativeText.textContent = result.narrative || "（無法生成解讀）";
+            })
+            .catch(err => {
+                narrativeLoading.style.display = "none";
+                narrativeText.textContent = `❌ 解讀失敗：${err.message}`;
+            });
+    }
+
+    // ── 事件綁定 ──
+    btnQuery.addEventListener("click", fetchAndRender);
+    document.getElementById("input-industry").addEventListener("keydown", e => {
+        if (e.key === "Enter") fetchAndRender();
+    });
+
+    const selectIndustry = document.getElementById("select-industry");
+    selectIndustry.addEventListener("change", () => {
+        const val = selectIndustry.value;
+        document.getElementById("input-industry").value = val;
+        selectIndustry.value = "";
+        if (val) fetchAndRender();
+    });
+
+    // ── 載入產業清單 ──
+    function loadIndustries() {
+        fetch("/api/knowledge-graph/industries/")
+            .then(res => res.json())
+            .then(data => {
+                const industries = data.industries || [];
+                industries.forEach(ind => {
+                    const opt = document.createElement("option");
+                    opt.value = ind; opt.textContent = ind;
+                    selectIndustry.appendChild(opt);
+                });
+                // 預設選第一個產業（與 graph.html 一致）
+                if (industries.length > 0) {
+                    document.getElementById("input-industry").value = industries[0];
+                }
+                fetchAndRender();
+            })
+            .catch(() => fetchAndRender());
+    }
+
+    // ── 初始化：取最新日期，設定預設兩個期間，再載入產業 ──
+    fetch("/api/knowledge-graph/latest-date/")
+        .then(res => res.json())
+        .then(data => {
+            maxDate = data.latest_date;
+
+            // 期間 B：最新 7 天
+            bEnd.value   = maxDate;
+            bStart.value = addDays(maxDate, -6);
+
+            // 期間 A：B 的前一個 7 天
+            aEnd.value   = addDays(maxDate, -7);
+            aStart.value = addDays(maxDate, -13);
+
+            [aStart, aEnd, bStart, bEnd].forEach(el => el.max = maxDate);
+
+            statusMsg.textContent = "";
+            loadIndustries();
+        })
+        .catch(() => loadIndustries());
+
+    // ── 視窗縮放 ──
+    window.addEventListener("resize", () => {
+        width  = container.clientWidth;
+        height = container.clientHeight;
+        svg.attr("width", width).attr("height", height);
+    });
+})();
+</script>
+</body>
+</html>

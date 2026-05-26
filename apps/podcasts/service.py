@@ -67,13 +67,18 @@ def fix_content_with_gemini(batch_text: str) -> str:
     wait = 10
     for attempt in range(1, MAX_ATTEMPTS + 1):
         try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(
-                    client.models.generate_content,
-                    model="gemini-2.5-flash",
-                    contents=prompt,
-                )
+            executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            future = executor.submit(
+                client.models.generate_content,
+                model="gemini-2.5-flash",
+                contents=prompt,
+            )
+            try:
                 response = future.result(timeout=300)
+            except concurrent.futures.TimeoutError:
+                executor.shutdown(wait=False, cancel_futures=True)
+                raise
+            executor.shutdown(wait=False)
             return response.text.replace("```srt", "").replace("```", "").strip()
         except concurrent.futures.TimeoutError:
             err_msg = "請求逾時（300 秒無回應）"
