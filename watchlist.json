@@ -7,7 +7,7 @@
   { "name": "投資癮", "language": "zh", "filter": [], "exclude": [] },
   { "name": "MacroMicro 財經M平方", "language": "zh", "filter": ["After Meeting"], "exclude": [] },
   { "name": "兆華與股惑仔", "language": "zh", "filter": [], "exclude": [] },
-  { "name": "美股投資學-財女珍妮", "language": "zh", "filter": [], "exclude": [] },
+  { "name": "美股投資學-財女珍妮", "language": "zh", "filter": [], "exclude": ["主題專訪"] },
   { "name": "小朋友學投資", "language": "zh", "filter": ["不魯小週記", "免費版EP"], "exclude": [] },
   { "name": "不敗教主陳重銘", "language": "zh", "filter": [], "exclude": ["富媽媽", "窮媽媽"] },
   { "name": "兆華與阿格力-有求必應", "language": "zh", "filter": [], "exclude": [] },

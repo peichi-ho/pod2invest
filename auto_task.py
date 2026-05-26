@@ -1,8 +1,5 @@
 """
-自動化 Podcast 批次處理腳本
-讀取 watchlist.json，對每個節目自動抓取、轉錄、校對並寫入資料庫。
-
-用法：
+input:
   python auto_task.py                          # 每個節目抓最新 5 集
   python auto_task.py --start-date 2025-04-01  # 從指定日期開始抓
 """
