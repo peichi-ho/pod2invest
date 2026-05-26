@@ -5,7 +5,7 @@ import django.utils.timezone
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("summaries", "0007_tickermap_sector"),
+        ("summaries", "0007_merge_chains"),
     ]
 
     operations = [

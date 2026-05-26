@@ -169,7 +169,7 @@
 
   <!-- Top 3 Podium -->
   <section class="mb-10">
-    <div id="rankings-podium" class="grid grid-cols-3 gap-4 items-end min-h-[200px]">
+    <div id="rankings-podium" class="grid grid-cols-3 gap-2 items-end min-h-[200px]">
       <div class="col-span-3 flex items-center justify-center text-outline text-sm py-12">載入中...</div>
     </div>
   </section>
@@ -1242,14 +1242,12 @@
         groups[key].push(r);
       }
 
-      // ── 更新準確率 pill ───────────────────────────────────────────
-      const correct  = groups.pass.length;
-      const wrong    = groups.fail.length;
-      const verified = correct + wrong;
-      const accEl = document.getElementById('podcaster-accuracy');
-      if (verified > 0) {
-        const pct = Math.round(correct / verified * 100);
-        accEl.textContent = `${pct}%・${verified} 筆驗證`;
+      // ── 更新準確率 pill（從快照表取）────────────────────────────
+      const accMap = await _ensureAccuracyCache();
+      const accEl  = document.getElementById('podcaster-accuracy');
+      const acc    = accMap[name];
+      if (acc && acc.total > 0) {
+        accEl.textContent = `${acc.pct}%・${acc.total} 筆驗證`;
       } else {
         accEl.textContent = '尚無驗證觀點';
       }
@@ -2477,31 +2475,22 @@ async function loadHotTags() {
   container.innerHTML = allBtn;
 }
 
-// ── 準確率快取（Rankings + Verified Insights 共用）──────────
+// ── 準確率快取（Rankings + Verified Insights + 節目頁共用）──
 let _accuracyCache = null;
 async function _ensureAccuracyCache() {
   if (_accuracyCache) return _accuracyCache;
   try {
-    const res = await fetch('/api/summaries/backtesting/?limit=2000');
+    const res = await fetch('/api/summaries/accuracy-ranking/');
     const records = res.ok ? await res.json() : [];
     const map = {};
-    const seenTheses = {};   // { podcaster: Set<thesis> } — 與 showPodcaster 邏輯一致
     for (const r of records) {
       if (!r.podcaster) continue;
-      const thesis = r.thesis || '';
-      if (!thesis) continue;
-      if (!seenTheses[r.podcaster]) seenTheses[r.podcaster] = new Set();
-      if (seenTheses[r.podcaster].has(thesis)) continue;
-      seenTheses[r.podcaster].add(thesis);
-      if (!map[r.podcaster]) map[r.podcaster] = { pass: 0, fail: 0 };
-      if (r.result === 'pass') map[r.podcaster].pass++;
-      else if (r.result === 'fail') map[r.podcaster].fail++;
-    }
-    for (const k of Object.keys(map)) {
-      const { pass, fail } = map[k];
-      const total = pass + fail;
-      map[k].total = total;
-      map[k].pct   = total > 0 ? Math.round(pass / total * 100) : null;
+      map[r.podcaster] = {
+        pass:  r.pass,
+        fail:  r.fail,
+        total: r.total,
+        pct:   r.accuracy,  // 已是整數百分比
+      };
     }
     _accuracyCache = map;
   } catch (e) {
@@ -2691,12 +2680,12 @@ async function loadRankings() {
               </div>
             </div>
             <div class="text-center px-2">
-              <div class="font-['Epilogue'] font-black text-3xl text-white/20 mb-1">${rankStr}</div>
-              <h4 class="font-['Epilogue'] font-bold text-sm text-white leading-tight">${p.podcaster}</h4>
-              <p class="text-[10px] text-on-tertiary-container mt-1">${epStr}</p>
-              <p class="text-[10px] font-bold text-on-tertiary-container/80 mt-0.5">準確率 ${accDisp}</p>
+              <div class="font-['Epilogue'] font-black text-6xl text-white/20 mb-1">${rankStr}</div>
+              <h4 class="font-['Epilogue'] font-bold text-[28px] text-white leading-tight w-full truncate">${p.podcaster}</h4>
+              <p class="text-xl text-on-tertiary-container mt-1">${epStr}</p>
+              <p class="text-xl font-bold text-on-tertiary-container/80 mt-0.5">準確率 ${accDisp}</p>
             </div>
-            <button onclick="openRankedPodcaster(${dataIdx})" class="px-4 py-1.5 bg-on-primary-container text-white rounded-full font-label text-[10px] font-bold uppercase tracking-widest hover:opacity-90 transition-all">More</button>
+            <button onclick="openRankedPodcaster(${dataIdx})" class="px-4 py-1.5 bg-on-primary-container text-white rounded-full font-label text-xl font-bold uppercase tracking-widest hover:opacity-90 transition-all">More</button>
           </div>`;
       } else {
         return `
@@ -2707,12 +2696,12 @@ async function loadRankings() {
               </div>
             </div>
             <div class="text-center px-2">
-              <div class="font-['Epilogue'] font-black text-3xl text-outline/20 mb-1">${rankStr}</div>
-              <h4 class="font-['Epilogue'] font-bold text-sm text-tertiary-container leading-tight">${p.podcaster}</h4>
-              <p class="text-[10px] text-outline mt-1">${epStr}</p>
-              <p class="text-[10px] font-bold text-secondary mt-0.5">準確率 ${accDisp}</p>
+              <div class="font-['Epilogue'] font-black text-6xl text-outline/20 mb-1">${rankStr}</div>
+              <h4 class="font-['Epilogue'] font-bold text-[28px] text-tertiary-container leading-tight w-full truncate">${p.podcaster}</h4>
+              <p class="text-xl text-outline mt-1">${epStr}</p>
+              <p class="text-xl font-bold text-secondary mt-0.5">準確率 ${accDisp}</p>
             </div>
-            <button onclick="openRankedPodcaster(${dataIdx})" class="px-4 py-1.5 border border-secondary text-secondary rounded-full font-label text-[10px] font-bold uppercase tracking-widest hover:bg-secondary hover:text-white transition-all">More</button>
+            <button onclick="openRankedPodcaster(${dataIdx})" class="px-4 py-1.5 border border-secondary text-secondary rounded-full font-label text-xl font-bold uppercase tracking-widest hover:bg-secondary hover:text-white transition-all">More</button>
           </div>`;
       }
     }).join('');
@@ -2731,18 +2720,18 @@ async function loadRankings() {
       return `
         <div class="flex items-center justify-between p-4 bg-surface-container-low rounded-lg hover:bg-surface-container-highest transition-all">
           <div class="flex items-center gap-4">
-            <span class="text-2xl font-black text-outline/30 italic w-8">${rankStr}</span>
+            <span class="text-5xl font-black text-outline/30 italic w-16">${rankStr}</span>
             <div class="w-12 h-12 rounded-full overflow-hidden">
               <div class="w-full h-full flex items-center justify-center" style="background:${bg}">
                 <span class="material-symbols-outlined text-white/70 text-xl" style="font-variation-settings:'FILL' 1">${icon}</span>
               </div>
             </div>
             <div>
-              <h4 class="font-bold text-tertiary-container">${p.podcaster}</h4>
-              <p class="text-xs text-outline font-medium">${epStr} · 準確率 ${accDisp}</p>
+              <h4 class="font-bold text-tertiary-container text-xl">${p.podcaster}</h4>
+              <p class="text-base text-outline font-medium">${epStr} · 準確率 ${accDisp}</p>
             </div>
           </div>
-          <button onclick="openRankedPodcaster(${dataIdx})" class="px-5 py-2 border border-secondary text-secondary rounded-full font-label text-xs font-bold uppercase tracking-widest hover:bg-secondary hover:text-white transition-all">More</button>
+          <button onclick="openRankedPodcaster(${dataIdx})" class="px-5 py-2 border border-secondary text-secondary rounded-full font-label text-base font-bold uppercase tracking-widest hover:bg-secondary hover:text-white transition-all">More</button>
         </div>`;
     }).join('') || '<p class="text-outline text-sm">暫無更多資料</p>';
 
