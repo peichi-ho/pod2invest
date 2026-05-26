@@ -92,6 +92,33 @@ class BacktestingRecord(models.Model):
         return f"[{self.direction}] {self.asset} | {self.timeframe_raw} | {self.result}"
 
 
+class SpeakerAccuracy(models.Model):
+    """
+    講者預測準確率快照，依講者 × 產業分組。
+    sector='' 代表「全體」（所有產業合計）。
+    每次執行 refresh_speaker_accuracy 指令時整批重算覆寫。
+    """
+    podcaster   = models.CharField(max_length=255)
+    sector      = models.CharField(max_length=30, blank=True)  # '' = 全體
+    pass_count  = models.IntegerField(default=0)
+    fail_count  = models.IntegerField(default=0)
+    skip_count  = models.IntegerField(default=0)
+    evaluatable = models.IntegerField(default=0)   # pass + fail
+    accuracy    = models.FloatField(null=True, blank=True)  # None 代表無可評估紀錄
+    updated_at  = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table        = "speaker_accuracy"
+        app_label       = "summaries"
+        unique_together = ("podcaster", "sector")
+        ordering        = ["podcaster", "sector"]
+
+    def __str__(self):
+        label = self.sector or "全體"
+        acc   = f"{self.accuracy*100:.1f}%" if self.accuracy is not None else "N/A"
+        return f"{self.podcaster} [{label}] {acc}"
+
+
 class TickerMap(models.Model):
     """股票名稱 → Yahoo Finance ticker 對應表"""
     asset_name = models.CharField(max_length=50, unique=True)   # 台積電 / NVDA
