@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>敘事群聚分析</title>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #1a1a1a;
+      color: #eee;
+      font-family: "PingFang TC", "Microsoft JhengHei", sans-serif;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ── 控制列 ── */
+    #control-bar {
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 10px 20px;
+      background: rgba(10,10,10,0.9);
+      border-bottom: 1px solid #333;
+      backdrop-filter: blur(6px);
+      flex-wrap: wrap;
+    }
+    #control-bar label { font-size: 12px; color: #999; white-space: nowrap; }
+    #control-bar .ctrl-group { display: flex; align-items: center; gap: 8px; }
+    #control-bar select,
+    #control-bar input[type="date"] {
+      background: #2a2a2a; border: 1px solid #444; border-radius: 6px;
+      color: #eee; font-size: 13px; padding: 5px 10px; outline: none; cursor: pointer;
+    }
+    #control-bar input[type="date"] { width: 136px; }
+    #control-bar select { min-width: 130px; }
+    .toggle-label {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 12px; color: #aaa; cursor: pointer; user-select: none;
+    }
+    .toggle-label input { accent-color: #3b82f6; width: 14px; height: 14px; }
+    .btn { padding: 6px 18px; border-radius: 6px; border: none; font-size: 13px; cursor: pointer; transition: background .2s; }
+    .btn-primary  { background: #3b82f6; color: #fff; }
+    .btn-primary:hover  { background: #2563eb; }
+    .btn-secondary { background: #374151; color: #ccc; }
+    .btn-secondary:hover { background: #4b5563; }
+    .btn:disabled { opacity: .4; cursor: not-allowed; }
+
+    /* ── 統計列 ── */
+    #meta-bar {
+      flex-shrink: 0;
+      display: none;
+      align-items: center;
+      gap: 16px;
+      padding: 7px 20px;
+      background: #161616;
+      border-bottom: 1px solid #2a2a2a;
+      flex-wrap: wrap;
+    }
+    .meta-chip {
+      font-size: 12px; color: #888;
+    }
+    .meta-chip strong { color: #ddd; }
+
+    /* ── 主畫布 ── */
+    #main { flex: 1; position: relative; overflow: hidden; }
+
+    #viz-container { width: 100%; height: 100%; }
+
+    svg#cluster-svg { width: 100%; height: 100%; display: block; }
+
+    /* ── D3 節點樣式 ── */
+    .cluster-hull {
+      stroke-width: 2;
+      opacity: .18;
+    }
+    .cluster-hull-stroke {
+      fill: none;
+      stroke-width: 2;
+      opacity: .45;
+    }
+    .node-circle {
+      stroke: #1a1a1a;
+      stroke-width: 2;
+      cursor: grab;
+    }
+    .node-circle:active { cursor: grabbing; }
+    .node-label {
+      font-size: 11px;
+      fill: #e5e7eb;
+      text-anchor: middle;
+      dominant-baseline: central;
+      pointer-events: none;
+      user-select: none;
+    }
+    .cluster-label {
+      font-size: 13px;
+      font-weight: 600;
+      fill: #d1d5db;
+      text-anchor: middle;
+      pointer-events: none;
+      user-select: none;
+    }
+    .noise-label { fill: #6b7280; }
+
+    /* ── Tooltip ── */
+    #tooltip {
+      position: absolute;
+      background: rgba(20,20,20,0.95);
+      border: 1px solid #444;
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 12px;
+      color: #ddd;
+      pointer-events: none;
+      display: none;
+      max-width: 300px;
+      z-index: 100;
+      line-height: 1.6;
+    }
+    #tooltip .tt-name  { font-size: 14px; font-weight: 600; color: #fff; margin-bottom: 4px; }
+    #tooltip .tt-theme { color: #9ca3af; margin-bottom: 6px; }
+    #tooltip .tt-rel   { color: #6b7280; font-size: 11px; }
+    #tooltip .tt-rel span { color: #93c5fd; }
+
+    /* ── 空狀態 / loading ── */
+    #empty-state {
+      position: absolute; inset: 0;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      color: #4b5563; gap: 12px; text-align: center;
+    }
+    #empty-state .icon { font-size: 48px; }
+    #empty-state p { font-size: 14px; }
+    #loading {
+      position: absolute; inset: 0;
+      display: none; flex-direction: column; align-items: center; justify-content: center;
+      color: #6b7280; gap: 16px;
+    }
+    .spinner {
+      width: 36px; height: 36px; border: 3px solid #333;
+      border-top-color: #3b82f6; border-radius: 50%;
+      animation: spin .8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .error-msg { color: #f87171; font-size: 13px; }
+  </style>
+</head>
+<body>
+
+<!-- ── 控制列 ── -->
+<div id="control-bar">
+  <div class="ctrl-group">
+    <label>開始日期</label>
+    <input type="date" id="start-date">
+  </div>
+  <div class="ctrl-group">
+    <label>結束日期</label>
+    <input type="date" id="end-date">
+  </div>
+  <div class="ctrl-group">
+    <label>產業</label>
+    <select id="industry-select">
+      <option value="">全部產業</option>
+    </select>
+  </div>
+  <div class="ctrl-group">
+    <label>關係類型</label>
+    <select id="relation-type">
+      <option value="Supply">Supply（上下游）</option>
+      <option value="Co-impact">Co-impact（共同受惠）</option>
+      <option value="Substitution">Substitution（競爭替代）</option>
+    </select>
+  </div>
+  <label class="toggle-label">
+    <input type="checkbox" id="label-llm">
+    LLM 命名主題
+  </label>
+  <button class="btn btn-primary" id="run-btn" onclick="runCluster()">分析</button>
+  <button class="btn btn-secondary" id="clear-btn" onclick="clearViz()" style="display:none">清除</button>
+</div>
+
+<!-- ── 統計列 ── -->
+<div id="meta-bar"></div>
+
+<!-- ── 主畫布 ── -->
+<div id="main">
+  <div id="empty-state">
+    <div class="icon">🔬</div>
+    <p>選擇篩選條件後按「分析」</p>
+    <p style="font-size:12px">系統將對 reason 做 Embedding 並自動分群</p>
+  </div>
+  <div id="loading">
+    <div class="spinner"></div>
+    <p>Embedding + 分群中，請稍候…</p>
+  </div>
+  <div id="viz-container">
+    <svg id="cluster-svg"></svg>
+  </div>
+</div>
+
+<div id="tooltip"></div>
+
+<script>
+// ── 顏色配置 ────────────────────────────────────────────────────────────────
+const CLUSTER_COLORS = [
+  "#3b82f6","#10b981","#f59e0b","#ec4899","#8b5cf6",
+  "#06b6d4","#f97316","#84cc16","#e11d48","#14b8a6",
+];
+const NOISE_COLOR = "#4b5563";
+
+// ── 初始化 ──────────────────────────────────────────────────────────────────
+(async function init() {
+  try {
+    const r = await fetch("/api/knowledge-graph/latest-date/");
+    const d = await r.json();
+    if (d.latest_date) {
+      const latest = new Date(d.latest_date);
+      const sevenAgo = new Date(latest);
+      sevenAgo.setDate(sevenAgo.getDate() - 6);
+      document.getElementById("end-date").value   = toISO(latest);
+      document.getElementById("start-date").value = toISO(sevenAgo);
+    }
+  } catch(e) {}
+
+  try {
+    const r = await fetch("/api/knowledge-graph/industries/");
+    const d = await r.json();
+    const sel = document.getElementById("industry-select");
+    (d.industries || []).forEach(ind => {
+      const opt = document.createElement("option");
+      opt.value = opt.textContent = ind;
+      sel.appendChild(opt);
+    });
+  } catch(e) {}
+})();
+
+function toISO(d) { return d.toISOString().split("T")[0]; }
+
+// ── 執行分析 ────────────────────────────────────────────────────────────────
+async function runCluster() {
+  const relationType = document.getElementById("relation-type").value;
+  const startDate    = document.getElementById("start-date").value;
+  const endDate      = document.getElementById("end-date").value;
+  const industry     = document.getElementById("industry-select").value;
+  const labelLLM     = document.getElementById("label-llm").checked;
+
+  setLoading(true);
+
+  const params = new URLSearchParams({
+    relation_type:  relationType,
+    label_with_llm: labelLLM ? "true" : "false",
+  });
+  if (startDate) params.set("start_date", startDate);
+  if (endDate)   params.set("end_date",   endDate);
+  if (industry)  params.set("industry",   industry);
+
+  try {
+    const resp = await fetch("/api/knowledge-graph/narrative-cluster-data/?" + params);
+    const data = await resp.json();
+    if (data.error) { showError(data.error); return; }
+    renderViz(data, relationType);
+  } catch(e) {
+    showError("請求失敗：" + e.message);
+  } finally {
+    setLoading(false);
+  }
+}
+
+// ── 主視覺化 ────────────────────────────────────────────────────────────────
+let simulation = null;
+
+function renderViz(data, relationType) {
+  const clusters  = data.clusters || [];
+  const meta      = data.meta || {};
+
+  // 更新統計列
+  const metaBar = document.getElementById("meta-bar");
+  metaBar.style.display = "flex";
+  const visibleCount = (clusters || []).filter(
+    c => !c.is_noise && (c.exclusive_companies || []).length >= 5
+  ).length;
+  metaBar.innerHTML = `
+    <span class="meta-chip"><strong>${meta.total_links ?? 0}</strong> 條連線</span>
+    <span class="meta-chip"><strong>${visibleCount}</strong> 個群聚（顯示）</span>
+    <span class="meta-chip">${relationType}</span>
+  `;
+
+  if (clusters.length === 0) {
+    showError("查無符合條件的資料");
+    return;
+  }
+
+  document.getElementById("empty-state").style.display = "none";
+  document.getElementById("clear-btn").style.display = "inline-block";
+
+  const container = document.getElementById("viz-container");
+  const W = container.clientWidth;
+  const H = container.clientHeight;
+
+  // ── 建立全域「公司 → relations」查找表（跨所有 cluster，含 noise）──────────
+  // 合併後公司會被移到錨定群，但它的 relations 仍在原始群，所以要跨群收集
+  const companyRels = {};
+  clusters.forEach(c => {
+    (c.relations || []).forEach(rel => {
+      [rel.source, rel.target].forEach(company => {
+        if (!companyRels[company]) companyRels[company] = [];
+        companyRels[company].push(rel);
+      });
+    });
+  });
+
+  // ── 建立 nodes 陣列（用 exclusive_companies，忽略 noise cluster） ──────────
+  const nodes = [];
+  const clusterMeta = [];  // { cluster_id, color, theme, center }
+
+  // 只保留非 noise、且 exclusive 公司數 >= 5 的 cluster
+  const MIN_COMPANIES = 5;
+  const realClusters = clusters.filter(
+    c => !c.is_noise && (c.exclusive_companies || []).length >= MIN_COMPANIES
+  );
+  const centers = gridCenters(realClusters.length, W, H, 120);
+
+  realClusters.forEach((cluster, idx) => {
+    const color = CLUSTER_COLORS[idx % CLUSTER_COLORS.length];
+    // theme：LLM 命名時用 theme_label，否則空字串（不顯示標籤）
+    const theme = cluster.theme_label || "";
+    clusterMeta.push({ cluster_id: cluster.cluster_id, color, theme, center: centers[idx] });
+
+    (cluster.exclusive_companies || []).forEach(company => {
+      // 從全域查找表取得此公司的所有 relations（不限於當前 cluster）
+      const rels = companyRels[company] || [];
+      const edgeCount = rels.length;
+      nodes.push({
+        id: company,
+        cluster_id: cluster.cluster_id,
+        cluster_idx: idx,
+        color,
+        edgeCount,
+        r: Math.max(22, Math.min(44, 14 + edgeCount * 5)),
+        theme,
+        relations: rels,
+        cx: centers[idx].x + (Math.random() - 0.5) * 60,
+        cy: centers[idx].y + (Math.random() - 0.5) * 60,
+      });
+    });
+  });
+
+  // ── 建立 SVG ──────────────────────────────────────────────────────────────
+  const svg = d3.select("#cluster-svg");
+  svg.selectAll("*").remove();
+
+  const g = svg.append("g").attr("class", "root");
+
+  // zoom / pan
+  svg.call(d3.zoom().scaleExtent([0.3, 4]).on("zoom", e => g.attr("transform", e.transform)));
+
+  // hull 群組（在節點下層）
+  const hullG  = g.append("g").attr("class", "hulls");
+  const labelG = g.append("g").attr("class", "cluster-labels");
+  const nodeG  = g.append("g").attr("class", "nodes");
+
+  // ── D3 力模擬 ─────────────────────────────────────────────────────────────
+  if (simulation) simulation.stop();
+
+  simulation = d3.forceSimulation(nodes)
+    .force("x", d3.forceX(d => centers[d.cluster_idx].x).strength(0.18))
+    .force("y", d3.forceY(d => centers[d.cluster_idx].y).strength(0.18))
+    .force("collide", d3.forceCollide(d => d.r + 8).strength(0.85))
+    .force("charge", d3.forceManyBody().strength(-60))
+    .alphaDecay(0.03);
+
+  // ── 繪製節點 ──────────────────────────────────────────────────────────────
+  const nodeEl = nodeG.selectAll(".node")
+    .data(nodes)
+    .join("g")
+      .attr("class", "node")
+      .call(d3.drag()
+        .on("start", dragStart)
+        .on("drag",  dragging)
+        .on("end",   dragEnd)
+      )
+      .on("mouseover", showTooltip)
+      .on("mousemove", moveTooltip)
+      .on("mouseout",  hideTooltip);
+
+  nodeEl.append("circle")
+    .attr("class", "node-circle")
+    .attr("r", d => d.r)
+    .attr("fill", d => d.color)
+    .attr("fill-opacity", 0.75);
+
+  nodeEl.append("text")
+    .attr("class", "node-label")
+    .text(d => truncate(d.id, 6));
+
+  // ── Tick 更新 ─────────────────────────────────────────────────────────────
+  simulation.on("tick", () => {
+    // 更新節點位置
+    nodeEl.attr("transform", d => `translate(${d.x},${d.y})`);
+
+    // 更新 hull
+    hullG.selectAll("*").remove();
+    clusterMeta.forEach(cm => {
+      const pts = nodes.filter(n => n.cluster_id === cm.cluster_id);
+      if (pts.length === 0) return;
+
+      drawHull(hullG, pts, cm.color);
+
+      // cluster 標籤：只在有 LLM 主題名稱時才顯示
+      if (cm.theme) {
+        const cx = d3.mean(pts, n => n.x);
+        const cy = d3.min(pts, n => n.y - n.r) - 18;
+        const existing = labelG.select(`#lbl-${cm.cluster_id}`);
+        if (existing.empty()) {
+          labelG.append("text")
+            .attr("id", `lbl-${cm.cluster_id}`)
+            .attr("class", "cluster-label")
+            .attr("fill", cm.color)
+            .text(cm.theme);
+        }
+        labelG.select(`#lbl-${cm.cluster_id}`)
+          .attr("x", cx)
+          .attr("y", cy);
+      }
+    });
+  });
+}
+
+// ── Convex Hull 繪製 ──────────────────────────────────────────────────────
+function drawHull(g, pts, color) {
+  if (pts.length === 1) {
+    g.append("circle")
+      .attr("cx", pts[0].x).attr("cy", pts[0].y)
+      .attr("r", pts[0].r + 20)
+      .attr("fill", color).attr("class", "cluster-hull")
+      .attr("stroke", color).attr("stroke-width", 2).attr("stroke-opacity", 0.5);
+    return;
+  }
+  if (pts.length === 2) {
+    const pad = 28;
+    // 畫膠囊形狀：用橢圓近似
+    const mx = (pts[0].x + pts[1].x) / 2;
+    const my = (pts[0].y + pts[1].y) / 2;
+    const dx = pts[1].x - pts[0].x;
+    const dy = pts[1].y - pts[0].y;
+    const dist = Math.sqrt(dx*dx + dy*dy);
+    g.append("ellipse")
+      .attr("cx", mx).attr("cy", my)
+      .attr("rx", dist/2 + pad).attr("ry", Math.max(pts[0].r, pts[1].r) + pad/2)
+      .attr("fill", color).attr("class", "cluster-hull")
+      .attr("stroke", color).attr("stroke-width", 2).attr("stroke-opacity", 0.5)
+      .attr("transform", `rotate(${Math.atan2(dy,dx)*180/Math.PI},${mx},${my})`);
+    return;
+  }
+
+  const hullPts = d3.polygonHull(pts.map(p => [p.x, p.y]));
+  if (!hullPts) return;
+
+  // 向外擴展
+  const centroid = d3.polygonCentroid(hullPts);
+  const pad = 32;
+  const expanded = hullPts.map(([x,y]) => {
+    const dx = x - centroid[0], dy = y - centroid[1];
+    const dist = Math.sqrt(dx*dx + dy*dy) || 1;
+    return [centroid[0] + dx * (dist + pad) / dist, centroid[1] + dy * (dist + pad) / dist];
+  });
+
+  const pathD = "M" + expanded.map(p => p.join(",")).join("L") + "Z";
+  g.append("path").attr("d", pathD).attr("fill", color).attr("class", "cluster-hull");
+  g.append("path").attr("d", pathD).attr("fill", "none").attr("class", "cluster-hull-stroke")
+    .attr("stroke", color);
+}
+
+// ── 格狀 cluster center 計算 ─────────────────────────────────────────────
+function gridCenters(n, W, H, margin) {
+  if (n === 0) return [];
+  const cols = Math.ceil(Math.sqrt(n));
+  const rows = Math.ceil(n / cols);
+  const cellW = (W - margin * 2) / cols;
+  const cellH = (H - margin * 2) / rows;
+  const centers = [];
+  for (let i = 0; i < n; i++) {
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    centers.push({
+      x: margin + col * cellW + cellW / 2,
+      y: margin + row * cellH + cellH / 2,
+    });
+  }
+  return centers;
+}
+
+// ── Drag handlers ─────────────────────────────────────────────────────────
+function dragStart(event, d) {
+  if (!event.active) simulation.alphaTarget(0.3).restart();
+  d.fx = d.x; d.fy = d.y;
+}
+function dragging(event, d) { d.fx = event.x; d.fy = event.y; }
+function dragEnd(event, d) {
+  if (!event.active) simulation.alphaTarget(0);
+  d.fx = null; d.fy = null;
+}
+
+// ── Tooltip ───────────────────────────────────────────────────────────────
+function showTooltip(event, d) {
+  const tt = document.getElementById("tooltip");
+  const rels = d.relations.slice(0, 4);
+  const relHTML = rels.map(r =>
+    `<div class="tt-rel"><span>${esc(r.source)}</span> → <span>${esc(r.target)}</span><br>${esc(r.reason)}</div>`
+  ).join("");
+  tt.innerHTML = `
+    <div class="tt-name">${esc(d.id)}</div>
+    <div class="tt-theme">${esc(d.theme)} · ${d.edgeCount} 條連線</div>
+    ${relHTML}
+    ${d.relations.length > 4 ? `<div class="tt-rel">…還有 ${d.relations.length-4} 條</div>` : ""}
+  `;
+  tt.style.display = "block";
+  moveTooltip(event);
+}
+function moveTooltip(event) {
+  const tt = document.getElementById("tooltip");
+  const x = event.clientX + 14, y = event.clientY - 10;
+  const maxX = window.innerWidth  - tt.offsetWidth  - 10;
+  const maxY = window.innerHeight - tt.offsetHeight - 10;
+  tt.style.left = Math.min(x, maxX) + "px";
+  tt.style.top  = Math.min(y, maxY) + "px";
+}
+function hideTooltip() { document.getElementById("tooltip").style.display = "none"; }
+
+// ── 工具 ─────────────────────────────────────────────────────────────────
+function truncate(s, n) { return s.length > n ? s.slice(0, n) + "…" : s; }
+function esc(s) {
+  return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+
+function setLoading(on) {
+  document.getElementById("loading").style.display = on ? "flex" : "none";
+  if (on) document.getElementById("empty-state").style.display = "none";
+  document.getElementById("run-btn").disabled = on;
+}
+function showError(msg) {
+  document.getElementById("empty-state").style.display = "flex";
+  document.getElementById("empty-state").innerHTML =
+    `<div class="icon">⚠️</div><p class="error-msg">${esc(msg)}</p>`;
+}
+function clearViz() {
+  if (simulation) { simulation.stop(); simulation = null; }
+  d3.select("#cluster-svg").selectAll("*").remove();
+  document.getElementById("meta-bar").style.display = "none";
+  document.getElementById("empty-state").style.display = "flex";
+  document.getElementById("empty-state").innerHTML =
+    `<div class="icon">🔬</div><p>選擇篩選條件後按「分析」</p>`;
+  document.getElementById("clear-btn").style.display = "none";
+}
+</script>
+</body>
+</html>

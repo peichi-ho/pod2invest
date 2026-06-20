@@ -17,4 +17,11 @@ urlpatterns = [
     path("generate/",                 views.generate_graph),
     path("generate-from-summaries/",  views.generate_graph_from_summaries),
     path("generate-narrative/",       views.generate_narrative_graph),
+    path("narrative-cluster/",            views.narrative_cluster_page),
+    path("narrative-cluster-data/",       views.narrative_cluster_api),
+    path("narrative-cluster-diff/",       views.narrative_cluster_diff_page),
+    path("narrative-cluster-diff-data/",  views.narrative_cluster_diff_api),
+    path("leiden-cluster/",               views.leiden_cluster_page),
+    path("leiden-cluster-data/",          views.leiden_cluster_api),
+    path("name-clusters/",                views.name_clusters_api),
 ]

@@ -1,4 +1,5 @@
 import json
+from django.conf import settings
 from django.http import JsonResponse
 from django.shortcuts import render
 from django.views.decorators.csrf import csrf_exempt
@@ -8,7 +9,7 @@ from django.db import connections
 from .generate import process_new_podcast, process_all_summaries
 from .filter import (
     get_graph_data, generate_graph_narrative, get_latest_date_in_db,
-    get_graph_diff, generate_graph_diff_narrative,
+    get_graph_diff, generate_graph_diff_narrative, _get_client,
 )
 from .generate_narrative import (
     process_one_narrative, process_all_narrative,
@@ -280,6 +281,195 @@ def generate_graph(request):
             podcast_source=podcast_source,
         )
         return JsonResponse({"message": "知識圖譜生成成功", "source": podcast_source})
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+
+def leiden_cluster_page(request):
+    """渲染 Leiden 兩期比較頁面。"""
+    return render(request, "knowledge_graph/leiden_cluster.html")
+
+
+@csrf_exempt
+def leiden_cluster_api(request):
+    """
+    兩期 Leiden 社群偵測比較。
+
+    Query params:
+      - a_start, a_end   : 期間 A（YYYY-MM-DD）
+      - b_start, b_end   : 期間 B（YYYY-MM-DD）
+      - relation_type    : 可選
+      - industry         : 可選
+      - resolution       : float，預設 1.0
+      - min_size         : int，預設 3
+    """
+    a_start       = request.GET.get("a_start",       "").strip() or None
+    a_end         = request.GET.get("a_end",         "").strip() or None
+    b_start       = request.GET.get("b_start",       "").strip() or None
+    b_end         = request.GET.get("b_end",         "").strip() or None
+    relation_type = request.GET.get("relation_type", "").strip() or None
+    industry      = request.GET.get("industry",      "").strip() or None
+    resolution    = float(request.GET.get("resolution", "1.0"))
+    min_size      = int(request.GET.get("min_size", "3"))
+
+    if not all([a_start, a_end, b_start, b_end]):
+        return JsonResponse({"error": "需提供 a_start, a_end, b_start, b_end"}, status=400)
+
+    try:
+        from .services.leiden_cluster import fetch_links, run_leiden_diff
+        links_a = fetch_links(a_start, a_end, relation_type, industry)
+        links_b = fetch_links(b_start, b_end, relation_type, industry)
+        result  = run_leiden_diff(links_a, links_b, resolution=resolution, min_community_size=min_size)
+        return JsonResponse(result, json_dumps_params={"ensure_ascii": False})
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+
+@csrf_exempt
+def name_clusters_api(request):
+    """
+    對前端送來的 clusters 用 LLM 生成主題名稱。
+    Body: { "clusters": [{"cluster_id": 0, "sample_reasons": ["...", "..."]}] }
+    """
+    if request.method != "POST":
+        return JsonResponse({"error": "POST required"}, status=405)
+
+    try:
+        body = json.loads(request.body)
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+
+    clusters = body.get("clusters", [])
+    if not clusters:
+        return JsonResponse({"results": []})
+
+    try:
+        from .services.narrative_cluster import name_clusters_with_llm
+        from .filter import _get_client
+        client     = _get_client()
+        model_name = getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash-lite")
+        enriched   = [{**c, "is_noise": False} for c in clusters]
+        named      = name_clusters_with_llm(enriched, client, model_name)
+        return JsonResponse({
+            "results": [
+                {"cluster_id": c["cluster_id"], "theme_label": c.get("theme_label", "")}
+                for c in named
+            ]
+        }, json_dumps_params={"ensure_ascii": False})
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+
+def narrative_cluster_diff_page(request):
+    """渲染敘事群聚兩期比較頁面。"""
+    return render(request, "knowledge_graph/narrative_cluster_diff.html")
+
+
+@csrf_exempt
+def narrative_cluster_diff_api(request):
+    """
+    比較兩段時間的敘事群聚差異。
+
+    Query params:
+      - a_start, a_end   : Period A 日期（YYYY-MM-DD）
+      - b_start, b_end   : Period B 日期（YYYY-MM-DD）
+      - relation_type    : Supply / Co-impact / Substitution（必填）
+      - industry         : 產業關鍵字（可選）
+    """
+    a_start       = request.GET.get("a_start",       "").strip() or None
+    a_end         = request.GET.get("a_end",         "").strip() or None
+    b_start       = request.GET.get("b_start",       "").strip() or None
+    b_end         = request.GET.get("b_end",         "").strip() or None
+    relation_type = request.GET.get("relation_type", "").strip() or None
+    industry      = request.GET.get("industry",      "").strip() or None
+
+    if not relation_type:
+        return JsonResponse({"error": "relation_type 為必填"}, status=400)
+    if not all([a_start, a_end, b_start, b_end]):
+        return JsonResponse({"error": "需提供 a_start, a_end, b_start, b_end"}, status=400)
+
+    try:
+        from .services.narrative_cluster import (
+            fetch_links_for_cluster,
+            run_cluster_diff,
+        )
+        links_a = fetch_links_for_cluster(a_start, a_end, relation_type, industry)
+        links_b = fetch_links_for_cluster(b_start, b_end, relation_type, industry)
+        result  = run_cluster_diff(links_a, links_b)
+        return JsonResponse(result, json_dumps_params={"ensure_ascii": False})
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+
+def narrative_cluster_page(request):
+    """渲染敘事群聚分析頁面。"""
+    return render(request, "knowledge_graph/narrative_cluster.html")
+
+
+@csrf_exempt
+def narrative_cluster_api(request):
+    """
+    對指定條件的 links.reason 做 bge-m3 embedding + HDBSCAN 分群。
+
+    Query params:
+      - relation_type  (str, 必填): Supply / Co-impact / Substitution
+      - start_date     (str, optional): YYYY-MM-DD
+      - end_date       (str, optional): YYYY-MM-DD
+      - industry       (str, optional): 產業關鍵字
+      - label_with_llm (bool, optional): 是否用 LLM 命名，預設 false
+    """
+    relation_type  = request.GET.get("relation_type",  "").strip() or None
+    start_date     = request.GET.get("start_date",     "").strip() or None
+    end_date       = request.GET.get("end_date",       "").strip() or None
+    industry       = request.GET.get("industry",       "").strip() or None
+    label_with_llm = request.GET.get("label_with_llm", "false").lower() == "true"
+
+    if not relation_type:
+        return JsonResponse({"error": "relation_type 為必填（Supply / Co-impact / Substitution）"}, status=400)
+
+    try:
+        from .services.narrative_cluster import (
+            fetch_links_for_cluster,
+            run_reason_clustering,
+            name_clusters_with_llm,
+        )
+
+        links = fetch_links_for_cluster(start_date, end_date, relation_type, industry)
+
+        if not links:
+            return JsonResponse({
+                "clusters": [],
+                "meta": {
+                    "total_links":  0,
+                    "num_clusters": 0,
+                    "noise_links":  0,
+                    "relation_type": relation_type,
+                    "message": "查無符合條件的資料",
+                },
+            })
+
+        clusters = run_reason_clustering(links)
+
+        if label_with_llm:
+            client     = _get_client()
+            model_name = getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash-lite")
+            clusters   = name_clusters_with_llm(clusters, client, model_name)
+
+        noise_links = sum(c["size"] for c in clusters if c["is_noise"])
+
+        return JsonResponse(
+            {
+                "clusters": clusters,
+                "meta": {
+                    "total_links":  len(links),
+                    "num_clusters": sum(1 for c in clusters if not c["is_noise"]),
+                    "noise_links":  noise_links,
+                    "relation_type": relation_type,
+                },
+            },
+            json_dumps_params={"ensure_ascii": False},
+        )
+
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)
 
