@@ -146,9 +146,10 @@ _MULTI_QUERY_PROMPT = """\
 
 
 RETRIEVAL_CFG_BY_TYPE = {
-    "A": {"top_k": 3, "n_candidates": 30, "max_per_episode": None, "multi_query": True, "use_reranker": False},
-    "B": {"top_k": 10, "n_candidates": 50, "max_per_episode": 4, "multi_query": True, "use_reranker": True},
-    "C": {"top_k": 10, "n_candidates": 50, "max_per_episode": 4, "multi_query": True, "use_reranker": True},
+    "A": {"top_k": 3,  "n_candidates": 30, "max_per_episode": None, "multi_query": True, "use_reranker": False},
+    "B": {"top_k": 10, "n_candidates": 50, "max_per_episode": 4,    "multi_query": True, "use_reranker": True},
+    "C": {"top_k": 10, "n_candidates": 50, "max_per_episode": 4,    "multi_query": True, "use_reranker": True},
+    "D": {"top_k": 10, "n_candidates": 50, "max_per_episode": 2,    "multi_query": True, "use_reranker": True},
 }
 
 
@@ -484,11 +485,15 @@ def search_podcast_transcript(
             candidates = _cross_encoder_rerank(candidates, query)
         candidates = _apply_diversity(candidates, top_k, max_per_episode)
 
+        def _parse_show_name(source_filename: str) -> str:
+            m = re.search(r'【(.+?)】', source_filename or "")
+            return m.group(1) if m else (source_filename or "")
+
         return [
             PodcastHit(
-                episode_title=c["topic"] or c["source_filename"] or "",
+                episode_title=c["source_filename"] or c["topic"] or "",
                 publish_date=str(c["published_at"]) if c["published_at"] else "",
-                podcaster=c["podcaster"],
+                podcaster=c["podcaster"] or _parse_show_name(c["source_filename"]),
                 episode_number=None,
                 summary=c["chunk_text"],
                 score=c.get("cross_score", c.get("combined_score", c["score"])),
@@ -554,6 +559,10 @@ PLANNER_SCHEMA: Dict[str, Any] = {
     "properties": {
         "use_tools": {"type": "boolean"},
         "out_of_scope": {"type": "boolean"},
+        "intent": {
+            "type": "string",
+            "enum": ["qa", "recommend_episode"],
+        },
         "actions": {
             "type": "array",
             "items": {
@@ -571,7 +580,7 @@ PLANNER_SCHEMA: Dict[str, Any] = {
         "fallback_to_finance_llm": {"type": "boolean"},
         "final_answer_style": {"type": "string"},
     },
-    "required": ["use_tools", "out_of_scope", "actions", "fallback_to_finance_llm", "final_answer_style"],
+    "required": ["use_tools", "out_of_scope", "intent", "actions", "fallback_to_finance_llm", "final_answer_style"],
 }
 
 _client: Optional[genai.Client] = None
@@ -706,20 +715,24 @@ class Orchestrator:
 
         工具選擇原則：
         1. 問股價、本益比、股息率、市值、ticker 等即時股票資料時，使用 get_realtime_stock_data。
-        2. 問 podcast 是否談過某主題、某位來賓觀點、某集內容時，使用 search_podcast_transcript。
-        3. 一般財經知識、投資觀念、名詞解釋、原理比較，且不依賴即時資料時，不使用工具。
+        2. 問任何財經趨勢、市場觀點、投資策略、產業分析、個股看法等問題時，使用 search_podcast_transcript 搜尋 Podcast 知識庫。
+        3. 只有純粹的名詞解釋、財經原理、定義類問題（如「什麼是本益比？」、「殖利率怎麼計算？」），才不使用工具。
+
+        intent 判斷規則：
+        - recommend_episode：使用者想知道「哪集在講 X」、「推薦什麼 podcast」、「我想聽關於 X 的節目」、「有沒有哪個主播談過 X」等，目的是找到集數去收聽。
+        - qa：其他所有財經問題（想得到答案，不是找集數）。
 
         決策規則：
         1. 如果問題與財經、投資、股票、ETF、基金、總經、利率、公司財報、估值、podcast 財經內容無關，out_of_scope=true。
         2. 如果問題需要即時或外部資料（如股價、本益比、股息率、ticker），use_tools=true。
-        3. 如果問題是在問 podcast 是否談過某主題、某人觀點、某集內容，use_tools=true。
-        4. 如果問題屬於一般財經知識，use_tools=false 且 fallback_to_finance_llm=true。
+        3. 如果問題涉及市場觀點、趨勢分析、投資策略、產業看法、個股分析，無論使用者是否提及 podcast，一律 use_tools=true 並呼叫 search_podcast_transcript。
+        4. 只有問題是純粹名詞定義或財經原理解釋，才 use_tools=false 且 fallback_to_finance_llm=true。
         5. 若 use_tools=true，fallback_to_finance_llm=false。
         6. 若 use_tools=true，actions 不得為空。
         7. actions 只放必要工具，避免多餘呼叫。
         8. 若問題包含公司名稱但未提供 ticker，仍應推測常見 ticker（如 Apple→AAPL，台積電→TSM）。
-        9. 若問題同時涉及即時資料與投資判斷（如是否值得買），仍應使用工具。
-        10. 若問題可用一般知識完整回答，禁止使用工具。
+        9. 若問題同時涉及即時資料與投資判斷（如是否值得買），同時呼叫兩個工具。
+        10. 純名詞定義或原理解釋類問題（如「什麼是 ETF？」、「本益比怎麼看？」），禁止使用工具。
         11. args_json 必須是合法 JSON 字串，且包含必要參數（如 ticker 或 query）。
         12. 若使用者用代名詞（它、這支、剛才那檔），請參考近期對話記錄推斷實際指稱對象。
 
@@ -811,50 +824,90 @@ class Orchestrator:
             """
             return self.finance_qa_llm(system, user_input, history)
 
+        intent = plan.get("intent", "qa")
+
+        # 推薦模式：強制使用 D 類型搜尋設定（跨節目多樣性優先）
+        if intent == "recommend_episode":
+            for action in actions:
+                if action.get("tool") == "search_podcast_transcript":
+                    try:
+                        args = json.loads(action["args_json"]) if isinstance(action["args_json"], str) else action["args_json"]
+                        args["question_type"] = "D"
+                        action["args_json"] = json.dumps(args, ensure_ascii=False)
+                    except (json.JSONDecodeError, KeyError):
+                        pass
+
         tool_results = self.run_tools(actions, user_mode=user_mode)
         tool_context = {"user_input": user_input, "tool_results": [asdict(r) for r in tool_results]}
 
-        system = """
-        你是一位專業的財經助理，請一律使用繁體中文回答。
+        if intent == "recommend_episode":
+            system = """
+            你是一位專業的財經 Podcast 推薦助理，請一律使用繁體中文回答。
 
-        你的任務：
-        1. 先判斷工具結果是否足以回答使用者問題。
-        2. 若足夠，優先根據工具結果直接回答。
-        3. 若不足，明確指出不足處，並僅補充不依賴即時資料的通用財經知識。
-        4. 若工具失敗，簡短說明限制並提供可行替代方向。
+            你的任務：根據搜尋到的 Podcast 內容，推薦 3~5 集最相關的集數讓使用者收聽。
 
-        回答規則：
-        1. 優先回答使用者真正想知道的結論，不要只是摘要工具資料。
-        2. 若工具結果明確，必須優先採用。
-        3. 若工具結果互相衝突，指出衝突與限制。
-        4. 不可虛構即時數字、價格、公告、新聞、法規或日期。
-        5. 若涉及投資建議，避免保證報酬，應說明主要風險與判斷依據。
-        6. 若無法明確回答，要直接說明原因。
-        7. 若使用者問的是延續前一個話題的問題，請結合對話歷史作答。
+            推薦格式（每集一個區塊）：
+            **集名**：xxx
+            **節目 / 主播**：xxx
+            **播出日期**：xxx
+            **為什麼推薦**：1~2 句說明這集和使用者問題的關聯
 
-        內容不足時的透明化規則（重要）：
-        8. 若 retrieved chunks 的內容與問題明顯不相關（跑題、只沾到邊），主動說明：
-           「Podcast 中目前找到的內容與這個問題的關聯性較低，以下回答僅供參考。」
-        9. 若問題問的是某公司或主題，但 chunks 完全沒有提及，明確說：
-           「這個主題在目前收錄的 Podcast 中沒有找到直接討論。」
-        10. 若問題過於寬泛（例如只提概念詞、未指定公司或時間），在回答後補一句建議：
-            「若要取得更精準的 Podcast 觀點，可以嘗試在問題中加入具體的公司名稱、人名或時間範圍。」
+            規則：
+            1. 每集必須來自工具結果，不可虛構集名、主播或日期。
+            2. 推薦理由要具體說明這集談了什麼、和問題的關聯是什麼，不要只說「這集有討論相關主題」。
+            3. 盡量推薦來自不同節目或主播的集數，增加多樣性。
+            4. 若工具結果不足 3 集，列出現有的並說明「目前知識庫中找到 X 集相關內容」。
+            5. 若完全找不到相關集數，直接說明「目前收錄的 Podcast 中沒有找到直接討論這個主題的集數」。
+            6. 不要自稱 AI 或模型。
+            """
+            user = (
+                f"請根據以下搜尋結果，推薦最相關的 Podcast 集數。\n\n"
+                f"使用者問題：\n{user_input}\n\n"
+                f"工具結果 JSON：\n"
+                + json.dumps(tool_context, ensure_ascii=False, indent=2)
+            )
+        else:
+            system = """
+            你是一位專業的財經助理，請一律使用繁體中文回答。
 
-        輸出風格：
-        - 一般用 1~3 段短文
-        - 必要時才用條列
-        - 不要輸出 JSON
-        - 不要逐欄翻譯工具結果
-        - 不要自稱 AI 或模型
-        """
+            你的任務：
+            1. 先判斷工具結果是否足以回答使用者問題。
+            2. 若足夠，優先根據工具結果直接回答。
+            3. 若不足，明確指出不足處，並僅補充不依賴即時資料的通用財經知識。
+            4. 若工具失敗，簡短說明限制並提供可行替代方向。
 
-        user = (
-            f"請根據以下資訊回答使用者問題。\n"
-            f"若工具結果足夠，直接回答；若不足，清楚說明不足處，並只補充通用財經知識。\n\n"
-            f"使用者問題：\n{user_input}\n\n"
-            f"工具結果 JSON：\n"
-            + json.dumps(tool_context, ensure_ascii=False, indent=2)
-        )
+            回答規則：
+            1. 優先回答使用者真正想知道的結論，不要只是摘要工具資料。
+            2. 若工具結果明確，必須優先採用。
+            3. 若工具結果互相衝突，指出衝突與限制。
+            4. 不可虛構即時數字、價格、公告、新聞、法規或日期。
+            5. 若涉及投資建議，避免保證報酬，應說明主要風險與判斷依據。
+            6. 若無法明確回答，要直接說明原因。
+            7. 若使用者問的是延續前一個話題的問題，請結合對話歷史作答。
+
+            內容不足時的透明化規則（重要）：
+            8. 若 retrieved chunks 的內容與問題明顯不相關（跑題、只沾到邊），主動說明：
+               「Podcast 中目前找到的內容與這個問題的關聯性較低，以下回答僅供參考。」
+            9. 若問題問的是某公司或主題，但 chunks 完全沒有提及，明確說：
+               「這個主題在目前收錄的 Podcast 中沒有找到直接討論。」
+            10. 若問題過於寬泛（例如只提概念詞、未指定公司或時間），在回答後補一句建議：
+                「若要取得更精準的 Podcast 觀點，可以嘗試在問題中加入具體的公司名稱、人名或時間範圍。」
+
+            輸出風格：
+            - 一般用 1~3 段短文
+            - 必要時才用條列
+            - 不要輸出 JSON
+            - 不要逐欄翻譯工具結果
+            - 不要自稱 AI 或模型
+            """
+            user = (
+                f"請根據以下資訊回答使用者問題。\n"
+                f"若工具結果足夠，直接回答；若不足，清楚說明不足處，並只補充通用財經知識。\n\n"
+                f"使用者問題：\n{user_input}\n\n"
+                f"工具結果 JSON：\n"
+                + json.dumps(tool_context, ensure_ascii=False, indent=2)
+            )
+
         return self.final_llm(system, user, history)
 
     @staticmethod
