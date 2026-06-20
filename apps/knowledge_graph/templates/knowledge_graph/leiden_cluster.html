@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Leiden 社群比較</title>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #1a1a1a; color: #eee;
+      font-family: "PingFang TC", "Microsoft JhengHei", sans-serif;
+      height: 100vh; display: flex; flex-direction: column; overflow: hidden;
+    }
+
+    /* ── 控制列 ── */
+    #control-bar {
+      flex-shrink: 0; display: flex; align-items: center; gap: 10px;
+      padding: 8px 16px; background: rgba(10,10,10,0.95);
+      border-bottom: 1px solid #333; flex-wrap: wrap;
+    }
+    .period-group { display: flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 7px; border: 1px solid #444; }
+    .period-group.pa { border-color: #555; }
+    .period-group.pb { border-color: #1a6fb5; }
+    .period-label { font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 4px; white-space: nowrap; }
+    .pa .period-label { background: #3a3a3a; color: #aaa; }
+    .pb .period-label { background: #1a3a5c; color: #7ec8ff; }
+    #control-bar label { font-size: 12px; color: #999; white-space: nowrap; }
+    #control-bar input[type="date"], #control-bar select, #control-bar input[type="number"] {
+      background: #2a2a2a; border: 1px solid #444; border-radius: 6px;
+      color: #eee; font-size: 12px; padding: 4px 7px; outline: none; cursor: pointer;
+    }
+    #control-bar input[type="date"] { width: 128px; }
+    #control-bar select { min-width: 110px; }
+    #control-bar input[type="number"] { width: 50px; }
+    input[type="range"] { accent-color: #1a6fb5; cursor: pointer; }
+    #res-val { font-size: 12px; color: #7ec8ff; min-width: 24px; }
+    .sep { color: #333; }
+    .btn { padding: 6px 18px; border-radius: 6px; border: none; font-size: 13px; cursor: pointer; }
+    .btn-primary { background: #1a6fb5; color: #fff; }
+    .btn-primary:hover { background: #2585d4; }
+    .btn:disabled { opacity: .4; cursor: not-allowed; }
+
+    /* ── 兩欄 ── */
+    #panels { flex: 1; display: flex; overflow: hidden; }
+    .panel { flex: 1; display: flex; flex-direction: column; overflow: hidden; border-right: 1px solid #232323; }
+    .panel:last-child { border-right: none; }
+
+    .panel-header { flex-shrink: 0; padding: 6px 14px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; border-bottom: 1px solid #252525; }
+    .panel-header.pa { background: rgba(40,40,40,0.7); }
+    .panel-header.pb { background: rgba(20,40,70,0.5); }
+    .panel-title { font-size: 13px; font-weight: 600; }
+    .pa .panel-title { color: #aaa; }
+    .pb .panel-title { color: #7ec8ff; }
+    .panel-meta { font-size: 11px; color: #555; }
+    .panel-meta span { color: #888; }
+
+    .panel-svg-wrap { flex: 1; position: relative; overflow: hidden; }
+    .panel-svg-wrap svg { width: 100%; height: 100%; display: block; }
+
+    /* ── D3 ── */
+    .p-edge { stroke-opacity: .18; }
+    .p-edge.intra { stroke-opacity: .5; }
+    .p-node { cursor: grab; stroke: #1a1a1a; stroke-width: 1.5; }
+    .p-node:active { cursor: grabbing; }
+    .p-label { font-size: 10px; fill: #d1d5db; text-anchor: middle; dominant-baseline: central; pointer-events: none; user-select: none; }
+
+    /* ── 圖例 ── */
+    .legend-box {
+      position: absolute; top: 10px; right: 10px; background: rgba(0,0,0,.75);
+      border: 1px solid #333; border-radius: 8px; padding: 8px 12px;
+      max-height: 70vh; overflow-y: auto; font-size: 11px; min-width: 150px; display: none;
+    }
+    .legend-box::-webkit-scrollbar { width: 3px; }
+    .legend-box::-webkit-scrollbar-thumb { background: #333; }
+    .legend-title { color: #555; font-size: 10px; margin-bottom: 6px; }
+    .legend-row { display: flex; align-items: center; gap: 7px; margin-bottom: 4px; }
+    .legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+    .legend-lbl { color: #bbb; }
+    .legend-cnt { color: #555; margin-left: auto; }
+    .new-badge { font-size: 9px; background: #14532d; color: #4ade80; padding: 1px 4px; border-radius: 3px; }
+
+    /* ── Empty / Loading ── */
+    .empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; color: #444; gap: 8px; }
+    .empty .ico { font-size: 36px; }
+    .empty p { font-size: 12px; }
+    #spinner { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: none; flex-direction: column; align-items: center; justify-content: center; gap: 14px; z-index: 200; color: #888; }
+    .spin { width: 36px; height: 36px; border: 3px solid #333; border-top-color: #1a6fb5; border-radius: 50%; animation: rot .8s linear infinite; }
+    @keyframes rot { to { transform: rotate(360deg); } }
+
+    /* ── Tooltip ── */
+    #tooltip {
+      position: fixed; background: rgba(15,15,15,.97); border: 1px solid #444;
+      border-radius: 8px; padding: 9px 13px; font-size: 12px; color: #ddd;
+      pointer-events: none; display: none; max-width: 280px; z-index: 300; line-height: 1.65;
+    }
+    #tooltip .tt-name { font-size: 13px; font-weight: 600; color: #fff; margin-bottom: 3px; }
+    #tooltip .tt-sub  { font-size: 11px; color: #6b7280; }
+    #tooltip .tt-rel  { font-size: 11px; color: #6b7280; }
+    #tooltip .tt-rel span { color: #93c5fd; }
+  </style>
+</head>
+<body>
+
+<!-- 控制列 -->
+<div id="control-bar">
+  <div class="period-group pa">
+    <span class="period-label">期間 A</span>
+    <input type="date" id="a-start"><label>→</label><input type="date" id="a-end">
+  </div>
+  <div class="period-group pb">
+    <span class="period-label">期間 B</span>
+    <input type="date" id="b-start"><label>→</label><input type="date" id="b-end">
+  </div>
+  <span class="sep">|</span>
+  <label>關係</label>
+  <select id="rel-type">
+    <option value="">全部</option>
+    <option value="Supply">Supply</option>
+    <option value="Co-impact">Co-impact</option>
+    <option value="Substitution">Substitution</option>
+  </select>
+  <label>產業</label>
+  <select id="industry"><option value="">全部</option></select>
+  <span class="sep">|</span>
+  <label>Resolution</label>
+  <input type="range" id="resolution" min="0.1" max="3" step="0.1" value="1.0" style="width:70px"
+         oninput="document.getElementById('res-val').textContent=this.value">
+  <span id="res-val">1.0</span>
+  <label>最小</label>
+  <input type="number" id="min-size" value="3" min="2" max="20">
+  <button class="btn btn-primary" id="run-btn" onclick="run()">比較</button>
+</div>
+
+<!-- 兩欄 -->
+<div id="panels">
+  <div class="panel">
+    <div class="panel-header pa">
+      <span class="panel-title">期間 A</span>
+      <span class="panel-meta" id="meta-a">請選擇時間後按「比較」</span>
+    </div>
+    <div class="panel-svg-wrap" id="wrap-a">
+      <div class="empty"><div class="ico">📅</div><p>選好時間後按「比較」</p></div>
+      <svg id="svg-a"></svg>
+      <div class="legend-box" id="leg-a"><div class="legend-title">▍ 社群</div><div id="leg-a-rows"></div></div>
+    </div>
+  </div>
+  <div class="panel">
+    <div class="panel-header pb">
+      <span class="panel-title">期間 B</span>
+      <span class="panel-meta" id="meta-b"></span>
+    </div>
+    <div class="panel-svg-wrap" id="wrap-b">
+      <svg id="svg-b"></svg>
+      <div class="legend-box" id="leg-b"><div class="legend-title">▍ 社群</div><div id="leg-b-rows"></div></div>
+    </div>
+  </div>
+</div>
+
+<div id="spinner"><div class="spin"></div><p>兩期 Leiden 分群中，請稍候…</p></div>
+<div id="tooltip"></div>
+
+<script>
+let simA = null, simB = null;
+
+(async () => {
+  try {
+    const d = await (await fetch("/api/knowledge-graph/latest-date/")).json();
+    if (d.latest_date) {
+      const latest = new Date(d.latest_date);
+      const fmt = d => d.toISOString().split("T")[0];
+      const bEnd = new Date(latest);
+      const bSt  = new Date(latest); bSt.setDate(bSt.getDate() - 6);
+      const aEnd = new Date(latest); aEnd.setDate(aEnd.getDate() - 7);
+      const aSt  = new Date(latest); aSt.setDate(aSt.getDate() - 13);
+      document.getElementById("b-start").value = fmt(bSt);
+      document.getElementById("b-end").value   = fmt(bEnd);
+      document.getElementById("a-start").value = fmt(aSt);
+      document.getElementById("a-end").value   = fmt(aEnd);
+    }
+  } catch(e) {}
+  try {
+    const d = await (await fetch("/api/knowledge-graph/industries/")).json();
+    const sel = document.getElementById("industry");
+    (d.industries || []).forEach(v => { const o = document.createElement("option"); o.value = o.textContent = v; sel.appendChild(o); });
+  } catch(e) {}
+})();
+
+async function run() {
+  const params = new URLSearchParams({
+    a_start: document.getElementById("a-start").value,
+    a_end:   document.getElementById("a-end").value,
+    b_start: document.getElementById("b-start").value,
+    b_end:   document.getElementById("b-end").value,
+    resolution: document.getElementById("resolution").value,
+    min_size:   document.getElementById("min-size").value,
+  });
+  const rt  = document.getElementById("rel-type").value;
+  const ind = document.getElementById("industry").value;
+  if (rt)  params.set("relation_type", rt);
+  if (ind) params.set("industry", ind);
+
+  setLoad(true);
+  try {
+    const data = await (await fetch("/api/knowledge-graph/leiden-cluster-data/?" + params)).json();
+    if (data.error) { alert("錯誤：" + data.error); return; }
+    render(data);
+  } catch(e) { alert(e.message); }
+  finally { setLoad(false); }
+}
+
+function render(data) {
+  const commA = data.communities_a || [];
+  const commB = data.communities_b || [];
+  const meta  = data.meta || {};
+
+  // 標頭
+  const aS = document.getElementById("a-start").value, aE = document.getElementById("a-end").value;
+  const bS = document.getElementById("b-start").value, bE = document.getElementById("b-end").value;
+  document.getElementById("meta-a").innerHTML =
+    `<span>${aS} ~ ${aE}</span> ｜ ${commA.length} 個社群 ｜ Modularity ${meta.modularity_a}`;
+  document.getElementById("meta-b").innerHTML =
+    `<span>${bS} ~ ${bE}</span> ｜ ${commB.length} 個社群 ｜ Modularity ${meta.modularity_b}` +
+    (meta.new_communities ? ` ｜ <span style="color:#4ade80">+${meta.new_communities} 新</span>` : "") +
+    (meta.disappeared_communities ? ` ｜ <span style="color:#f87171">-${meta.disappeared_communities} 消失</span>` : "");
+
+  renderPanel("svg-a","wrap-a","leg-a","leg-a-rows", data.nodes_a||[], data.edges_a||[], commA, "simA");
+  renderPanel("svg-b","wrap-b","leg-b","leg-b-rows", data.nodes_b||[], data.edges_b||[], commB, "simB");
+}
+
+function renderPanel(svgId, wrapId, legId, legRowsId, nodes, edges, communities, simKey) {
+  const wrap = document.getElementById(wrapId);
+  const emp  = wrap.querySelector(".empty");
+  if (emp) emp.style.display = "none";
+
+  const leg = document.getElementById(legId);
+  if (!nodes.length) {
+    leg.style.display = "none";
+    if (emp) { emp.style.display = "flex"; emp.querySelector("p").textContent = "無資料"; }
+    return;
+  }
+  leg.style.display = "block";
+
+  // 圖例
+  document.getElementById(legRowsId).innerHTML = communities.map(c =>
+    `<div class="legend-row">
+      <div class="legend-dot" style="background:${c.color}"></div>
+      <span class="legend-lbl">社群${c.cluster_id+1}</span>
+      ${c.is_new ? '<span class="new-badge">新</span>' : ''}
+      <span class="legend-cnt">${c.size}</span>
+    </div>`
+  ).join("");
+
+  const W = wrap.clientWidth, H = wrap.clientHeight;
+  const svg = d3.select(`#${svgId}`);
+  svg.selectAll("*").remove();
+
+  const g = svg.append("g");
+  svg.call(d3.zoom().scaleExtent([.1,6]).on("zoom", e => g.attr("transform", e.transform)));
+
+  const edgeG = g.append("g");
+  const nodeG = g.append("g");
+
+  // 節點 map
+  const nodeMap = {};
+  nodes.forEach(n => nodeMap[n.id] = n);
+
+  const edgeEl = edgeG.selectAll(".p-edge").data(edges).join("line")
+    .attr("class", d => "p-edge" + (d.same_cluster ? " intra" : ""))
+    .attr("stroke", d => nodeMap[d.source]?.color || "#555")
+    .attr("stroke-width", d => Math.min(4, 1 + d.weight * 0.4));
+
+  const nodeEl = nodeG.selectAll(".p-node-g").data(nodes).join("g")
+    .attr("class","p-node-g")
+    .call(d3.drag()
+      .on("start", (e,d)=>{ if(!e.active) sim.alphaTarget(.3).restart(); d.fx=d.x; d.fy=d.y; })
+      .on("drag",  (e,d)=>{ d.fx=e.x; d.fy=e.y; })
+      .on("end",   (e,d)=>{ if(!e.active) sim.alphaTarget(0); d.fx=null; d.fy=null; }))
+    .on("mouseover", showTip).on("mousemove", moveTip).on("mouseout", hideTip);
+
+  nodeEl.append("circle").attr("class","p-node")
+    .attr("r", d => Math.max(16, Math.min(38, 9 + Math.sqrt(d.degree||1)*3)))
+    .attr("fill", d => d.color).attr("fill-opacity",.8);
+  nodeEl.append("text").attr("class","p-label").text(d => trunc(d.id,6));
+
+  // 力模擬
+  const igEdges = edges.map(e => ({
+    source: nodeMap[e.source], target: nodeMap[e.target],
+    weight: e.weight, same_cluster: e.same_cluster,
+  })).filter(e => e.source && e.target);
+
+  const sim = d3.forceSimulation(nodes)
+    .force("link", d3.forceLink(igEdges).id(d=>d.id)
+      .distance(d => d.same_cluster ? 55 : 160)
+      .strength(d => d.same_cluster ? 0.6 : 0.04))
+    .force("charge", d3.forceManyBody().strength(-100))
+    .force("center", d3.forceCenter(W/2, H/2))
+    .force("collide", d3.forceCollide(d => Math.max(16,Math.min(38,9+Math.sqrt(d.degree||1)*3))+5))
+    .alphaDecay(0.025);
+
+  if (simKey === "simA") { if (simA) simA.stop(); simA = sim; }
+  else                   { if (simB) simB.stop(); simB = sim; }
+
+  // Tooltip 用：存所有 edges
+  wrap._allEdges = edges;
+
+  sim.on("tick", () => {
+    edgeEl
+      .attr("x1", d => nodeMap[d.source]?.x ?? 0).attr("y1", d => nodeMap[d.source]?.y ?? 0)
+      .attr("x2", d => nodeMap[d.target]?.x ?? 0).attr("y2", d => nodeMap[d.target]?.y ?? 0);
+    nodeEl.attr("transform", d => `translate(${d.x},${d.y})`);
+  });
+}
+
+// ── Tooltip ───────────────────────────────────────────────────────────
+function showTip(event, d) {
+  const wrap = event.currentTarget.closest(".panel-svg-wrap");
+  const rels = (wrap._allEdges || [])
+    .filter(e => e.source === d.id || e.target === d.id).slice(0,4);
+  const rHtml = rels.map(e =>
+    `<div class="tt-rel"><span>${esc(e.source)}</span> → <span>${esc(e.target)}</span>（×${e.weight}）</div>`
+  ).join("");
+  document.getElementById("tooltip").innerHTML =
+    `<div class="tt-name">${esc(d.id)}</div>` +
+    `<div class="tt-sub">社群 ${d.cluster_id+1} ｜ 連線強度 ${d.degree}</div>` + rHtml;
+  document.getElementById("tooltip").style.display = "block";
+  moveTip(event);
+}
+function moveTip(event) {
+  const tt = document.getElementById("tooltip");
+  tt.style.left = Math.min(event.clientX+14, window.innerWidth-tt.offsetWidth-10) + "px";
+  tt.style.top  = Math.min(event.clientY-10, window.innerHeight-tt.offsetHeight-10) + "px";
+}
+function hideTip() { document.getElementById("tooltip").style.display = "none"; }
+
+function trunc(s,n){ return s.length>n?s.slice(0,n)+"…":s; }
+function esc(s){ return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;"); }
+function setLoad(on){ document.getElementById("spinner").style.display=on?"flex":"none"; document.getElementById("run-btn").disabled=on; }
+</script>
+</body>
+</html>
