@@ -714,13 +714,14 @@ def step2_retrieve(
     use_multi_query: bool = False,
     reranker=None,
     use_reranker: bool = True,
+    sub_queries: list[str] | None = None,
 ) -> dict:
     """
     生產搜尋邏輯（與 search_podcast_transcript 一致）：
-      entity 抽取 → [multi-query 展開] → metadata filter → 向量搜尋（候選池）→ Hybrid BM25 重排 → diversity → top_k
+      entity 抽取 → [query 展開] → metadata filter → 向量搜尋（候選池）→ Hybrid BM25 重排 → diversity → top_k
 
-    use_multi_query=True 時：將原始 query 改寫成 3 種表達，各自 retrieve 後合并去重（取最高分），
-    再用原始 question 做 BM25 重排，避免預設答案方向。
+    sub_queries：直接傳入子問題列表（B/C 型用 must_cover_points），優先於 use_multi_query。
+    use_multi_query：為 None 時將原始 query 改寫成 3 種表達（A 型用）。
     """
     from apps.ai_assistant.services.ai_assistant import _hybrid_rerank, _apply_diversity
 
@@ -758,7 +759,10 @@ def step2_retrieve(
             return cur.fetchall()
 
     # 決定用哪些 queries
-    if use_multi_query:
+    # sub_queries 優先：B/C 型直接用 must_cover_points 作為子問題，不需 LLM 改寫
+    if sub_queries:
+        queries = [question] + sub_queries[:4]  # 原問題 + 最多 4 個面向
+    elif use_multi_query:
         queries = _expand_queries(question, client, model_name)
         time.sleep(0.3)
     else:
@@ -845,11 +849,30 @@ def step3_2_coverage(
 # Step 4：生成 RAG 答案
 # ===========================================================================
 
-def step4_generate_answer(question: str, retrieved_chunks: list[dict], client, model_name: str) -> str:
+def step4_generate_answer(question: str, retrieved_chunks: list[dict], client, model_name: str, question_type: str = "A") -> str:
     chunks_text = _format_chunks_for_prompt(retrieved_chunks)
+
+    type_instruction = ""
+    if question_type == "B":
+        type_instruction = (
+            "【整合要求】\n"
+            "本題需要整合多集 Podcast 的資訊。請：\n"
+            "1. 明確整合不同來源的觀點，說明各來源如何補充或印證彼此\n"
+            "2. 避免只是逐一列出每集內容，要給出跨集的綜合結論\n\n"
+        )
+    elif question_type == "C":
+        type_instruction = (
+            "【比較要求】\n"
+            "本題要求比較不同來源的觀點或變化。請：\n"
+            "1. 明確指出不同集數／來賓／時間點之間的「差異」或「趨勢變化」\n"
+            "2. 使用「A 認為⋯⋯，而 B 則認為⋯⋯」或「相較於之前⋯⋯，近期⋯⋯」這類對比結構\n"
+            "3. 不可只是分別摘要各來源，必須有明確的比較結論\n\n"
+        )
+
     prompt = (
         "你是一位專業財經助理，請根據以下 podcast 內容，用繁體中文回答使用者問題。\n"
         "只使用提供的內容作答，不引用外部知識。\n\n"
+        + type_instruction +
         "內容不足時的透明化規則：\n"
         "- 若內容與問題明顯不相關，說明「Podcast 中目前找到的內容與這個問題的關聯性較低」。\n"
         "- 若問題問的主題完全沒有在內容中出現，說明「這個主題在目前收錄的 Podcast 中沒有找到直接討論」。\n"
@@ -959,6 +982,9 @@ class Command(BaseCommand):
                     # Step 2
                     self.stdout.write("    Step 2: Retrieval...", ending="\r")
                     cfg = RETRIEVAL_CFG_BY_TYPE[qtype]
+                    # B/C 型：用 must_cover_points 做 query decomposition
+                    # A 型：用 multi-query 改寫
+                    decomp_queries = must_cover_points if qtype in ("B", "C") else None
                     step2 = step2_retrieve(
                         question, embed_model, client, model_name,
                         top_k=cfg["top_k"],
@@ -967,6 +993,7 @@ class Command(BaseCommand):
                         use_multi_query=cfg.get("multi_query", False),
                         reranker=reranker,
                         use_reranker=cfg.get("use_reranker", True),
+                        sub_queries=decomp_queries,
                     )
                     retrieved_chunks = step2["retrieved_chunks"]
                     filters_used = step2.get("filters_used")
@@ -1002,7 +1029,7 @@ class Command(BaseCommand):
 
                     # Step 4
                     self.stdout.write("    Step 4: 生成答案...", ending="\r")
-                    answer = step4_generate_answer(question, retrieved_chunks, client, model_name)
+                    answer = step4_generate_answer(question, retrieved_chunks, client, model_name, question_type=qtype)
                     record["answer"] = answer
                     self.stdout.write(f"    Step 4 完成：{answer[:60]}...")
                     time.sleep(0.5)
@@ -1084,13 +1111,12 @@ class Command(BaseCommand):
             if qtype == "B":
                 self.stdout.write(f"  Answer Coverage     {sum(acov_vals)/n:.2f}")
 
-            if qtype in ("A", "C"):
-                self.stdout.write(
-                    f"  Faithfulness        "
-                    f"faithful={faith_labels.count('faithful')}  "
-                    f"partially={faith_labels.count('partially_faithful')}  "
-                    f"not={faith_labels.count('not_faithful')}"
-                )
+            self.stdout.write(
+                f"  Faithfulness        "
+                f"faithful={faith_labels.count('faithful')}  "
+                f"partially={faith_labels.count('partially_faithful')}  "
+                f"not={faith_labels.count('not_faithful')}"
+            )
 
             if qtype == "C":
                 cq_labels = [

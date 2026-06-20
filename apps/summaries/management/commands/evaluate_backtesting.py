@@ -37,31 +37,42 @@ _price_cache: dict[tuple, Optional[float]] = {}
 
 def _get_close_price(ticker: str, target_date: date) -> Optional[float]:
     """
-    抓 target_date 當天或之後最近一個交易日的收盤價。
+    抓 target_date 當天或最近一個交易日的收盤價。
+    策略：
+      1. 先往後找 7 天（處理假日、停牌）
+      2. 若還是空（例如 target_date 是今天且收盤資料未更新、或遇到假日），
+         改往前找 7 天，取最近的交易日收盤價
     查過的結果快取在 _price_cache，避免重複 API 呼叫。
     """
     key = (ticker, target_date)
     if key in _price_cache:
         return _price_cache[key]
 
-    # 往後抓 7 天，處理假日/停牌
-    end = target_date + timedelta(days=7)
-    try:
-        tk = yf.Ticker(ticker)
-        hist = tk.history(
-            start=target_date.strftime("%Y-%m-%d"),
-            end=end.strftime("%Y-%m-%d"),
-            auto_adjust=True,
-        )
-        if hist.empty:
-            _price_cache[key] = None
+    tk = yf.Ticker(ticker)
+
+    def _fetch(start: date, end: date, take_last: bool = False) -> Optional[float]:
+        try:
+            hist = tk.history(
+                start=start.strftime("%Y-%m-%d"),
+                end=end.strftime("%Y-%m-%d"),
+                auto_adjust=True,
+            )
+            if hist.empty:
+                return None
+            price = float(hist["Close"].iloc[-1 if take_last else 0])
+            return price
+        except Exception:
             return None
-        price = float(hist["Close"].iloc[0])
-        _price_cache[key] = price
-        return price
-    except Exception:
-        _price_cache[key] = None
-        return None
+
+    # 策略 1：往後找
+    price = _fetch(target_date, target_date + timedelta(days=7))
+
+    # 策略 2：往前找（假日/今天資料未出爐）
+    if price is None:
+        price = _fetch(target_date - timedelta(days=7), target_date, take_last=True)
+
+    _price_cache[key] = price
+    return price
 
 
 # ── 評估單筆 ──────────────────────────────────────────────────────────────────

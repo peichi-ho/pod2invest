@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sys
 import re
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -67,13 +68,18 @@ def fix_content_with_gemini(batch_text: str) -> str:
     wait = 10
     for attempt in range(1, MAX_ATTEMPTS + 1):
         try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(
-                    client.models.generate_content,
-                    model="gemini-2.5-flash",
-                    contents=prompt,
-                )
+            executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            future = executor.submit(
+                client.models.generate_content,
+                model="gemini-2.5-flash",
+                contents=prompt,
+            )
+            try:
                 response = future.result(timeout=300)
+            except concurrent.futures.TimeoutError:
+                executor.shutdown(wait=False, cancel_futures=True)
+                raise
+            executor.shutdown(wait=False)
             return response.text.replace("```srt", "").replace("```", "").strip()
         except concurrent.futures.TimeoutError:
             err_msg = "請求逾時（300 秒無回應）"
@@ -86,14 +92,23 @@ def fix_content_with_gemini(batch_text: str) -> str:
         except KeyboardInterrupt:
             raise
         except Exception as e:
-            is_503 = "503" in str(e) or "UNAVAILABLE" in str(e)
+            err_str = str(e)
+            is_429 = "429" in err_str or "RESOURCE_EXHAUSTED" in err_str
+            is_503 = "503" in err_str or "UNAVAILABLE" in err_str
             if attempt < MAX_ATTEMPTS:
-                # 503 流量過高：等更久再重試
-                actual_wait = wait * 3 if is_503 else wait
-                tag = "（503 流量過高，等待較長時間）" if is_503 else ""
+                if is_429:
+                    actual_wait = 60
+                    tag = "（429 配額限制，等待 60 秒）"
+                elif is_503:
+                    actual_wait = max(wait * 3, 30)
+                    tag = "（503 流量過高）"
+                else:
+                    actual_wait = wait
+                    tag = ""
                 print(f"   [Gemini Warning] 第 {attempt} 次失敗（{e}）{tag}，{actual_wait} 秒後重試...")
                 time.sleep(actual_wait)
-                wait = min(wait * 2, 300)
+                if not is_429:
+                    wait = min(wait * 2, 300)
             else:
                 raise GeminiCorrectionError(str(e))
 
@@ -284,6 +299,8 @@ def transcribe_and_fix(
         )
         fixed_batch = fix_content_with_gemini(batch)
         final_srt_blocks.append(fixed_batch)
+        if i + batch_size < len(srt_blocks):
+            time.sleep(5)
 
     print("   [Debug] 寫入最終 SRT 檔案...")
     with open(out_path, "w", encoding="utf-8") as f:
@@ -320,6 +337,8 @@ def fix_existing_srt_only(srt_path: Path) -> None:
         )
         fixed_batch = fix_content_with_gemini(batch)
         final_srt_blocks.append(fixed_batch)
+        if i + batch_size < len(srt_blocks):
+            time.sleep(5)
 
     with open(srt_path, "w", encoding="utf-8") as f:
         f.write("\n\n".join(final_srt_blocks))

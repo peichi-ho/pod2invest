@@ -22,6 +22,26 @@ def graph_page(request):
     return render(request, "knowledge_graph/graph.html")
 
 
+def node_episodes_api(request):
+    """回傳某節點在最近 N 天內出現過的 podcast_source 清單。"""
+    node = request.GET.get("node", "").strip()
+    days = int(request.GET.get("days", 30))
+    if not node:
+        return JsonResponse({"error": "node is required"}, status=400)
+    try:
+        with connections["knowledge_graphdb"].cursor() as cursor:
+            cursor.execute("""
+                SELECT DISTINCT podcast_source FROM links
+                WHERE (source = %s OR target = %s)
+                AND summary_date >= NOW() - INTERVAL '%s days'
+                AND podcast_source IS NOT NULL AND podcast_source <> ''
+            """, [node, node, days])
+            sources = [row[0] for row in cursor.fetchall()]
+        return JsonResponse({"sources": sources, "node": node})
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+
 def latest_date_api(request):
     """回傳 links 表中最新的 summary_date，供前端設定預設日期範圍。"""
     try:

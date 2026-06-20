@@ -54,6 +54,19 @@ def parse_selection(s: str, max_index: int) -> list[int] | None:
 
 load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
 
+
+def notify(message: str) -> None:
+    """發送 Discord 通知，失敗不影響主流程"""
+    import requests as req
+    webhook_url = os.getenv("DISCORD_WEBHOOK_URL", "")
+    if not webhook_url:
+        return
+    try:
+        req.post(webhook_url, json={"content": message}, timeout=10)
+    except Exception:
+        pass
+
+
 from service import (
     input_nonempty,
     input_int,
@@ -197,6 +210,7 @@ def main():
             except GeminiCorrectionError as e:
                 print(f"   [!] Gemini 校正失敗，略過資料庫寫入：{title}")
                 correction_failed.append(title)
+                notify(f"❌ [{show_name}] {title} Gemini 校正失敗")
                 continue
 
             print(f"任務成功：{sub_path.name}")
@@ -210,6 +224,7 @@ def main():
                     episode_title=title,
                     published_at=published_at,
                 )
+                notify(f"✅ [{show_name}] {title} 處理完成")
             except Exception as db_err:
                 print(f"   [資料庫錯誤] {db_err}")
 
@@ -217,6 +232,7 @@ def main():
             import traceback
             traceback.print_exc()
             print(f"任務失敗：{title} | 原因：{e}")
+            notify(f"❌ [{show_name}] {title} 任務失敗（{e}）")
 
     if correction_failed:
         print(f"\n{'='*50}")

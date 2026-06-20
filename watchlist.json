@@ -1,15 +1,15 @@
 [
-  { "name": "下班經濟學", "language": "zh", "filter": ["下班經濟學_股票"] },
-  { "name": "財報狗 - 掌握台股美股時事議題", "language": "zh", "filter": ["財經時事放大鏡", "台股美股提款機"] },
-  { "name": "游庭皓的財經皓角", "language": "zh", "filter": [] },
-  { "name": "Gooaye 股癌", "language": "zh", "filter": [] },
-  { "name": "財經一路發", "language": "zh", "filter": [] },
-  { "name": "投資癮", "language": "zh", "filter": [] },
-  { "name": "MacroMicro 財經M平方", "language": "zh", "filter": ["After Meeting"] },
-  { "name": "兆華與股惑仔", "language": "zh", "filter": [] },
-  { "name": "美股投資學-財女珍妮", "language": "zh", "filter": [] },
-  { "name": "小朋友學投資", "language": "zh", "filter": ["不魯小週記", "免費版EP"] },
-  { "name": "不敗教主陳重銘", "language": "zh", "filter": [] },
-  { "name": "兆華與阿格力-有求必應", "language": "zh", "filter": [] },
-  { "name": "M觀點 | 科技X商業X投資", "language": "zh", "filter": [] }
+  { "name": "下班經濟學", "language": "zh", "filter": ["下班經濟學_股票"], "exclude": [] },
+  { "name": "財報狗 - 掌握台股美股時事議題", "language": "zh", "filter": ["財經時事放大鏡", "台股美股提款機"], "exclude": [] },
+  { "name": "游庭皓的財經皓角", "language": "zh", "filter": [], "exclude": [] },
+  { "name": "Gooaye 股癌", "language": "zh", "filter": [], "exclude": [] },
+  { "name": "財經一路發", "language": "zh", "filter": [], "exclude": ["財富生活"] },
+  { "name": "投資癮", "language": "zh", "filter": [], "exclude": [] },
+  { "name": "MacroMicro 財經M平方", "language": "zh", "filter": ["After Meeting"], "exclude": [] },
+  { "name": "兆華與股惑仔", "language": "zh", "filter": [], "exclude": [] },
+  { "name": "美股投資學-財女珍妮", "language": "zh", "filter": [], "exclude": ["主題專訪"] },
+  { "name": "小朋友學投資", "language": "zh", "filter": ["不魯小週記", "免費版EP"], "exclude": [] },
+  { "name": "不敗教主陳重銘", "language": "zh", "filter": [], "exclude": ["富媽媽", "窮媽媽"] },
+  { "name": "兆華與阿格力-有求必應", "language": "zh", "filter": [], "exclude": [] },
+  { "name": "M觀點 | 科技X商業X投資", "language": "zh", "filter": [], "exclude": [] }
 ]

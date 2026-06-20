@@ -69,8 +69,15 @@
 <div id="page-discover" class="page active pt-24 px-6 max-w-5xl mx-auto space-y-10">
   <section>
     <div class="relative">
-      <input class="w-full h-14 pl-14 pr-6 bg-surface-container-high rounded-full border-none focus:ring-2 focus:ring-secondary font-body text-on-surface-variant" placeholder="Search insights, podcasts, or tickers..." type="text"/>
+      <input id="discover-search"
+        oninput="onSearchInput()"
+        onkeydown="onSearchKeydown(event)"
+        autocomplete="off"
+        class="w-full h-14 pl-14 pr-6 bg-surface-container-high rounded-full border-none focus:ring-2 focus:ring-secondary font-body text-on-surface-variant"
+        placeholder="Search insights, podcasts, or tickers..."
+        type="text"/>
       <span class="material-symbols-outlined absolute left-5 top-1/2 -translate-y-1/2 text-outline">search</span>
+      <div id="search-dropdown" class="hidden absolute top-full left-0 right-0 mt-2 bg-surface-container-high rounded-2xl shadow-xl z-50 overflow-hidden" style="max-height:420px;overflow-y:auto;"></div>
     </div>
     <div id="discover-tags" class="flex gap-3 mt-6 overflow-x-auto pb-2 no-scrollbar">
       <span class="text-outline text-sm self-center">載入中...</span>
@@ -128,14 +135,41 @@
 
   <!-- Hero -->
   <section class="mb-10">
-    <div class="inline-block px-3 py-1 rounded-full bg-secondary-container/30 text-secondary font-label text-xs font-bold tracking-widest uppercase mb-4">This Month</div>
-    <h2 class="font-['Epilogue'] text-5xl font-bold tracking-tight text-tertiary-container mb-2">Creator Rankings</h2>
-    <p class="text-secondary font-medium">Ranked by listener count, accuracy score & engagement.</p>
+    <div class="flex items-start justify-between gap-4">
+      <div>
+        <div class="inline-block px-3 py-1 rounded-full bg-secondary-container/30 text-secondary font-label text-xs font-bold tracking-widest uppercase mb-4">This Month</div>
+        <h2 class="font-['Epilogue'] text-5xl font-bold tracking-tight text-tertiary-container mb-2">Creator Rankings</h2>
+        <p id="rankings-subtitle" class="text-secondary font-medium">全部節目 · 依準確率排名</p>
+      </div>
+      <div class="relative flex-shrink-0 mt-2" id="rankings-filter-container">
+        <button onclick="toggleRankingsFilter()" id="rankings-filter-btn"
+          class="flex items-center gap-1.5 px-4 py-2 bg-surface-container-high rounded-full text-sm font-semibold text-tertiary-container hover:bg-surface-container-highest transition-colors border border-outline-variant/20">
+          <span class="material-symbols-outlined text-base">filter_list</span>
+          <span id="rankings-filter-label">全部</span>
+          <span class="material-symbols-outlined text-base" id="rankings-filter-chevron">expand_more</span>
+        </button>
+        <!-- Dropdown -->
+        <div id="rankings-filter-dropdown" class="hidden absolute right-0 top-full mt-2 bg-[#fcf9f0] rounded-2xl shadow-xl z-50 border border-outline-variant/20 overflow-hidden" style="min-width:190px;">
+          <button onclick="applySectorFilter(null)" class="sector-btn w-full text-left px-4 py-3 text-sm font-semibold text-tertiary-container hover:bg-surface-container-high transition-colors flex items-center gap-2 bg-on-primary-container text-white" id="sector-btn-all">
+            <span class="material-symbols-outlined text-base" style="font-variation-settings:'FILL' 1">leaderboard</span>全部節目
+          </button>
+          <div class="h-px bg-outline-variant/20"></div>
+          <button onclick="applySectorFilter('半導體/電子元件')" class="sector-btn w-full text-left px-4 py-3 text-sm font-semibold text-tertiary-container hover:bg-surface-container-high transition-colors">💾 半導體/電子元件</button>
+          <button onclick="applySectorFilter('科技類')" class="sector-btn w-full text-left px-4 py-3 text-sm font-semibold text-tertiary-container hover:bg-surface-container-high transition-colors">💻 科技類</button>
+          <button onclick="applySectorFilter('台股指數')" class="sector-btn w-full text-left px-4 py-3 text-sm font-semibold text-tertiary-container hover:bg-surface-container-high transition-colors">📈 台股指數</button>
+          <button onclick="applySectorFilter('海外指數')" class="sector-btn w-full text-left px-4 py-3 text-sm font-semibold text-tertiary-container hover:bg-surface-container-high transition-colors">🌐 海外指數</button>
+          <button onclick="applySectorFilter('大宗商品/外匯')" class="sector-btn w-full text-left px-4 py-3 text-sm font-semibold text-tertiary-container hover:bg-surface-container-high transition-colors">🥇 大宗商品/外匯</button>
+          <button onclick="applySectorFilter('ETF')" class="sector-btn w-full text-left px-4 py-3 text-sm font-semibold text-tertiary-container hover:bg-surface-container-high transition-colors">📦 ETF</button>
+          <button onclick="applySectorFilter('能源/電動車')" class="sector-btn w-full text-left px-4 py-3 text-sm font-semibold text-tertiary-container hover:bg-surface-container-high transition-colors">⚡ 能源/電動車</button>
+          <button onclick="applySectorFilter('其他產業')" class="sector-btn w-full text-left px-4 py-3 text-sm font-semibold text-tertiary-container hover:bg-surface-container-high transition-colors">🏭 其他產業</button>
+        </div>
+      </div>
+    </div>
   </section>
 
   <!-- Top 3 Podium -->
   <section class="mb-10">
-    <div id="rankings-podium" class="grid grid-cols-3 gap-4 items-end min-h-[200px]">
+    <div id="rankings-podium" class="grid grid-cols-3 gap-2 items-end min-h-[200px]">
       <div class="col-span-3 flex items-center justify-center text-outline text-sm py-12">載入中...</div>
     </div>
   </section>
@@ -151,7 +185,7 @@
 <div id="page-podcaster" class="page pt-20 pb-32 px-6 max-w-5xl mx-auto">
 
   <!-- Back button -->
-  <button onclick="showPage('rankings')" class="flex items-center gap-1 text-secondary font-label text-sm font-semibold mb-6 hover:opacity-70 transition-opacity">
+  <button onclick="goBack()" class="flex items-center gap-1 text-secondary font-label text-sm font-semibold mb-6 hover:opacity-70 transition-opacity">
     <span class="material-symbols-outlined text-base">arrow_back_ios</span>
     Rankings
   </button>
@@ -172,7 +206,7 @@
         <span id="podcaster-listeners">—</span> Listeners
       </div>
       <div class="px-4 py-1.5 bg-surface-container-low rounded-full text-xs font-bold text-on-primary-container border border-outline-variant/20">
-        <span id="podcaster-accuracy">—</span>% Accuracy
+        <span id="podcaster-accuracy">—</span>
       </div>
     </div>
 
@@ -318,125 +352,156 @@
 </div>
 
 <!-- ═══════════════════════════════════════════════ PAGE: CALCULATOR ═══ -->
-<div id="page-calculator" class="page pt-24 px-6 max-w-7xl mx-auto">
-  <section class="mb-12">
+<div id="page-calculator" class="page pt-24 px-6 max-w-7xl mx-auto pb-8">
+  <button onclick="goBack()" class="flex items-center gap-1 text-secondary font-label text-sm font-semibold mb-6 hover:opacity-70 transition-opacity">
+    <span class="material-symbols-outlined text-base">arrow_back_ios</span>
+    返回
+  </button>
+  <section class="mb-10">
     <h2 class="font-['Epilogue'] text-5xl md:text-7xl font-bold text-tertiary-container tracking-[-0.04em] mb-4">Wealth Simulator</h2>
-    <p class="text-secondary font-medium max-w-xl text-lg leading-relaxed">Precision-engineered modeling for your financial future.</p>
+    <p class="text-secondary font-medium max-w-xl text-lg leading-relaxed">輸入個股代號，計算投資報酬。</p>
   </section>
-  <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+  <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+
+    <!-- Left: Parameters -->
     <div class="lg:col-span-4 space-y-6">
-      <div class="bg-surface-container-low p-8 rounded-lg space-y-8">
-        <h3 class="font-['Epilogue'] text-xl font-bold text-tertiary-container border-b border-outline-variant/20 pb-4">Simulation Parameters</h3>
-        <div class="space-y-6">
-          <div class="space-y-2">
-            <label class="font-label text-xs font-bold uppercase tracking-widest text-outline">Initial Capital</label>
-            <div class="relative">
-              <span class="absolute left-4 top-1/2 -translate-y-1/2 text-tertiary-container font-bold">$</span>
-              <input id="sim-capital" class="w-full pl-8 pr-4 py-4 bg-surface-container-lowest border-none rounded-DEFAULT focus:ring-2 focus:ring-secondary text-tertiary-container font-['Epilogue'] font-semibold" type="number" value="50000" oninput="calcWealth()"/>
+      <div class="bg-surface-container-low p-8 rounded-lg space-y-6">
+        <div class="flex items-center justify-between border-b border-outline-variant/20 pb-4">
+          <h3 class="font-['Epilogue'] text-xl font-bold text-tertiary-container">Investment Parameters</h3>
+        </div>
+
+        <!-- Ticker -->
+        <div class="space-y-2">
+          <label class="font-label text-xs font-bold uppercase tracking-widest text-outline">股票代號</label>
+          <div class="flex gap-2">
+            <input id="sim-ticker" type="text" placeholder="代號或名稱，如 2330 / 台積電"
+              onkeydown="if(event.key==='Enter') fetchStockInfo()"
+              oninput="_checkHostCalcDiff()"
+              class="flex-1 px-4 py-3 bg-surface-container-lowest border-none rounded-full focus:ring-2 focus:ring-secondary font-body text-on-surface-variant"/>
+            <button onclick="fetchStockInfo()" class="px-5 py-3 bg-tertiary-container text-white rounded-full font-label text-sm font-bold hover:opacity-90 active:scale-95 transition-all">查詢</button>
+          </div>
+          <!-- 主持人預設標的 + 截止日 -->
+          <div id="host-calc-badge" class="items-center gap-2 bg-secondary/10 border border-secondary/30 rounded-full px-3 py-1.5" style="display:none">
+            <span class="material-symbols-outlined text-sm text-secondary" style="font-size:14px">record_voice_over</span>
+            <span id="host-calc-label" class="text-[11px] text-secondary font-bold flex-1"></span>
+            <button onclick="resetToHostCalc()" class="text-[11px] font-bold text-secondary underline hover:no-underline whitespace-nowrap">一鍵回復</button>
+          </div>
+          <p id="stock-query-status" class="text-xs text-error font-semibold hidden"></p>
+        </div>
+
+        <!-- Current price (shown after query) -->
+        <div id="sim-price-row" class="hidden bg-surface-container-lowest rounded-lg px-5 py-4 space-y-1">
+          <div class="text-xs text-outline font-bold uppercase tracking-widest">股票名稱</div>
+          <div id="sim-stock-name" class="font-body text-sm font-semibold text-on-surface-variant"></div>
+          <div class="text-xs text-outline font-bold uppercase tracking-widest pt-2">目前股價</div>
+          <div id="sim-current-price-display" class="font-['Epilogue'] text-2xl font-bold text-tertiary-container"></div>
+        </div>
+
+        <!-- Investment Amount -->
+        <div class="space-y-2">
+          <label class="font-label text-xs font-bold uppercase tracking-widest text-outline">投入金額 (NT$)</label>
+          <div class="relative">
+            <span class="absolute left-4 top-1/2 -translate-y-1/2 text-tertiary-container font-bold">$</span>
+            <input id="sim-capital" class="w-full pl-8 pr-4 py-4 bg-surface-container-lowest border-none rounded-DEFAULT focus:ring-2 focus:ring-secondary text-tertiary-container font-['Epilogue'] font-semibold" type="number" value="100000" oninput="syncSlider('capital'); calcWealth()"/>
+          </div>
+          <input id="slider-capital" type="range" min="0" max="5000000" step="10000" value="100000" oninput="syncInput('capital')" class="w-full accent-secondary h-1.5 cursor-pointer">
+        </div>
+
+        <!-- Period: 起始 / 結束日期 -->
+        <div class="space-y-3">
+          <label class="font-label text-xs font-bold uppercase tracking-widest text-outline">投資期間</label>
+          <div class="flex flex-col gap-2">
+            <div class="space-y-1">
+              <span class="text-xs text-outline">起始日期</span>
+              <input id="sim-start-date" type="date" oninput="calcWealth()" class="w-full px-4 py-3 bg-surface-container-lowest border-none rounded-DEFAULT focus:ring-2 focus:ring-secondary text-tertiary-container font-['Epilogue'] font-semibold"/>
+            </div>
+            <div class="space-y-1">
+              <span class="text-xs text-outline">結束日期</span>
+              <input id="sim-end-date" type="date" oninput="calcWealth(); _checkHostCalcDiff()" class="w-full px-4 py-3 bg-surface-container-lowest border-none rounded-DEFAULT focus:ring-2 focus:ring-secondary text-tertiary-container font-['Epilogue'] font-semibold"/>
             </div>
           </div>
-          <div class="space-y-2">
-            <label class="font-label text-xs font-bold uppercase tracking-widest text-outline">Monthly Deposit</label>
-            <div class="relative">
-              <span class="absolute left-4 top-1/2 -translate-y-1/2 text-tertiary-container font-bold">$</span>
-              <input id="sim-monthly" class="w-full pl-8 pr-4 py-4 bg-surface-container-lowest border-none rounded-DEFAULT focus:ring-2 focus:ring-secondary text-tertiary-container font-['Epilogue'] font-semibold" type="number" value="2000" oninput="calcWealth()"/>
-            </div>
+          <p id="sim-period-display" class="text-xs text-outline"></p>
+        </div>
+
+        <!-- Expected Return：年化 ↔ 區間 雙向連動 -->
+        <!-- Expected Return：單一區間報酬率 -->
+        <div class="space-y-2">
+          <div class="flex items-center justify-between">
+            <label class="font-label text-xs font-bold uppercase tracking-widest text-outline">預期區間報酬率</label>
+            <button id="host-yield-reset" onclick="resetToHostYield()" class="hidden text-[10px] font-bold text-secondary border border-secondary/40 rounded-full px-2 py-0.5 hover:bg-secondary/10 transition-colors">
+              回主持人預設 <span id="host-yield-label"></span>%
+            </button>
           </div>
-          <div class="grid grid-cols-2 gap-4">
-            <div class="space-y-2">
-              <label class="font-label text-xs font-bold uppercase tracking-widest text-outline">Annual Yield</label>
-              <div class="relative">
-                <input id="sim-yield" class="w-full px-4 py-4 bg-surface-container-lowest border-none rounded-DEFAULT focus:ring-2 focus:ring-secondary text-tertiary-container font-['Epilogue'] font-semibold" type="number" value="7.5" oninput="calcWealth()"/>
-                <span class="absolute right-4 top-1/2 -translate-y-1/2 text-tertiary-container font-bold">%</span>
-              </div>
-            </div>
-            <div class="space-y-2">
-              <label class="font-label text-xs font-bold uppercase tracking-widest text-outline">Period</label>
-              <div class="relative">
-                <input id="sim-years" class="w-full px-4 py-4 bg-surface-container-lowest border-none rounded-DEFAULT focus:ring-2 focus:ring-secondary text-tertiary-container font-['Epilogue'] font-semibold" type="number" value="25" oninput="calcWealth()"/>
-                <span class="absolute right-4 top-1/2 -translate-y-1/2 text-tertiary-container font-bold">Yrs</span>
-              </div>
-            </div>
+          <div class="relative">
+            <input id="sim-yield" class="w-full px-4 py-4 bg-surface-container-lowest border-none rounded-DEFAULT focus:ring-2 focus:ring-secondary text-tertiary-container font-['Epilogue'] font-semibold"
+              type="number" value="10" step="0.1"
+              oninput="syncSlider('yield'); calcWealth(); _checkHostYieldDiff()"/>
+            <span class="absolute right-4 top-1/2 -translate-y-1/2 text-tertiary-container font-bold">%</span>
           </div>
-          <div class="space-y-4 pt-4">
-            <label class="font-label text-xs font-bold uppercase tracking-widest text-outline">Risk Strategy</label>
-            <div class="flex flex-wrap gap-2">
-              <button onclick="setRisk(0.85)" class="risk-btn px-5 py-2 rounded-full bg-surface-container-high text-tertiary-container font-label text-sm font-semibold hover:bg-tertiary-container hover:text-white transition-all">Conservative</button>
-              <button onclick="setRisk(1.0)" class="risk-btn px-5 py-2 rounded-full bg-tertiary-container text-white font-label text-sm font-semibold transition-all shadow-md">Moderate</button>
-              <button onclick="setRisk(1.15)" class="risk-btn px-5 py-2 rounded-full bg-surface-container-high text-tertiary-container font-label text-sm font-semibold hover:bg-tertiary-container hover:text-white transition-all">Aggressive</button>
-            </div>
-          </div>
+          <input id="slider-yield" type="range" min="-100" max="500" step="0.1" value="10" oninput="syncInput('yield')" class="w-full accent-secondary h-1.5 cursor-pointer">
         </div>
       </div>
+
+      <!-- Result card -->
       <div class="bg-tertiary-container text-white p-8 rounded-lg shadow-xl relative overflow-hidden">
-        <div class="absolute top-0 right-0 p-4 opacity-10">
-          <span class="material-symbols-outlined text-9xl">trending_up</span>
-        </div>
-        <div class="relative z-10 space-y-6">
-          <label class="font-label text-xs font-bold uppercase tracking-[0.2em] text-secondary-fixed">Estimated Future Value</label>
-          <div id="sim-result" class="font-['Epilogue'] text-4xl md:text-5xl font-extrabold tracking-tight">$2,348,390</div>
-          <p class="text-tertiary-fixed-dim text-sm font-medium leading-snug">Based on current parameters over your selected period.</p>
-          <button class="w-full py-4 bg-on-primary-container text-white font-label font-bold uppercase tracking-widest rounded-full hover:scale-[1.02] active:scale-95 transition-all shadow-lg flex items-center justify-center gap-2">
-            <span>Save Projection</span>
-            <span class="material-symbols-outlined text-sm">bookmark</span>
-          </button>
+        <div class="absolute top-0 right-0 p-4 opacity-10"><span class="material-symbols-outlined text-9xl">trending_up</span></div>
+        <div class="relative z-10 space-y-5">
+          <label class="font-label text-xs font-bold uppercase tracking-[0.2em] opacity-70">Estimated Future Value</label>
+          <div id="sim-result" class="font-['Epilogue'] text-4xl font-extrabold tracking-tight">—</div>
+          <div id="sim-return-pct" class="text-secondary-fixed font-bold text-base">—</div>
+          <div id="sim-annualized-info" class="text-white/60 text-xs font-semibold tracking-wide"></div>
         </div>
       </div>
     </div>
-    <div class="lg:col-span-8 space-y-6">
-      <div class="bg-surface-container-lowest rounded-lg p-8 h-full flex flex-col">
-        <div class="flex justify-between items-center mb-12">
+
+    <!-- Right: Stock Trend Chart -->
+    <div class="lg:col-span-8">
+      <div class="bg-surface-container-lowest rounded-lg p-8 flex flex-col" style="min-height:520px;">
+        <div class="flex flex-wrap items-start justify-between gap-4 mb-8">
           <div>
-            <h3 class="font-['Epilogue'] text-2xl font-bold text-tertiary-container">Growth Trajectory</h3>
-            <p class="text-outline font-medium">Principal vs. Market Growth Over Time</p>
+            <h3 class="font-['Epilogue'] text-2xl font-bold text-tertiary-container">個股趨勢圖</h3>
+            <p id="stock-chart-subtitle" class="text-outline font-medium">查詢個股後顯示走勢</p>
           </div>
-          <div class="flex gap-6">
-            <div class="flex items-center gap-2"><div class="w-3 h-3 rounded-full bg-tertiary-container"></div><span class="text-xs font-bold uppercase text-outline">Principal</span></div>
-            <div class="flex items-center gap-2"><div class="w-3 h-3 rounded-full bg-on-primary-container"></div><span class="text-xs font-bold uppercase text-outline">Total Value</span></div>
+          <div class="flex gap-1 bg-surface-container-high rounded-full p-1">
+            <button onclick="setStockPeriod('1mo')" data-period="1mo" class="stock-period-btn px-3 py-1.5 rounded-full font-label text-xs font-bold transition-all text-secondary">1月</button>
+            <button onclick="setStockPeriod('3mo')" data-period="3mo" class="stock-period-btn px-3 py-1.5 rounded-full font-label text-xs font-bold transition-all text-secondary">3月</button>
+            <button onclick="setStockPeriod('6mo')" data-period="6mo" class="stock-period-btn px-3 py-1.5 rounded-full font-label text-xs font-bold transition-all text-secondary">6月</button>
+            <button onclick="setStockPeriod('1y')"  data-period="1y"  class="stock-period-btn px-3 py-1.5 rounded-full font-label text-xs font-bold transition-all bg-tertiary-container text-white">1年</button>
           </div>
         </div>
-        <div class="flex-grow relative min-h-[300px]">
-          <svg id="sim-chart" class="w-full h-full overflow-visible" viewBox="0 0 800 400">
-            <line stroke="#f0eee5" stroke-width="1" x1="0" x2="800" y1="350" y2="350"/>
-            <line stroke="#f0eee5" stroke-width="1" x1="0" x2="800" y1="250" y2="250"/>
-            <line stroke="#f0eee5" stroke-width="1" x1="0" x2="800" y1="150" y2="150"/>
-            <line stroke="#f0eee5" stroke-width="1" x1="0" x2="800" y1="50" y2="50"/>
-            <path id="principal-line" d="M0 350 L800 190" fill="none" opacity="0.4" stroke="#286671" stroke-dasharray="8 4" stroke-width="4"/>
-            <path id="growth-curve" d="M0 350 C 100 340, 300 300, 400 200 S 700 80, 800 20" fill="none" stroke="#113236" stroke-linecap="round" stroke-width="6"/>
-            <circle id="mid-dot" cx="400" cy="200" fill="#d97f12" r="8"/>
-            <circle id="end-dot" cx="800" cy="20" fill="#d97f12" r="10" stroke="white" stroke-width="4"/>
-            <text fill="#717879" font-family="Manrope" font-size="12" font-weight="600" x="0" y="380">YEAR 0</text>
-            <text id="mid-label" fill="#717879" font-family="Manrope" font-size="12" font-weight="600" x="360" y="380">YEAR 12</text>
-            <text id="end-label" fill="#717879" font-family="Manrope" font-size="12" font-weight="600" x="750" y="380">YEAR 25</text>
-          </svg>
-          <div class="absolute top-1/4 right-[10%] bg-surface-container-lowest/90 backdrop-blur-md p-4 rounded-lg shadow-2xl border border-outline-variant/10">
-            <div class="text-xs font-bold text-outline uppercase tracking-widest mb-1" id="tooltip-label">Year 25 Milestone</div>
-            <div id="tooltip-value" class="text-xl font-['Epilogue'] font-bold text-tertiary-container">$2,348,390</div>
-            <div id="tooltip-growth" class="text-[10px] text-on-primary-container font-bold mt-2 flex items-center gap-1">
-              <span class="material-symbols-outlined text-xs">auto_awesome</span>234% TOTAL GROWTH
-            </div>
-          </div>
+        <div class="flex-grow relative flex items-center justify-center" style="min-height:300px;">
+          <p id="stock-chart-placeholder" class="text-outline text-sm">查詢個股後顯示走勢圖</p>
+          <svg id="stock-svg" class="w-full h-full hidden" viewBox="0 0 800 380" preserveAspectRatio="xMidYMid meet"></svg>
+        </div>
+        <div id="stock-info" class="hidden mt-5 pt-4 border-t border-outline-variant/20 flex gap-8">
+          <div><div class="text-xs text-outline font-bold uppercase tracking-widest mb-1">股票</div><div id="stock-name" class="font-['Epilogue'] font-bold text-tertiary-container text-lg"></div></div>
+          <div><div class="text-xs text-outline font-bold uppercase tracking-widest mb-1">最新收盤</div><div id="stock-last-price" class="font-['Epilogue'] font-bold text-tertiary-container text-lg"></div></div>
+          <div><div class="text-xs text-outline font-bold uppercase tracking-widest mb-1">區間漲跌</div><div id="stock-change" class="font-['Epilogue'] font-bold text-lg"></div></div>
+          <div><div class="text-xs text-outline font-bold uppercase tracking-widest mb-1">歷史年化報酬</div><div id="stock-hist-return" class="font-['Epilogue'] font-bold text-lg"></div></div>
+        </div>
+        <div id="stock-news-section" class="hidden mt-5 pt-4 border-t border-outline-variant/20">
+          <div class="text-xs text-outline font-bold uppercase tracking-widest mb-3">相關新聞</div>
+          <div id="stock-news-list" class="space-y-2"></div>
         </div>
       </div>
     </div>
+
   </div>
-  <section class="mt-20 grid grid-cols-1 md:grid-cols-3 gap-8 pb-8">
-    <div class="space-y-4">
-      <span class="text-secondary-container bg-secondary px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest">Asset Allocation</span>
-      <h4 class="font-['Epilogue'] text-xl font-bold text-tertiary-container leading-tight">Diversified Market Entry Strategy</h4>
-      <p class="text-outline text-sm leading-relaxed">Our model assumes a balanced weighting of 60% global equities and 40% precision fixed-income instruments to weather volatility while maintaining yield.</p>
+</div>
+
+<!-- ══════════════════════════════════════════════════ NEWS PANEL ═══ -->
+<div id="news-panel-overlay" class="fixed inset-0 bg-black/40 z-40 hidden" onclick="closeNewsPanel()"></div>
+<div id="news-panel" class="fixed top-0 right-0 h-[calc(100vh-64px)] w-full max-w-lg bg-surface z-50 shadow-2xl flex flex-col translate-x-full transition-transform duration-300">
+  <div class="flex items-start justify-between p-4 border-b border-outline-variant/20">
+    <div class="flex-1 min-w-0 pr-3">
+      <h2 id="news-panel-title" class="font-['Epilogue'] font-bold text-base text-tertiary-container leading-snug"></h2>
+      <div id="news-panel-meta" class="mt-1 text-[11px] text-outline"></div>
     </div>
-    <div class="space-y-4">
-      <span class="text-secondary-container bg-secondary px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest">Compounding</span>
-      <h4 class="font-['Epilogue'] text-xl font-bold text-tertiary-container leading-tight">The Velocity of Reinvested Dividends</h4>
-      <p class="text-outline text-sm leading-relaxed">By prioritizing high-dividend yield assets, the simulator projects a "snowball effect" that accelerates capital growth after the 15-year mark.</p>
-    </div>
-    <div class="space-y-4">
-      <span class="text-secondary-container bg-secondary px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest">Risk Mitigation</span>
-      <h4 class="font-['Epilogue'] text-xl font-bold text-tertiary-container leading-tight">Automated Rebalancing Engine</h4>
-      <p class="text-outline text-sm leading-relaxed">Simulation includes a theoretical quarterly rebalance to ensure your risk profile stays within the target corridor as markets shift.</p>
-    </div>
-  </section>
+    <button onclick="closeNewsPanel()" class="flex-shrink-0 w-8 h-8 flex items-center justify-center rounded-full hover:bg-surface-container transition-colors mt-0.5">
+      <span class="material-symbols-outlined text-outline text-xl">close</span>
+    </button>
+  </div>
+  <div id="news-panel-body" class="flex-1 overflow-y-auto px-5 py-4 text-sm text-on-surface leading-relaxed whitespace-pre-wrap"></div>
 </div>
 
 <!-- ═══════════════════════════════════════════════ PAGE: AI ASSISTANT ═══ -->
@@ -685,7 +750,7 @@
     <span class="material-symbols-outlined nav-icon">psychology</span>
     <span class="font-['Manrope'] font-medium text-[10px] uppercase tracking-[0.05em] mt-1">AI Assistant</span>
   </button>
-  <button onclick="showPage('calculator')" id="nav-calculator" class="nav-btn flex flex-col items-center justify-center transition-all opacity-60">
+  <button onclick="resetCalculator(); showPage('calculator')" id="nav-calculator" class="nav-btn flex flex-col items-center justify-center transition-all opacity-60">
     <span class="material-symbols-outlined nav-icon">calculate</span>
     <span class="font-['Manrope'] font-medium text-[10px] uppercase tracking-[0.05em] mt-1">Calculator</span>
   </button>
@@ -696,70 +761,6 @@
 </nav>
 
 <!-- ═══════════════════════════════════════════════ TICKER MODAL ═══ -->
-<div id="ticker-modal" class="hidden fixed inset-0 z-[200] flex items-end md:items-center justify-center">
-  <!-- Backdrop -->
-  <div onclick="closeTickerModal()" class="absolute inset-0 bg-black/40 backdrop-blur-sm"></div>
-  <!-- Panel -->
-  <div class="relative w-full max-w-md mx-4 mb-4 md:mb-0 bg-[#fcf9f0] rounded-2xl shadow-2xl overflow-hidden animate-slide-up">
-    <!-- Header -->
-    <div id="tm-header" class="px-6 pt-6 pb-4 flex items-start justify-between">
-      <div>
-        <div class="flex items-center gap-2 mb-1">
-          <span id="tm-dir-icon" class="material-symbols-outlined text-xl" style="font-variation-settings:'FILL' 1">trending_up</span>
-          <span id="tm-ticker" class="font-['Epilogue'] font-bold text-2xl text-tertiary-container"></span>
-        </div>
-        <span id="tm-dir-label" class="px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-widest"></span>
-      </div>
-      <button onclick="closeTickerModal()" class="text-outline hover:text-tertiary-container transition-colors mt-1">
-        <span class="material-symbols-outlined">close</span>
-      </button>
-    </div>
-
-    <!-- Info pills -->
-    <div id="tm-info" class="flex gap-2 flex-wrap px-6 mb-5"></div>
-
-    <!-- Inputs -->
-    <div class="px-6 space-y-4 mb-5">
-      <div class="grid grid-cols-2 gap-3">
-        <div class="space-y-1">
-          <label class="font-label text-[10px] font-bold uppercase tracking-widest text-outline">初始資金 ($)</label>
-          <input id="tm-capital" type="number" value="50000" oninput="calcTickerModal()"
-            class="w-full px-4 py-3 bg-surface-container-low border-none rounded-xl text-tertiary-container font-['Epilogue'] font-semibold text-sm focus:ring-2 focus:ring-secondary"/>
-        </div>
-        <div class="space-y-1">
-          <label class="font-label text-[10px] font-bold uppercase tracking-widest text-outline">每月投入 ($)</label>
-          <input id="tm-monthly" type="number" value="0" oninput="calcTickerModal()"
-            class="w-full px-4 py-3 bg-surface-container-low border-none rounded-xl text-tertiary-container font-['Epilogue'] font-semibold text-sm focus:ring-2 focus:ring-secondary"/>
-        </div>
-      </div>
-      <div class="grid grid-cols-2 gap-3">
-        <div class="space-y-1">
-          <label class="font-label text-[10px] font-bold uppercase tracking-widest text-outline">年報酬率 (%)</label>
-          <input id="tm-yield" type="number" step="0.1" oninput="calcTickerModal()"
-            class="w-full px-4 py-3 bg-surface-container-low border-none rounded-xl text-tertiary-container font-['Epilogue'] font-semibold text-sm focus:ring-2 focus:ring-secondary"/>
-        </div>
-        <div class="space-y-1">
-          <label class="font-label text-[10px] font-bold uppercase tracking-widest text-outline">年數</label>
-          <input id="tm-years" type="number" step="0.5" min="0.5" oninput="calcTickerModal()"
-            class="w-full px-4 py-3 bg-surface-container-low border-none rounded-xl text-tertiary-container font-['Epilogue'] font-semibold text-sm focus:ring-2 focus:ring-secondary"/>
-        </div>
-      </div>
-    </div>
-
-    <!-- Result -->
-    <div class="mx-6 mb-6 p-5 rounded-xl bg-tertiary-container text-white">
-      <p class="font-label text-[10px] font-bold uppercase tracking-widest text-on-tertiary-container mb-2">試算結果</p>
-      <div class="flex items-baseline gap-2 mb-1">
-        <span class="font-['Epilogue'] font-bold text-3xl" id="tm-result-total">$—</span>
-      </div>
-      <div class="flex justify-between text-xs text-on-tertiary-container mt-2">
-        <span>本金 <span id="tm-result-principal" class="font-bold text-white">$—</span></span>
-        <span>獲利 <span id="tm-result-gain" class="font-bold text-on-primary-container">+$—</span></span>
-      </div>
-    </div>
-  </div>
-</div>
-
 <!-- AI Chat Input (only visible on AI page) -->
 <div id="ai-input-bar" class="hidden fixed bottom-[72px] w-full z-40 bg-[#fcf9f0]/90 backdrop-blur-xl pt-3 pb-3 px-4">
   <div class="max-w-4xl mx-auto flex items-center gap-4 bg-surface-container-high rounded-full p-2 pl-6 shadow-lg">
@@ -779,6 +780,57 @@
 
 <script>
   let riskMultiplier = 1.0;
+  let stockPeriod = '1y';
+
+  function _initSimDates() {
+    const today = new Date();
+    // Use yesterday as default end — today's market data may not be available yet
+    const yesterday = new Date(today);
+    yesterday.setDate(today.getDate() - 1);
+    const oneYearAgo = new Date(yesterday);
+    oneYearAgo.setFullYear(yesterday.getFullYear() - 1);
+    document.getElementById('sim-start-date').value = oneYearAgo.toISOString().slice(0, 10);
+    document.getElementById('sim-end-date').value = yesterday.toISOString().slice(0, 10);
+  }
+  let _hostYield    = null;
+  let _hostCalcData = null;  // { ticker, endDate, label } — 從 backtesting 帶入
+
+  function _checkHostYieldDiff() {
+    if (_hostYield == null) return;
+    const cur = parseFloat(document.getElementById('sim-yield').value);
+    const btn = document.getElementById('host-yield-reset');
+    if (Math.abs(cur - _hostYield) > 0.01) {
+      btn.classList.remove('hidden');
+    } else {
+      btn.classList.add('hidden');
+    }
+  }
+
+  function resetToHostYield() {
+    if (_hostYield == null) return;
+    document.getElementById('sim-yield').value = _hostYield;
+    document.getElementById('slider-yield').value = _hostYield;
+    document.getElementById('host-yield-reset').classList.add('hidden');
+    calcWealth();
+  }
+
+  function _checkHostCalcDiff() {
+    if (!_hostCalcData) return;
+    const ticker  = document.getElementById('sim-ticker').value.trim();
+    const endDate = document.getElementById('sim-end-date').value;
+    const changed = ticker !== _hostCalcData.ticker || endDate !== _hostCalcData.endDate;
+    document.getElementById('host-calc-badge').style.display = changed ? 'flex' : 'none';
+  }
+
+  function resetToHostCalc() {
+    if (!_hostCalcData) return;
+    document.getElementById('sim-ticker').value   = _hostCalcData.ticker;
+    document.getElementById('sim-end-date').value = _hostCalcData.endDate;
+    document.getElementById('host-calc-badge').style.display = 'none';
+    fetchStockInfo();
+  }
+  let stockCurrentPrice = 0;
+  _initSimDates();
 
   // ── 卡片顏色/圖示工具 ──────────────────────────────
   const _cardBgs    = ['#113236','#286671','#472500','#1c1c16','#2c4c50','#d97f12','#1a3040','#3a2000'];
@@ -933,7 +985,8 @@
       const timeStr   = t.timeframe       ? `時間：${t.timeframe}` : null;
 
       return `
-        <div class="p-5 rounded-lg border bg-surface-container-lowest ${dirBg} flex flex-col gap-3">
+        <div class="p-5 rounded-lg border bg-surface-container-lowest ${dirBg} flex flex-col gap-3 cursor-pointer hover:opacity-80 transition-opacity active:scale-[0.98]"
+             onclick="openCalculatorWithTicker(${JSON.stringify(t).replace(/"/g, '&quot;')})">
           <div class="flex items-center justify-between">
             <div class="flex items-center gap-2">
               <span class="material-symbols-outlined ${dirColor} text-lg" style="font-variation-settings:'FILL' 1">${dirIcon}</span>
@@ -946,17 +999,18 @@
             ${returnStr ? `<p><span class="font-semibold text-on-primary-container">${returnStr}</span></p>` : ''}
             ${timeStr   ? `<p>${timeStr}</p>` : ''}
           </div>
-          <button onclick="openCalculatorWithTicker(${JSON.stringify(t).replace(/"/g, '&quot;')})"
-            class="mt-auto w-full py-2 bg-tertiary-container text-white rounded-full font-label text-xs font-bold uppercase tracking-widest hover:opacity-90 transition-all active:scale-95 flex items-center justify-center gap-1">
-            <span class="material-symbols-outlined text-sm">calculate</span>
-            帶入試算
-          </button>
+          <div class="mt-auto flex items-center justify-end gap-1 text-xs font-bold text-secondary">
+            前往試算 <span class="material-symbols-outlined text-sm">arrow_forward</span>
+          </div>
         </div>`;
     }).join('');
   }
 
   function parseYears(timeframe) {
     if (!timeframe) return null;
+    if (/短期/.test(timeframe)) return 1/12;
+    if (/中期/.test(timeframe)) return 3/12;
+    if (/長期/.test(timeframe)) return 1;
     const yearMatch  = timeframe.match(/(\d+)\s*年/);
     const monthMatch = timeframe.match(/(\d+)\s*個?月/);
     const qMatch     = timeframe.match(/Q[1-4]/i);
@@ -966,59 +1020,83 @@
     return null;
   }
 
+  function resetCalculator() {
+    document.getElementById('sim-ticker').value = '';
+    document.getElementById('sim-stock-name').textContent = '';
+    document.getElementById('sim-current-price-display').textContent = '';
+    document.getElementById('stock-query-status').textContent = '';
+    document.getElementById('stock-query-status').classList.add('hidden');
+    document.getElementById('stock-chart-subtitle').textContent = '查詢個股後顯示走勢';
+    document.getElementById('stock-chart-placeholder').classList.remove('hidden');
+    const svg = document.getElementById('stock-svg');
+    if (svg) { svg.classList.add('hidden'); svg.innerHTML = ''; }
+    stockCurrentPrice = 0;
+    _hostYield = null;
+    _hostCalcData = null;
+    document.getElementById('host-yield-reset').classList.add('hidden');
+    document.getElementById('host-calc-badge').style.display = 'none';
+    _initSimDates();
+  }
+
+  function goToCalculatorWithStock(stockName, endDate) {
+    // 起始日期：今天（預測是從現在開始算）
+    const today = new Date().toISOString().slice(0, 10);
+    const resolvedEnd = endDate || (() => {
+      const d = new Date(); d.setFullYear(d.getFullYear() + 1); return d.toISOString().slice(0, 10);
+    })();
+
+    // 儲存主持人原始預設（供「一鍵回復」使用）
+    _hostCalcData = { ticker: stockName, endDate: resolvedEnd };
+    const endLabel = endDate ? endDate.replace(/-/g, '/') : '未指定';
+    document.getElementById('host-calc-label').textContent =
+      `主持人：${stockName}　截止 ${endLabel}`;
+    document.getElementById('host-calc-badge').style.display = 'none'; // 剛帶入時不偏離，先隱藏
+
+    document.getElementById('sim-ticker').value   = stockName;
+    document.getElementById('sim-start-date').value = today;
+    document.getElementById('sim-end-date').value   = resolvedEnd;
+
+    showPage('calculator');
+    fetchStockInfo();
+  }
+
   function openCalculatorWithTicker(t) {
-    const isBull   = t.direction === 'bullish';
-    const dirColor = isBull ? 'text-on-primary-container' : 'text-tertiary-container';
-    const dirBg    = isBull ? 'bg-on-primary-container/10 border border-on-primary-container/30' : 'bg-tertiary-container/10 border border-tertiary-container/30';
+    // 帶入代號
+    document.getElementById('sim-ticker').value = t.ticker;
 
-    document.getElementById('tm-ticker').textContent     = t.ticker;
-    document.getElementById('tm-dir-icon').textContent   = isBull ? 'trending_up' : 'trending_down';
-    document.getElementById('tm-dir-icon').className     = `material-symbols-outlined text-xl ${dirColor}`;
-    document.getElementById('tm-dir-label').textContent  = isBull ? '看多' : '看空';
-    document.getElementById('tm-dir-label').className    = `px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-widest ${dirColor} ${dirBg}`;
+    // 帶入時間（只有主持人有提到才設定）
+    if (t.timeframe) {
+      const yrs = parseYears(t.timeframe);
+      if (yrs != null) {
+        if (yrs < 1) {
+          const months = Math.round(yrs * 12);
+          setSimUnit('month');
+          document.getElementById('sim-years').value = months;
+          document.getElementById('slider-years').value = Math.min(months, 600);
+        } else {
+          setSimUnit('year');
+          document.getElementById('sim-years').value = yrs;
+          document.getElementById('slider-years').value = Math.min(yrs, 50);
+        }
+      }
+    }
 
-    // Info pills
-    const pills = [];
-    if (t.price_target   != null) pills.push(`目標價 $${t.price_target}`);
-    if (t.expected_return != null) pills.push(`預期報酬 ${t.expected_return}%`);
-    if (t.timeframe)               pills.push(t.timeframe);
-    document.getElementById('tm-info').innerHTML = pills.map(p =>
-      `<span class="px-3 py-1 rounded-full bg-surface-container-low text-outline text-[10px] font-semibold border border-outline-variant/20">${p}</span>`
-    ).join('');
+    // 跳轉到計算機頁面
+    showPage('calculator');
 
-    // 帶入預設值
-    if (t.expected_return != null) document.getElementById('tm-yield').value = t.expected_return;
-    else document.getElementById('tm-yield').value = '';
-    const yrs = parseYears(t.timeframe);
-    document.getElementById('tm-years').value = yrs ?? '';
-
-    calcTickerModal();
-    document.getElementById('ticker-modal').classList.remove('hidden');
-  }
-
-  function closeTickerModal() {
-    document.getElementById('ticker-modal').classList.add('hidden');
-  }
-
-  function calcTickerModal() {
-    const capital  = parseFloat(document.getElementById('tm-capital').value) || 0;
-    const monthly  = parseFloat(document.getElementById('tm-monthly').value) || 0;
-    const rate     = (parseFloat(document.getElementById('tm-yield').value) || 0) / 100;
-    const years    = parseFloat(document.getElementById('tm-years').value) || 0;
-    const months   = Math.round(years * 12);
-    const mr       = rate / 12;
-
-    let total = capital * Math.pow(1 + mr, months);
-    if (mr > 0) total += monthly * (Math.pow(1 + mr, months) - 1) / mr;
-    else        total += monthly * months;
-
-    const principal = capital + monthly * months;
-    const gain      = total - principal;
-    const fmt = v => '$' + Math.round(v).toLocaleString();
-
-    document.getElementById('tm-result-total').textContent     = fmt(total);
-    document.getElementById('tm-result-principal').textContent = fmt(principal);
-    document.getElementById('tm-result-gain').textContent      = (gain >= 0 ? '+' : '') + fmt(gain);
+    // 查詢股票（自動帶入歷史報酬），完成後若主持人有提到預期報酬則覆蓋
+    _hostYield = t.expected_return != null ? t.expected_return : null;
+    document.getElementById('host-yield-reset').classList.add('hidden');
+    if (_hostYield != null) {
+      document.getElementById('host-yield-label').textContent = _hostYield;
+    }
+    fetchStockInfo().then(() => {
+      if (t.expected_return != null) {
+        document.getElementById('sim-yield').value = t.expected_return;
+        document.getElementById('slider-yield').value = t.expected_return;
+        calcWealth();
+      }
+    });
   }
 
   // ── Related Recommendations 渲染 ──────────────────
@@ -1057,18 +1135,28 @@
     } catch(e) { console.error('loadDiscoverData failed', e); }
   }
 
-  let _prevPage = 'discover';
+  // ── 單向導覽 stack（back 只 pop，不 push，不會循環）──────────────────
+  let _pageHistory = [];
 
-  function goBack() { showPage(_prevPage); }
+  function goBack() {
+    if (_pageHistory.length > 0) {
+      const prev = _pageHistory.pop();
+      _renderPage(prev);  // 返回時不記錄歷史
+    }
+  }
 
+  // showPage: 正常跳頁，把目前頁推入 stack
   function showPage(page) {
-    // Record previous page (skip transient layers so back always lands somewhere stable)
     const currentActive = document.querySelector('.page.active');
     if (currentActive) {
       const currentId = currentActive.id.replace('page-', '');
-      if (currentId !== page) _prevPage = currentId;
+      if (currentId !== page) _pageHistory.push(currentId);
     }
+    _renderPage(page);
+  }
 
+  // _renderPage: 只做 DOM 切換，不動 history
+  function _renderPage(page) {
     // Hide all pages
     document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
     // Deactivate all nav buttons
@@ -1140,29 +1228,36 @@
           }).join('')
         : '<p class="text-outline text-sm py-6 text-center">暫無集數資料</p>';
 
-      // ── 所有觀點（outlook_calls 去重合併）────────────────
+      // ── 所有觀點：從 backtesting 表抓，按 result 分類 ──────────────
+      const btRes = await fetch(`/api/summaries/backtesting/?podcaster=${encodeURIComponent(name)}`);
+      const btRecords = btRes.ok ? await btRes.json() : [];
+
+      const groups = { pass: [], fail: [], pending: [] };
       const seenTheses = new Set();
-      const allCalls   = [];
-      for (const s of summaries) {
-        for (const call of (s.outlook_calls || [])) {
-          const thesis = call.thesis || '';
-          if (thesis && !seenTheses.has(thesis)) {
-            seenTheses.add(thesis);
-            allCalls.push(call);
-          }
-        }
+      for (const r of btRecords) {
+        const thesis = r.thesis || '';
+        if (!thesis || seenTheses.has(thesis)) continue;
+        seenTheses.add(thesis);
+        const key = r.result === 'pass' ? 'pass' : r.result === 'fail' ? 'fail' : 'pending';
+        groups[key].push(r);
       }
 
-      const groups = { '對': [], '錯': [], '未驗證': [] };
-      for (const call of allCalls) {
-        const r = call.result || '未驗證';
-        (groups[r] !== undefined ? groups[r] : groups['未驗證']).push(call);
+      // ── 更新準確率 pill（從快照表取）────────────────────────────
+      const accMap = await _ensureAccuracyCache();
+      const accEl  = document.getElementById('podcaster-accuracy');
+      const acc    = accMap[name];
+      if (acc && acc.total > 0) {
+        accEl.textContent = `${acc.pct}%・${acc.total} 筆驗證`;
+      } else {
+        accEl.textContent = '尚無驗證觀點';
       }
+
       const groupConfig = {
-        '對':    { label: '正確',  icon: 'check_circle', colorClass: 'text-secondary' },
-        '錯':    { label: '錯誤',  icon: 'cancel',       colorClass: 'text-secondary' },
-        '未驗證':{ label: '未驗證', icon: 'schedule',    colorClass: 'text-secondary' },
+        pass:    { label: '正確',  icon: 'check_circle', colorClass: 'text-green-600',  border: 'border-green-500',  bg: 'bg-green-50/50' },
+        fail:    { label: '錯誤',  icon: 'cancel',       colorClass: 'text-error',       border: 'border-error',      bg: 'bg-error-container/10' },
+        pending: { label: '待驗證', icon: 'pending',     colorClass: 'text-outline',     border: 'border-outline-variant', bg: 'bg-surface-container/50' },
       };
+      const dirLabel = { bullish: '看多', bearish: '看空', neutral: '觀察' };
 
       viewList.innerHTML = Object.entries(groups).map(([key, items]) => {
         const cfg = groupConfig[key];
@@ -1176,9 +1271,13 @@
             ${items.length === 0
               ? '<p class="text-xs text-outline pl-7">尚無資料</p>'
               : items.map(v => `
-                  <div class="flex items-center justify-between p-3 mb-2 rounded-lg border bg-surface-container-low border-outline-variant/20">
-                    <p class="text-sm font-medium text-tertiary-container">${v.thesis || ''}</p>
-                    <span class="text-[10px] text-outline font-medium ml-4 flex-shrink-0">${(v.date || v.call_date || '').slice(0,10)}</span>
+                  <div class="p-3 mb-2 rounded-lg border-l-4 ${cfg.border} ${cfg.bg} cursor-pointer hover:opacity-80 transition-opacity"
+                       onclick="openDeepDive(${v.summary_id})">
+                    <div class="flex items-center justify-between mb-1">
+                      <span class="text-[10px] font-bold text-outline uppercase tracking-wider">${v.asset || ''}${v.direction ? ' · ' + (dirLabel[v.direction] || v.direction) : ''}</span>
+                      <span class="text-[10px] text-outline">${v.end_time ? '截止 ' + v.end_time : ''}</span>
+                    </div>
+                    <p class="text-sm font-medium text-on-surface">${v.thesis || ''}</p>
                   </div>`).join('')}
           </div>`;
       }).join('');
@@ -1210,83 +1309,407 @@
     calcWealth();
   }
 
+  function setSimUnit(unit) {
+    if (unit === simUnit) return;
+    const prevUnit = simUnit;
+    simUnit = unit;
+    const on = 'px-4 py-1.5 rounded-full font-label text-xs font-bold tracking-wide transition-all bg-tertiary-container text-white';
+    const off = 'px-4 py-1.5 rounded-full font-label text-xs font-bold tracking-wide transition-all text-secondary';
+    document.getElementById('unit-year-btn').className = unit === 'year' ? on : off;
+    document.getElementById('unit-month-btn').className = unit === 'month' ? on : off;
+    document.getElementById('label-yield').textContent = unit === 'year' ? '預期年報酬率' : '預期月報酬率';
+    document.getElementById('label-period').textContent = unit === 'year' ? '投資期間 (年)' : '投資期間 (月)';
+    const slider = document.getElementById('slider-years');
+    slider.max = unit === 'year' ? 50 : 600;
+
+    // Convert yield value between annual and monthly
+    const yieldEl = document.getElementById('sim-yield');
+    const sliderYield = document.getElementById('slider-yield');
+    const currentYield = parseFloat(yieldEl.value);
+    if (!isNaN(currentYield) && currentYield !== 0) {
+      let newYield;
+      if (prevUnit === 'year' && unit === 'month') {
+        newYield = (Math.pow(1 + currentYield / 100, 1 / 12) - 1) * 100;
+      } else {
+        newYield = (Math.pow(1 + currentYield / 100, 12) - 1) * 100;
+      }
+      yieldEl.value = newYield.toFixed(2);
+      sliderYield.value = newYield.toFixed(2);
+    }
+
+    calcWealth();
+  }
+
+  function syncSlider(id) {
+    const inputEl = document.getElementById('sim-' + id);
+    if (inputEl) document.getElementById('slider-' + id).value = inputEl.value;
+  }
+
+  function syncInput(id) {
+    const val = document.getElementById('slider-' + id).value;
+    const inputEl = document.getElementById('sim-' + id);
+    if (inputEl) inputEl.value = val;
+    calcWealth();
+  }
+
+  let _chartDebounce = null;
+
+  function getSimYears() {
+    const s = document.getElementById('sim-start-date').value;
+    const e = document.getElementById('sim-end-date').value;
+    if (!s || !e) return 1;
+    const diff = (new Date(e) - new Date(s)) / (365.25 * 24 * 3600 * 1000);
+    return Math.max(diff, 0);
+  }
+
+  function getPeriodFromInput() {
+    const months = getSimYears() * 12;
+    if (months <= 3)  return '1mo';
+    if (months <= 6)  return '3mo';
+    if (months <= 12) return '6mo';
+    return '1y';
+  }
+
+  function _periodLabel(years) {
+    // 把小數年份轉成「X年Y月」
+    const totalMonths = Math.round(years * 12);
+    const yr = Math.floor(totalMonths / 12);
+    const mo = totalMonths % 12;
+    if (yr > 0 && mo > 0) return `${yr}年${mo}月`;
+    if (yr > 0) return `${yr}年`;
+    if (mo > 0) return `${mo}月`;
+    return '';
+  }
+
   function calcWealth() {
-    const capital     = parseFloat(document.getElementById('sim-capital').value) || 0;
-    const monthly     = parseFloat(document.getElementById('sim-monthly').value) || 0;
-    const annualYield = (parseFloat(document.getElementById('sim-yield').value) || 0) * riskMultiplier / 100;
-    const years       = parseInt(document.getElementById('sim-years').value) || 1;
-    const monthlyRate = annualYield / 12;
+    const capital    = parseFloat(document.getElementById('sim-capital').value) || 0;
+    const periodPct  = parseFloat(document.getElementById('sim-yield').value) || 0;
+    const years      = getSimYears();
 
-    // 逐年計算資產與本金
-    const totalPts = [];
-    const princPts = [];
-    for (let y = 0; y <= years; y++) {
-      const m = y * 12;
-      let fv = capital * Math.pow(1 + monthlyRate, m);
-      if (monthlyRate > 0) fv += monthly * (Math.pow(1 + monthlyRate, m) - 1) / monthlyRate;
-      else fv += monthly * m;
-      totalPts.push(fv);
-      princPts.push(capital + monthly * m);
+    // 以區間報酬直接計算
+    const finalValue  = capital * (1 + periodPct / 100);
+    const period      = _periodLabel(years);
+
+    document.getElementById('sim-result').textContent =
+      'NT$' + Math.round(finalValue).toLocaleString();
+
+    // 總報酬（主顯示）
+    document.getElementById('sim-return-pct').textContent =
+      (periodPct >= 0 ? '+' : '') + periodPct.toFixed(1) + '% 總報酬';
+
+    // 年化（副顯示，供參考）
+    const annualEl = document.getElementById('sim-annualized-info');
+    if (annualEl && years > 0) {
+      const factor     = 1 + periodPct / 100;
+      const annualRate = factor > 0
+        ? (Math.pow(factor, 1 / years) - 1) * 100
+        : null;
+      annualEl.textContent = period && annualRate !== null
+        ? `年化約 ${annualRate >= 0 ? '+' : ''}${annualRate.toFixed(1)}%　·　${period}`
+        : period ? period : '';
+    } else if (annualEl) {
+      annualEl.textContent = '';
     }
 
-    const finalFv        = totalPts[years];
-    const totalPrincipal = princPts[years];
-    const growthPct      = totalPrincipal > 0 ? Math.round((finalFv / totalPrincipal - 1) * 100) : 0;
+    // 投資期間（左欄日期下方）
+    const dispEl = document.getElementById('sim-period-display');
+    if (dispEl) dispEl.textContent = period ? `投資期間：${period}` : '';
+  }
 
-    // 更新數字
-    const fmt = v => '$' + Math.round(v).toLocaleString();
-    document.getElementById('sim-result').textContent       = fmt(finalFv);
-    document.getElementById('tooltip-value').textContent    = fmt(finalFv);
-    document.getElementById('tooltip-label').textContent    = 'Year ' + years + ' Milestone';
-    document.getElementById('tooltip-growth').innerHTML     = '<span class="material-symbols-outlined text-xs">auto_awesome</span>' + growthPct + '% TOTAL GROWTH';
-    document.getElementById('end-label').textContent        = 'YEAR ' + years;
-    document.getElementById('mid-label').textContent        = 'YEAR ' + Math.round(years / 2);
+  async function fetchStockInfo() {
+    const ticker = document.getElementById('sim-ticker').value.trim();
+    if (!ticker) return;
+    const status = document.getElementById('stock-query-status');
+    status.textContent = '查詢中...';
+    status.classList.remove('hidden');
+    document.getElementById('stock-svg').classList.add('hidden');
+    document.getElementById('stock-chart-placeholder').classList.remove('hidden');
+    document.getElementById('stock-chart-placeholder').textContent = '載入中...';
+    document.getElementById('stock-info').classList.add('hidden');
+    document.getElementById('sim-price-row').classList.add('hidden');
+    try {
+      const startDate = document.getElementById('sim-start-date').value;
+      const endDate   = document.getElementById('sim-end-date').value;
+      const url = startDate && endDate
+        ? `/api/calculator/stock-chart/?ticker=${encodeURIComponent(ticker)}&start_date=${startDate}&end_date=${endDate}`
+        : `/api/calculator/stock-chart/?ticker=${encodeURIComponent(ticker)}&period=1y`;
 
-    // SVG 座標轉換 (viewBox 0 0 800 400)
-    const W = 800, H = 400, padT = 20, padB = 50;
-    const maxVal = Math.max(...totalPts, 1);
-    const toX = i => (i / years) * W;
-    const toY = v => padT + (1 - v / maxVal) * (H - padT - padB);
+      const res = await fetch(url);
+      const data = await res.json();
+      if (!res.ok) {
+        status.textContent = data.error || '找不到此股票，請確認代號或名稱';
+        status.classList.remove('hidden');
+        document.getElementById('stock-chart-placeholder').textContent = '查詢個股後顯示走勢圖';
+        return;
+      }
+      const prices      = data.data;
+      const last        = prices[prices.length - 1].close;
+      // 區間報酬 = (終價/起價 - 1) × 100，直覺且不需要知道年數
+      const periodReturn = (last / prices[0].close - 1) * 100;
 
-    // Growth curve (smooth via cardinal spline)
-    const pts = totalPts.map((v, i) => [toX(i), toY(v)]);
-    let d = `M${pts[0][0]},${pts[0][1]}`;
-    for (let i = 1; i < pts.length; i++) {
-      const [x0, y0] = pts[i - 1], [x1, y1] = pts[i];
-      const cpx = (x0 + x1) / 2;
-      d += ` C${cpx},${y0} ${cpx},${y1} ${x1},${y1}`;
+      stockCurrentPrice = last;
+      document.getElementById('sim-current-price-display').textContent = 'NT$' + last.toFixed(1);
+      document.getElementById('sim-stock-name').textContent = data.name;
+      document.getElementById('sim-price-row').classList.remove('hidden');
+      document.getElementById('sim-yield').value    = periodReturn.toFixed(2);
+      document.getElementById('slider-yield').value = Math.min(Math.max(periodReturn, -100), 500).toFixed(2);
+      status.textContent = '';
+      status.classList.add('hidden');
+      // 選出與投資期間最接近的圖表 period，高亮按鈕並抓圖
+      const bestPeriod = _pickBestPeriod(startDate, endDate);
+      stockPeriod = bestPeriod;
+      _highlightPeriodBtn(bestPeriod);
+      renderStockChart(data);  // 先用日期範圍資料顯示，背景再抓 period 圖
+      _fetchAndRenderChart(ticker, bestPeriod);
+      calcWealth();
+      fetchStockNews(ticker);
+    } catch(e) {
+      status.textContent = '查詢失敗，請稍後再試';
+      status.classList.remove('hidden');
+      document.getElementById('stock-chart-placeholder').textContent = '查詢個股後顯示走勢圖';
+      document.getElementById('stock-chart-placeholder').classList.remove('hidden');
+      document.getElementById('stock-svg').classList.add('hidden');
     }
-    document.getElementById('growth-curve').setAttribute('d', d);
+  }
 
-    // Principal line (straight)
-    const py0 = toY(princPts[0]), pyN = toY(princPts[years]);
-    document.getElementById('principal-line').setAttribute('d', `M0,${py0} L${W},${pyN}`);
+  // 新聞物件快取：避免 onclick 內嵌 JSON 被特殊字元截斷
+  let _newsCache = [];
 
-    // Dots
-    const midIdx = Math.round(years / 2);
-    const [mx, my] = [toX(midIdx), toY(totalPts[midIdx])];
-    document.getElementById('mid-dot').setAttribute('cx', mx);
-    document.getElementById('mid-dot').setAttribute('cy', my);
-    document.getElementById('end-dot').setAttribute('cx', W);
-    document.getElementById('end-dot').setAttribute('cy', toY(finalFv));
+  async function fetchStockNews(ticker) {
+    const section = document.getElementById('stock-news-section');
+    const list = document.getElementById('stock-news-list');
+    section.classList.add('hidden');
+    list.innerHTML = '';
+    _newsCache = [];
+    try {
+      const res = await fetch(`/api/calculator/stock-news/?ticker=${encodeURIComponent(ticker)}`);
+      const data = await res.json();
+      if (!res.ok || !data.news?.length) return;
+      _newsCache = data.news;
+      list.innerHTML = data.news.map((n, i) => {
+        const date = n.pub ? new Date(n.pub).toLocaleDateString('zh-TW') : '';
+        const safeTitle = n.title.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+        return `
+          <div onclick="openNewsPanel(_newsCache[${i}])"
+               class="flex items-start gap-3 p-3 rounded-lg bg-surface-container-lowest hover:bg-surface-container cursor-pointer transition-colors">
+            <div class="flex-1 min-w-0">
+              <p class="text-sm font-semibold text-on-surface leading-snug line-clamp-2">${safeTitle}</p>
+              <p class="text-[10px] text-outline mt-1">${n.provider}${date ? ' · ' + date : ''}</p>
+            </div>
+            <span class="material-symbols-outlined text-outline/50 text-sm flex-shrink-0 mt-0.5">chevron_right</span>
+          </div>`;
+      }).join('');
+      section.classList.remove('hidden');
+    } catch(e) {}
+  }
 
-    // Grid lines（動態Y軸刻度）
-    const svg = document.getElementById('sim-chart');
-    svg.querySelectorAll('.grid-label').forEach(el => el.remove());
-    [0.25, 0.5, 0.75, 1].forEach(ratio => {
-      const val = maxVal * ratio;
-      const y   = toY(val);
-      const label = document.createElementNS('http://www.w3.org/2000/svg','text');
-      label.setAttribute('x', 5);
-      label.setAttribute('y', y - 4);
-      label.setAttribute('fill', '#717879');
-      label.setAttribute('font-family', 'Manrope');
-      label.setAttribute('font-size', '11');
-      label.setAttribute('font-weight', '600');
-      label.setAttribute('class', 'grid-label');
-      label.textContent = val >= 1e6 ? (val/1e6).toFixed(1)+'M' : val >= 1e3 ? (val/1e3).toFixed(0)+'K' : Math.round(val);
-      svg.appendChild(label);
+  function _newsPanelShowContent(body, text, linkUrl) {
+    body.innerHTML = '';
+    // \n\n 切段落，每段內的 \n 轉 <br>，用 textContent 避免 XSS
+    const paras = (text || '').split(/\n\n+/);
+    paras.forEach(para => {
+      if (!para.trim()) return;
+      const p = document.createElement('p');
+      p.className = 'text-sm leading-relaxed text-on-surface mb-3';
+      const lines = para.split('\n');
+      lines.forEach((line, i) => {
+        p.appendChild(document.createTextNode(line));
+        if (i < lines.length - 1) p.appendChild(document.createElement('br'));
+      });
+      body.appendChild(p);
     });
+    // fallback：沒有任何段落（純空白文字）
+    if (!body.children.length) {
+      const p = document.createElement('p');
+      p.className = 'text-sm leading-relaxed text-on-surface';
+      p.textContent = text;
+      body.appendChild(p);
+    }
+    if (linkUrl) {
+      const a = document.createElement('a');
+      a.href = linkUrl;
+      a.target = '_blank';
+      a.rel = 'noopener';
+      a.className = 'inline-flex items-center gap-1 mt-4 text-xs text-primary hover:underline';
+      a.innerHTML = '<span class="material-symbols-outlined text-sm">open_in_new</span>閱讀完整原文';
+      body.appendChild(a);
+    }
+  }
+
+  function _newsPanelShowFallback(body, url) {
+    body.innerHTML = '';
+    const msg = document.createElement('p');
+    msg.className = 'text-sm text-outline mb-3';
+    msg.textContent = '無法直接載入文章內容。';
+    body.appendChild(msg);
+    const a = document.createElement('a');
+    a.href = url;
+    a.target = '_blank';
+    a.rel = 'noopener';
+    a.className = 'inline-flex items-center gap-1 text-sm text-primary hover:underline';
+    a.innerHTML = '<span class="material-symbols-outlined text-base">open_in_new</span>開啟原文';
+    body.appendChild(a);
+  }
+
+  async function openNewsPanel(n) {
+    document.getElementById('news-panel-title').textContent = n.title;
+    const date = n.pub ? new Date(n.pub).toLocaleDateString('zh-TW') : '';
+    document.getElementById('news-panel-meta').textContent = [n.provider, date].filter(Boolean).join(' · ');
+    document.getElementById('news-panel-overlay').classList.remove('hidden');
+    document.getElementById('news-panel').classList.remove('translate-x-full');
+
+    const body = document.getElementById('news-panel-body');
+    body.innerHTML = '<p class="text-sm text-outline">載入內文中...</p>';
+
+    try {
+      const res = await fetch(`/api/calculator/news-content/?url=${encodeURIComponent(n.url)}`);
+      const data = await res.json();
+      if (!data.error && data.content) {
+        _newsPanelShowContent(body, data.content, data.real_url || n.url);
+      } else if (n.snippet) {
+        // 完整內文抓不到，退而顯示摘要 + 開啟原文連結
+        _newsPanelShowContent(body, n.snippet, n.url);
+      } else {
+        _newsPanelShowFallback(body, n.url);
+      }
+    } catch(e) {
+      if (n.snippet) {
+        _newsPanelShowContent(body, n.snippet, n.url);
+      } else {
+        _newsPanelShowFallback(body, n.url);
+      }
+    }
+  }
+
+  function closeNewsPanel() {
+    document.getElementById('news-panel').classList.add('translate-x-full');
+    document.getElementById('news-panel-overlay').classList.add('hidden');
+  }
+
+  function setStockPeriod(period) {
+    stockPeriod = period;
+    _highlightPeriodBtn(period);
+    const ticker = document.getElementById('sim-ticker').value.trim();
+    if (ticker) _fetchAndRenderChart(ticker, period);
+  }
+
+  function _highlightPeriodBtn(period) {
+    document.querySelectorAll('.stock-period-btn').forEach(btn => {
+      btn.className = btn.dataset.period === period
+        ? 'stock-period-btn px-3 py-1.5 rounded-full font-label text-xs font-bold transition-all bg-tertiary-container text-white'
+        : 'stock-period-btn px-3 py-1.5 rounded-full font-label text-xs font-bold transition-all text-secondary';
+    });
+  }
+
+  // 根據投資起訖日選出最接近的圖表時間段
+  function _pickBestPeriod(startDate, endDate) {
+    if (!startDate || !endDate) return '1y';
+    const days = (new Date(endDate) - new Date(startDate)) / 86400000;
+    if (days <= 45)  return '1mo';
+    if (days <= 135) return '3mo';
+    if (days <= 270) return '6mo';
+    return '1y';
+  }
+
+  // 以 period 參數抓圖（右上角按鈕 & 初始載入使用）
+  async function _fetchAndRenderChart(ticker, period) {
+    document.getElementById('stock-chart-placeholder').textContent = '載入中...';
+    document.getElementById('stock-chart-placeholder').classList.remove('hidden');
+    document.getElementById('stock-svg').classList.add('hidden');
+    try {
+      const url = `/api/calculator/stock-chart/?ticker=${encodeURIComponent(ticker)}&period=${period}`;
+      const res = await fetch(url);
+      const data = await res.json();
+      if (!res.ok) return;
+      document.getElementById('stock-chart-placeholder').classList.add('hidden');
+      renderStockChart(data);
+    } catch(e) {}
+  }
+
+  // 保留供外部呼叫（已改為 period-only）
+  async function fetchChartForPeriod(ticker) {
+    await _fetchAndRenderChart(ticker, stockPeriod);
+  }
+
+  async function fetchChartForDates(ticker) {
+    await _fetchAndRenderChart(ticker, stockPeriod);
+  }
+
+  function renderStockChart(data) {
+    const svg = document.getElementById('stock-svg');
+    svg.innerHTML = '';
+    svg.classList.remove('hidden');
+    document.getElementById('stock-chart-placeholder').classList.add('hidden');
+    const prices = data.data;
+    if (!prices.length) return;
+    const W = 800, H = 340, padL = 58, padR = 16, padT = 16, padB = 40;
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+    const ns = 'http://www.w3.org/2000/svg';
+    const minP = Math.min(...prices.map(d => d.close));
+    const maxP = Math.max(...prices.map(d => d.close));
+    const n = prices.length;
+    const toX = i => padL + (i / (n - 1)) * (W - padL - padR);
+    const toY = v => padT + (1 - (v - minP) / (maxP - minP + 0.01)) * (H - padT - padB);
+    const isUp = prices[n-1].close >= prices[0].close;
+    const lineColor = isUp ? '#113236' : '#ba1a1a';
+
+    [0, 0.25, 0.5, 0.75, 1].forEach(r => {
+      const val = minP + r * (maxP - minP);
+      const y = toY(val);
+      const gl = document.createElementNS(ns, 'line');
+      gl.setAttribute('x1', padL); gl.setAttribute('x2', W - padR);
+      gl.setAttribute('y1', y); gl.setAttribute('y2', y);
+      gl.setAttribute('stroke', '#e5e3d9'); gl.setAttribute('stroke-width', '1');
+      svg.appendChild(gl);
+      const gt = document.createElementNS(ns, 'text');
+      gt.setAttribute('x', padL - 6); gt.setAttribute('y', y + 4);
+      gt.setAttribute('fill', '#717879'); gt.setAttribute('font-family', 'Manrope');
+      gt.setAttribute('font-size', '11'); gt.setAttribute('font-weight', '600');
+      gt.setAttribute('text-anchor', 'end');
+      gt.textContent = val >= 1000 ? val.toFixed(0) : val.toFixed(2);
+      svg.appendChild(gt);
+    });
+
+    let d = '';
+    prices.forEach((p, i) => { d += (i === 0 ? 'M' : ' L') + `${toX(i)},${toY(p.close)}`; });
+    const path = document.createElementNS(ns, 'path');
+    path.setAttribute('d', d); path.setAttribute('fill', 'none');
+    path.setAttribute('stroke', lineColor); path.setAttribute('stroke-width', '2.5');
+    path.setAttribute('stroke-linecap', 'round');
+    svg.appendChild(path);
+
+    for (let i = 0; i <= 4; i++) {
+      const idx = Math.round(i * (n - 1) / 4);
+      const xt = document.createElementNS(ns, 'text');
+      xt.setAttribute('x', toX(idx)); xt.setAttribute('y', H - padB + 20);
+      xt.setAttribute('fill', '#717879'); xt.setAttribute('font-family', 'Manrope');
+      xt.setAttribute('font-size', '11'); xt.setAttribute('font-weight', '600');
+      xt.setAttribute('text-anchor', 'middle');
+      xt.textContent = prices[idx].date.slice(5);
+      svg.appendChild(xt);
+    }
+
+    const lastClose = prices[n-1].close;
+    const change = ((lastClose - prices[0].close) / prices[0].close * 100).toFixed(2);
+    const annualizedReturn = (stockPeriod === '3mo'
+      ? (Math.pow(1 + parseFloat(change)/100, 4) - 1) * 100
+      : stockPeriod === '6mo'
+      ? (Math.pow(1 + parseFloat(change)/100, 2) - 1) * 100
+      : stockPeriod === '2y'
+      ? (Math.pow(1 + parseFloat(change)/100, 0.5) - 1) * 100
+      : parseFloat(change)).toFixed(1);
+
+    document.getElementById('stock-name').textContent = data.name;
+    document.getElementById('stock-last-price').textContent = 'NT$' + lastClose.toFixed(1);
+    document.getElementById('stock-chart-subtitle').textContent = data.name;
+    const changeEl = document.getElementById('stock-change');
+    changeEl.textContent = (change >= 0 ? '+' : '') + change + '%';
+    changeEl.className = `font-['Epilogue'] font-bold text-lg ${isUp ? 'text-[#286671]' : 'text-[#ba1a1a]'}`;
+    const histEl = document.getElementById('stock-hist-return');
+    histEl.textContent = (annualizedReturn >= 0 ? '+' : '') + annualizedReturn + '%';
+    histEl.className = `font-['Epilogue'] font-bold text-lg ${annualizedReturn >= 0 ? 'text-[#286671]' : 'text-[#ba1a1a]'}`;
+    document.getElementById('stock-info').classList.remove('hidden');
   }
 
   // ── AI Assistant State ──
@@ -1497,56 +1920,59 @@
   let currentSummaryId = null;
 
 async function loadVerifiedInsights() {
+  const grid = document.getElementById('insights-grid');
   try {
-    const res = await fetch('/api/summaries/');
-    const list = await res.json();
-    const grid = document.getElementById('insights-grid');
-    if (!list.length) { grid.innerHTML = '<p class="text-outline text-sm">尚無摘要資料</p>'; return; }
+    const res = await fetch('/api/summaries/backtesting/?limit=60');
+    if (!res.ok) throw new Error('network');
+    const records = await res.json();
+    if (!records.length) { grid.innerHTML = '<p class="text-outline text-sm">尚無回測資料</p>'; return; }
 
-    const directionLabel = { bullish: '看多', bearish: '看空', neutral: '觀察' };
+    const accMap = await _ensureAccuracyCache();
 
-    let cards = [];
-    const seenTheses = new Set();
-    for (const s of list) {
-      const episodeName = s.source_filename?.replace(/\.srt$/i, '') || '未知集數';
-      const showName = s.podcaster || episodeName;
-      const calls = s.outlook_calls || [];
-      if (!calls.length) continue;
-      for (const call of calls) {
-        const thesis = call.thesis || '';
-        if (!thesis || seenTheses.has(thesis)) continue;
-        seenTheses.add(thesis);
-        const asset = call.asset || '';
-        const label = directionLabel[call.direction || 'neutral'] || '觀察';
-        cards.push(`
-          <div class="bg-surface-container-low p-6 rounded-lg border-l-4 border-secondary/40">
-            <div class="flex justify-between items-start mb-3">
-              <div class="px-3 py-1 bg-surface-container-lowest rounded-full text-[10px] font-bold text-tertiary-container uppercase tracking-widest">${asset}</div>
-              <span class="text-xs font-bold px-2 py-0.5 rounded-full bg-surface-container text-outline">${label}</span>
-            </div>
-            <h3 class="text-base font-bold text-tertiary-container mb-3 font-['Epilogue'] leading-snug">${thesis}</h3>
-            <div class="flex items-center justify-between mb-4">
-              <p class="text-sm text-on-surface-variant font-body">Extracted from <span class="font-semibold">${episodeName}</span></p>
-              <span class="text-[10px] font-bold text-secondary ml-3 flex-shrink-0">?% Acc.</span>
-            </div>
-            <div class="flex gap-2">
-              <button onclick="openDeepDive(${s.id})" class="flex-1 py-2 bg-on-primary-container text-white rounded-full font-label text-xs font-bold uppercase tracking-widest">Read Thesis</button>
-              <button class="px-4 py-2 border border-outline-variant rounded-full text-tertiary-container hover:bg-surface-container-highest transition-colors">
-                <span class="material-symbols-outlined text-sm">bookmark</span>
-              </button>
+    const dirLabel = { bullish: '看多', bearish: '看空', neutral: '觀察' };
+    const resultCfg = {
+      pass:    { label: '✓ 正確',  border: 'border-green-500',        badge: 'bg-green-100 text-green-700' },
+      fail:    { label: '✗ 錯誤',  border: 'border-error',            badge: 'bg-red-100 text-red-700' },
+      pending: { label: '⏳ 待驗證', border: 'border-outline-variant', badge: 'bg-surface-container text-outline' },
+    };
+
+    // 優先顯示已驗證（pass/fail），再補 pending，最多 4 張
+    const sorted = [
+      ...records.filter(r => r.result === 'pass'),
+      ...records.filter(r => r.result === 'fail'),
+      ...records.filter(r => r.result === 'pending'),
+    ].slice(0, 4);
+
+    const cards = sorted.map(r => {
+      const cfg = resultCfg[r.result] || resultCfg.pending;
+      const episodeName = (r.source_filename || '').replace(/\.srt$/i, '') || '未知集數';
+      const dir = dirLabel[r.direction || 'neutral'] || '觀察';
+      const acc = accMap[r.podcaster];
+      const accBadge = (acc && acc.total > 0)
+        ? `<span class="text-[10px] font-bold text-secondary ml-3 flex-shrink-0">⚡ ${acc.pct}% 準確率</span>`
+        : '';
+      return `
+        <div class="bg-surface-container-low p-6 rounded-lg border-l-4 ${cfg.border}">
+          <div class="flex justify-between items-start mb-3">
+            <div class="px-3 py-1 bg-surface-container-lowest rounded-full text-[10px] font-bold text-tertiary-container uppercase tracking-widest">${r.asset || ''}</div>
+            <div class="flex gap-1.5 items-center">
+              <span class="text-xs font-bold px-2 py-0.5 rounded-full bg-surface-container text-outline">${dir}</span>
+              <span class="text-[10px] font-bold px-2 py-0.5 rounded-full ${cfg.badge}">${cfg.label}</span>
             </div>
           </div>
-        `);
-        if (cards.length >= 4) break;
-      }
-      if (cards.length >= 4) break;
-    }
+          <h3 class="text-base font-bold text-tertiary-container mb-3 font-['Epilogue'] leading-snug">${r.thesis || ''}</h3>
+          <div class="flex items-center justify-between mb-4">
+            <p class="text-sm text-on-surface-variant font-body">來自 <span class="font-semibold">${r.podcaster || episodeName}</span></p>
+            ${accBadge}
+          </div>
+          <button onclick="openDeepDive(${r.summary_id})" class="w-full py-2 bg-on-primary-container text-white rounded-full font-label text-xs font-bold uppercase tracking-widest">Read Thesis</button>
+        </div>`;
+    });
 
-    if (!cards.length) { grid.innerHTML = '<p class="text-outline text-sm">尚無可回測句子</p>'; return; }
-    currentSummaryId = list[0].id;
     grid.innerHTML = cards.join('');
   } catch (e) {
     console.error('loadVerifiedInsights failed', e);
+    grid.innerHTML = '<p class="text-outline text-sm">載入失敗</p>';
   }
 }
 
@@ -1618,7 +2044,9 @@ function renderDdModeContent(mode) {
             </button>
           </div>
           <div class="flex-1 space-y-3">
-            <h3 class="font-['Epilogue'] text-xl font-bold text-on-surface">${arg.topic || ''}</h3>
+            <div class="flex items-center gap-3 flex-wrap">
+              <h3 class="font-['Epilogue'] text-xl font-bold text-on-surface">${arg.topic || ''}</h3>
+            </div>
             <div class="thesis-preview text-on-surface-variant leading-relaxed text-base">${preview}</div>
             <div class="thesis-full hidden text-on-surface-variant leading-relaxed text-base"><p>${fullSummary}</p></div>
             <button onclick="toggleThesis(this)" class="flex items-center gap-1 text-secondary font-label font-bold text-xs uppercase tracking-wider hover:text-on-primary-container transition-colors mt-1">
@@ -1667,7 +2095,12 @@ async function loadDeepDive(summaryId) {
 
     document.getElementById('dd-title').textContent = episodeTitle;
     const podcasterEl = document.getElementById('dd-podcaster');
-    podcasterEl.innerHTML = `Extracted from <span class="font-semibold">${showName}</span>`;
+    const podBtn = document.createElement('button');
+    podBtn.className = 'font-semibold underline underline-offset-2 hover:text-secondary transition-colors';
+    podBtn.textContent = showName;
+    podBtn.addEventListener('click', () => openRankedPodcasterByName(showName));
+    podcasterEl.textContent = 'Extracted from ';
+    podcasterEl.appendChild(podBtn);
     document.getElementById('dd-one-sentence').textContent = '"' + s.one_sentence_summary + '"';
 
     // 設定音檔
@@ -1688,68 +2121,96 @@ async function loadDeepDive(summaryId) {
       playerEl.classList.add('hidden');
     }
 
-    // Viewpoint Verification：所有可回測句子
-    const calls = s.outlook_calls || [];
-    let vpHtml = '';
-    calls.forEach(call => {
-      const thesis = call.thesis || '';
-      const asset = call.asset || '';
-      const timeframe = call.timeframe || null;
-      // 目前沒有驗證結果，全部顯示待驗證
-      const status = call.verified_status || 'pending';
-      const statusMap = {
-        pending:  { label: '待驗證', icon: 'pending',       cls: 'text-outline',           border: 'border-outline-variant',       bg: 'bg-surface-container/50' },
-        correct:  { label: '正確',   icon: 'check_circle',  cls: 'text-green-600',         border: 'border-green-500',             bg: 'bg-green-50/50' },
-        incorrect:{ label: '錯誤',   icon: 'cancel',        cls: 'text-error',             border: 'border-error',                 bg: 'bg-error-container/10' },
-      };
-      const st = statusMap[status] || statusMap.pending;
-      vpHtml += `
-        <div class="p-6 rounded-lg ${st.bg} border-l-4 ${st.border}">
-          <div class="flex items-start justify-between mb-2">
-            <div class="flex items-center gap-2 ${st.cls}">
-              <span class="material-symbols-outlined text-sm" style="font-variation-settings:'FILL' 1">${st.icon}</span>
-              <span class="font-label font-bold uppercase tracking-wider text-xs">${st.label}</span>
-            </div>
-            <span class="text-xs font-bold text-outline uppercase">${asset}</span>
-          </div>
-          <p class="font-body text-on-surface font-medium mb-2">${thesis}</p>
-          ${timeframe ? `<span class="text-[10px] font-bold text-outline uppercase tracking-widest">驗證時間：${timeframe}</span>` : '<span class="text-[10px] text-outline">未設定驗證時間</span>'}
-        </div>`;
-    });
-    document.getElementById('dd-viewpoints').innerHTML = vpHtml || '<p class="text-outline text-sm">無可回測句子</p>';
+    // Viewpoint Verification：從 backtesting 表抓資料
+    document.getElementById('dd-viewpoints').innerHTML = '<p class="text-outline text-sm">載入中...</p>';
+    fetch(`/api/summaries/${summaryId}/backtesting/`)
+      .then(r => r.json())
+      .then(records => {
+        const statusMap = {
+          pending:  { label: '待驗證', icon: 'pending',      cls: 'text-outline',    border: 'border-outline-variant',  bg: 'bg-surface-container/50' },
+          pass:     { label: '正確',   icon: 'check_circle', cls: 'text-green-600',  border: 'border-green-500',        bg: 'bg-green-50/50' },
+          fail:     { label: '錯誤',   icon: 'cancel',       cls: 'text-error',      border: 'border-error',            bg: 'bg-error-container/10' },
+        };
+        const dirLabel = { bullish: '看多', bearish: '看空', neutral: '觀察' };
+        let vpHtml = '';
+        records.forEach(r => {
+          const st = statusMap[r.result] || statusMap.pending;
+          const ticker  = r.ticker || r.asset || '';
+          const endDate = r.end_time || '';
+          const calcBtn = (ticker && r.result === 'pending')
+            ? `<button onclick="goToCalculatorWithStock('${ticker.replace(/'/g,"\\'")}', '${endDate}')"
+                 class="flex items-center gap-1 px-3 py-1 rounded-full bg-tertiary-container/20 border border-tertiary-container/40 text-tertiary-container text-xs font-bold hover:bg-tertiary-container/30 transition-colors">
+                 <span class="material-symbols-outlined text-xs" style="font-variation-settings:'FILL' 1">calculate</span>試算
+               </button>`
+            : '';
+          vpHtml += `
+            <div class="p-6 rounded-lg ${st.bg} border-l-4 ${st.border}">
+              <div class="flex items-start justify-between mb-2 flex-wrap gap-2">
+                <div class="flex items-center gap-2 ${st.cls}">
+                  <span class="material-symbols-outlined text-sm" style="font-variation-settings:'FILL' 1">${st.icon}</span>
+                  <span class="font-label font-bold uppercase tracking-wider text-xs">${st.label}</span>
+                </div>
+                <div class="flex items-center gap-2">
+                  <span class="text-xs font-bold text-outline uppercase">${r.asset || ''}${r.direction ? ' · ' + (dirLabel[r.direction] || r.direction) : ''}</span>
+                  ${calcBtn}
+                </div>
+              </div>
+              <p class="font-body text-on-surface font-medium mb-2">${r.thesis || ''}</p>
+              <div class="flex gap-4 flex-wrap">
+                ${r.timeframe_raw ? `<span class="text-[10px] font-bold text-outline uppercase tracking-widest">期間：${r.timeframe_raw}</span>` : ''}
+                ${endDate ? `<span class="text-[10px] text-outline">驗證截止：${endDate}</span>` : ''}
+              </div>
+            </div>`;
+        });
+        document.getElementById('dd-viewpoints').innerHTML = vpHtml || '<p class="text-outline text-sm">此集無可回測觀點</p>';
+      })
+      .catch(() => {
+        document.getElementById('dd-viewpoints').innerHTML = '<p class="text-outline text-sm">載入失敗</p>';
+      });
 
     // 存入當前模式資料，並查詢另一模式
-    ddSummaryData[s.mode] = s;
-    ddCurrentMode = s.mode;
-    switchDdMode(s.mode);
+    if (s.mode === 'both') {
+      // 舊格式：單筆 both 紀錄，兩個按鈕顯示同一份資料
+      ddSummaryData['novice'] = s;
+      ddSummaryData['pro'] = s;
+      ddCurrentMode = 'novice';
+    } else {
+      ddSummaryData[s.mode] = s;
+      ddCurrentMode = s.mode;
+      // 非同步抓另一個模式
+      if (s.source_filename) {
+        const otherMode = s.mode === 'novice' ? 'pro' : 'novice';
+        fetch(`/api/summaries/?source_filename=${encodeURIComponent(s.source_filename)}&mode=${otherMode}`)
+          .then(r => r.json())
+          .then(list => {
+            if (list.length) return fetch(`/api/summaries/${list[0].id}/`).then(r => r.json());
+          })
+          .then(other => {
+            if (other) { ddSummaryData[other.mode] = other; updateDdModeButtons(); }
+          })
+          .catch(() => {});
+      }
+    }
+    switchDdMode(ddCurrentMode);
 
-    // Ticker Targets（後端有資料時自動顯示，mock 示範用）
-    const mockTickers = [
-      { ticker: 'TSMC / 2330', direction: 'bullish', price_target: 980, expected_return: 18, timeframe: '12個月' },
-      { ticker: 'NVIDIA',      direction: 'bullish', price_target: 150, expected_return: 25, timeframe: '6個月' },
-      { ticker: 'USD/TWD',     direction: 'bearish', price_target: null, expected_return: null, timeframe: '2026 Q3' },
-    ];
-    renderTickerTargets(s.ticker_targets || mockTickers);
+    // Ticker Targets：從 outlook_calls 的 asset 欄位建立，去除重複
+    const seenAssets = new Set();
+    const validTf = tf => tf && tf !== 'null' && tf !== 'None';
+    const tickerTargets = (s.outlook_calls || [])
+      .filter(call => call.asset && validTf(call.timeframe) && !seenAssets.has(call.asset) && seenAssets.add(call.asset))
+      .map(call => ({
+        ticker: call.asset,
+        direction: call.direction || 'neutral',
+        price_target: null,
+        expected_return: null,
+        timeframe: call.timeframe,
+      }));
+    // Ticker cards section hidden — 試算按鈕已整合至 Critical Thesis Points 標題旁
+    document.getElementById('dd-ticker-section').classList.add('hidden');
 
     // Related Recommendations
     if (_discoverCache.length) renderRelated(_discoverCache, summaryId);
     else fetch('/api/summaries/?limit=30').then(r=>r.json()).then(all=>{ _discoverCache = dedupeByEpisode(all); renderRelated(_discoverCache, summaryId); }).catch(()=>{});
-
-    // 非同步抓另一個模式
-    if (s.source_filename) {
-      const otherMode = s.mode === 'novice' ? 'pro' : 'novice';
-      fetch(`/api/summaries/?source_filename=${encodeURIComponent(s.source_filename)}&mode=${otherMode}`)
-        .then(r => r.json())
-        .then(list => {
-          if (list.length) {
-            return fetch(`/api/summaries/${list[0].id}/`).then(r => r.json());
-          }
-        })
-        .then(other => {
-          if (other) { ddSummaryData[other.mode] = other; updateDdModeButtons(); }
-        })
-        .catch(() => {});
-    }
 
   } catch (e) {
     console.error('loadDeepDive failed', e);
@@ -1835,7 +2296,7 @@ function _updateTagButtons() {
   });
 }
 
-function filterDiscoverByTag(tagName) {
+async function filterDiscoverByTag(tagName) {
   _activeTag = tagName;
   _updateTagButtons();
 
@@ -1858,29 +2319,47 @@ function filterDiscoverByTag(tagName) {
   recommendedSection.classList.add('hidden');
   document.getElementById('tag-results-title').textContent = `「${tagName}」相關節目`;
 
-  const kw = tagName.toLowerCase();
+  const list = document.getElementById('tag-results-list');
+  list.innerHTML = '<p class="text-outline text-sm">載入中...</p>';
 
-  // 把 entities dict 的所有值（可能是 string 或 array）攤平成字串陣列
-  function entityStrings(s) {
-    const ent = s.entities;
-    if (!ent || typeof ent !== 'object') return [];
-    return Object.values(ent).flatMap(v =>
-      Array.isArray(v) ? v.map(String) : [String(v)]
-    );
+  // 從知識圖譜直接取得該節點關聯的 podcast 來源檔名
+  let sources = null;
+  try {
+    const res = await fetch(`/api/knowledge-graph/node-episodes/?node=${encodeURIComponent(tagName)}&days=30`);
+    if (res.ok) {
+      const data = await res.json();
+      sources = new Set(data.sources || []);
+    }
+  } catch (_) {}
+
+  let filtered = [];
+  if (sources && sources.size > 0) {
+    // 直接用圖譜回傳的檔名去後端查對應摘要
+    try {
+      const fetches = [...sources].map(name =>
+        fetch(`/api/summaries/?source_filename=${encodeURIComponent(name)}&mode=${ddCurrentMode || 'pro'}`)
+          .then(r => r.ok ? r.json() : [])
+          .then(data => Array.isArray(data) ? data : [])
+          .catch(() => [])
+      );
+      const results = await Promise.all(fetches);
+      filtered = results.flat();
+    } catch (_) {}
   }
 
-  const filtered = _discoverCache.filter(s => {
-    const texts = [
-      ...(s.tags || []),
-      s.one_sentence_summary || '',
-      s.source_filename      || '',
-      s.podcaster            || '',
-      ...entityStrings(s),
-    ];
-    return texts.some(t => t.toLowerCase().includes(kw));
-  });
+  // 圖譜查無結果時 fallback 到文字比對（從 cache）
+  if (!filtered.length) {
+    const kw = tagName.toLowerCase();
+    filtered = _discoverCache.filter(s => {
+      const ent = s.entities;
+      const entityVals = (ent && typeof ent === 'object')
+        ? Object.values(ent).flatMap(v => Array.isArray(v) ? v.map(String) : [String(v)])
+        : [];
+      const texts = [...(s.tags || []), s.one_sentence_summary || '', s.podcaster || '', ...entityVals];
+      return texts.some(t => t.toLowerCase().includes(kw));
+    });
+  }
 
-  const list = document.getElementById('tag-results-list');
   if (!filtered.length) {
     list.innerHTML = '<p class="text-outline text-sm">找不到相關節目，試試其他標籤</p>';
     return;
@@ -1903,33 +2382,183 @@ function filterDiscoverByTag(tagName) {
   }).join('');
 }
 
+// ── 搜尋功能 ─────────────────────────────────────────────────
+let _searchTimer = null;
+
+function onSearchInput() {
+  const q  = (document.getElementById('discover-search')?.value || '').trim();
+  const dd = document.getElementById('search-dropdown');
+  clearTimeout(_searchTimer);
+  if (!q) { dd.classList.add('hidden'); dd.innerHTML = ''; return; }
+  _searchTimer = setTimeout(() => _runSearch(q), 300);
+}
+
+function onSearchKeydown(e) {
+  if (e.key === 'Escape') {
+    document.getElementById('search-dropdown').classList.add('hidden');
+    document.getElementById('discover-search').value = '';
+  }
+}
+
+function _closeSearch() {
+  document.getElementById('search-dropdown').classList.add('hidden');
+  document.getElementById('discover-search').value = '';
+}
+
+async function _runSearch(q) {
+  const dd = document.getElementById('search-dropdown');
+  dd.innerHTML = '<p class="text-outline text-sm p-4">搜尋中...</p>';
+  dd.classList.remove('hidden');
+  try {
+    const res = await fetch(`/api/summaries/search/?q=${encodeURIComponent(q)}&limit=8`);
+    if (!res.ok) throw new Error();
+    const results = await res.json();
+    if (!results.length) {
+      dd.innerHTML = '<p class="text-outline text-sm p-4 text-center">找不到相關節目或公司</p>';
+      return;
+    }
+    dd.innerHTML = results.map(s => {
+      const title  = (s.source_filename || '').replace(/\.srt$/i, '') || (s.one_sentence_summary || '').slice(0, 60) || '(未命名)';
+      const tagStr = (s.tags || []).slice(0, 3).join(' · ');
+      const st     = cardStyle(s.podcaster || s.source_filename || '');
+      return `
+        <div onclick="openDeepDive(${s.id}); _closeSearch();"
+          class="flex items-center gap-3 p-4 hover:bg-surface-container-highest cursor-pointer border-b border-outline-variant/10 last:border-0 transition-colors">
+          <div class="w-10 h-10 rounded-lg flex-shrink-0 flex items-center justify-center" style="background:${st.bg}">
+            <span class="material-symbols-outlined text-white/60 text-lg" style="font-variation-settings:'FILL' 1">${st.icon}</span>
+          </div>
+          <div class="min-w-0 flex-1">
+            <p class="text-[10px] font-bold text-secondary uppercase tracking-widest truncate">${s.podcaster || ''}</p>
+            <p class="text-sm font-semibold text-tertiary-container leading-snug line-clamp-1">${title}</p>
+            <p class="text-xs text-outline truncate">${tagStr}</p>
+          </div>
+          <span class="material-symbols-outlined text-outline/40 text-base flex-shrink-0">chevron_right</span>
+        </div>`;
+    }).join('');
+  } catch (e) {
+    dd.innerHTML = '<p class="text-outline text-sm p-4 text-center">搜尋失敗，請稍後再試</p>';
+  }
+}
+
+// 點擊外部自動收起 dropdown
+document.addEventListener('click', (e) => {
+  const dd  = document.getElementById('search-dropdown');
+  const inp = document.getElementById('discover-search');
+  if (dd && inp && !dd.contains(e.target) && e.target !== inp) {
+    dd.classList.add('hidden');
+  }
+});
+
 async function loadHotTags() {
   const container = document.getElementById('discover-tags');
   if (!container) return;
+  const allBtn = `<button data-tag="__all__" onclick="filterDiscoverByTag(null)" class="${_tagActiveCls}">All</button>`;
+
+  function _renderTagBtns(names) {
+    const btns = names.map(n =>
+      `<button data-tag="${n}" onclick="filterDiscoverByTag('${n.replace(/'/g,"\\'")}') " class="${_tagNormalCls}">${n}</button>`
+    ).join('');
+    container.innerHTML = allBtn + btns;
+  }
+
+  // 從 knowledge graph（30天）抓熱門節點
   try {
     const res = await fetch('/api/knowledge-graph/hot-nodes/?days=30&limit=12');
-    if (!res.ok) throw new Error('network');
-    const data = await res.json();
-    const nodes = data.nodes || [];
-    if (!nodes.length) {
-      container.innerHTML = '<span class="text-outline text-sm self-center">暫無熱門標籤</span>';
-      return;
+    if (res.ok) {
+      const data = await res.json();
+      const nodes = data.nodes || [];
+      if (nodes.length) { _renderTagBtns(nodes.map(n => n.name)); return; }
     }
-    // "All" 按鈕 + 動態關鍵字
-    const allBtn = `<button data-tag="__all__" onclick="filterDiscoverByTag(null)" class="${_tagActiveCls}">All</button>`;
-    const tagBtns = nodes.map(n =>
-      `<button data-tag="${n.name}" onclick="filterDiscoverByTag('${n.name.replace(/'/g,"\\'")}') " class="${_tagNormalCls}">${n.name}</button>`
-    ).join('');
-    container.innerHTML = allBtn + tagBtns;
-  } catch {
-    container.innerHTML = '<span class="text-outline text-sm self-center">標籤載入失敗</span>';
-  }
+  } catch { /* fall through */ }
+
+  // 圖譜無近期資料，只顯示 All
+  container.innerHTML = allBtn;
 }
+
+// ── 準確率快取（Rankings + Verified Insights + 節目頁共用）──
+let _accuracyCache = null;
+async function _ensureAccuracyCache() {
+  if (_accuracyCache) return _accuracyCache;
+  try {
+    const res = await fetch('/api/summaries/accuracy-ranking/');
+    const records = res.ok ? await res.json() : [];
+    const map = {};
+    for (const r of records) {
+      if (!r.podcaster) continue;
+      map[r.podcaster] = {
+        pass:  r.pass,
+        fail:  r.fail,
+        total: r.total,
+        pct:   r.accuracy,  // 已是整數百分比
+      };
+    }
+    _accuracyCache = map;
+  } catch (e) {
+    _accuracyCache = {};
+  }
+  return _accuracyCache;
+}
+
+// ── Sector Filter ──────────────────────────────────────────
+let _currentSector = null;
+
+function toggleRankingsFilter() {
+  const dd      = document.getElementById('rankings-filter-dropdown');
+  const chevron = document.getElementById('rankings-filter-chevron');
+  const isHidden = dd.classList.toggle('hidden');
+  chevron.textContent = isHidden ? 'expand_more' : 'expand_less';
+}
+
+function _closeRankingsFilter() {
+  const dd      = document.getElementById('rankings-filter-dropdown');
+  const chevron = document.getElementById('rankings-filter-chevron');
+  if (dd) { dd.classList.add('hidden'); }
+  if (chevron) { chevron.textContent = 'expand_more'; }
+}
+
+function applySectorFilter(sector) {
+  _currentSector = sector || null;
+  _closeRankingsFilter();
+  // 更新 filter 按鈕文字
+  document.getElementById('rankings-filter-label').textContent = sector || '全部';
+  // 更新副標題
+  document.getElementById('rankings-subtitle').textContent =
+    sector ? `${sector} · 依準確率排名` : '全部節目 · 依準確率排名';
+  // 更新選中狀態
+  document.querySelectorAll('.sector-btn').forEach(btn => {
+    const isAll = btn.id === 'sector-btn-all';
+    const active = (!sector && isAll);
+    btn.classList.toggle('bg-on-primary-container', active);
+    btn.classList.toggle('text-white', active);
+    btn.classList.toggle('bg-surface-container-high', !active && !isAll);
+    btn.classList.toggle('text-tertiary-container', !active);
+  });
+  loadRankings();
+}
+
+// 點擊 dropdown 外部自動關閉
+document.addEventListener('click', (e) => {
+  const container = document.getElementById('rankings-filter-container');
+  if (container && !container.contains(e.target)) _closeRankingsFilter();
+});
 
 // ── Rankings 真實節目 ──────────────────────────────────────
 const _rankColors = ['#d97f12','#286671','#1c1c16','#472500','#2c4c50','#113236','#3a4c2c','#6b2c6b','#1a3a5c','#4c3a1c'];
 const _rankIcons  = ['workspace_premium','podcasts','show_chart','account_balance','public','ssid_chart','psychology','monitoring','bar_chart','mic'];
 let _rankData = [];
+
+function openRankedPodcasterByName(name) {
+  // 從 _rankData 找對應節目；若還沒載入就直接用名稱開一個空的頁面
+  const idx = _rankData.findIndex(p => p.podcaster === name);
+  if (idx !== -1) {
+    openRankedPodcaster(idx);
+  } else {
+    // rankData 尚未載入，直接跳到節目頁（episodes 先用 '--'）
+    const bg   = _rankColors[0];
+    const icon = _rankIcons[0];
+    showPodcaster(name, name, '--', '--', bg, icon);
+  }
+}
 
 function openRankedPodcaster(idx) {
   const p = _rankData[idx];
@@ -1943,33 +2572,101 @@ async function loadRankings() {
   const podium   = document.getElementById('rankings-podium');
   const fullList = document.getElementById('rankings-full-list');
   if (!podium || !fullList) return;
+
+  // sector 模式：隱藏 podium，全部走 full list
+  const podiumSection = podium.closest('section');
+  if (_currentSector) {
+    if (podiumSection) podiumSection.classList.add('hidden');
+    podium.innerHTML = '';
+  } else {
+    if (podiumSection) podiumSection.classList.remove('hidden');
+    podium.innerHTML = '<div class="col-span-3 flex items-center justify-center text-outline text-sm py-12">載入中...</div>';
+  }
+  fullList.innerHTML = '';
+
   try {
-    const res = await fetch('/api/summaries/podcasters/?limit=50');
-    if (!res.ok) throw new Error('network');
-    const data = await res.json();
+    const sectorParam = _currentSector ? `?sector=${encodeURIComponent(_currentSector)}` : '';
+
+    // 同時抓節目集數 + 準確率排名
+    const [podRes, accRes] = await Promise.all([
+      fetch('/api/summaries/podcasters/?limit=50'),
+      fetch(`/api/summaries/accuracy-ranking/${sectorParam}`),
+    ]);
+
+    const podData = podRes.ok ? await podRes.json() : [];
+    const accData = accRes.ok ? await accRes.json() : [];  // [{podcaster, accuracy, pass, fail, total}]
+
+    // 集數 map
+    const epMap = {};
+    for (const p of podData) epMap[p.podcaster] = p.episodes;
+
+    let data;
+    if (_currentSector) {
+      // 類別篩選：只顯示在此 sector 有回測資料的節目
+      data = accData.map(a => ({
+        podcaster: a.podcaster,
+        episodes:  epMap[a.podcaster] ?? '--',
+        accuracy:  a.accuracy,
+        total:     a.total,
+      }));
+    } else {
+      // 全部：有準確率的排前面，沒有的排後面
+      const accMap = {};
+      for (const a of accData) accMap[a.podcaster] = a;
+
+      const withAcc    = podData.filter(p => accMap[p.podcaster]);
+      const withoutAcc = podData.filter(p => !accMap[p.podcaster]);
+      withAcc.sort((a, b) => {
+        const diff = accMap[b.podcaster].accuracy - accMap[a.podcaster].accuracy;
+        return diff !== 0 ? diff : b.episodes - a.episodes;
+      });
+
+      data = [
+        ...withAcc.map(p => ({
+          podcaster: p.podcaster,
+          episodes:  p.episodes,
+          accuracy:  accMap[p.podcaster].accuracy,
+          total:     accMap[p.podcaster].total,
+        })),
+        ...withoutAcc.map(p => ({
+          podcaster: p.podcaster,
+          episodes:  p.episodes,
+          accuracy:  null,
+          total:     0,
+        })),
+      ];
+    }
+
     _rankData = data;
 
+    const _accDisp = (p) =>
+      (p.accuracy !== null && p.accuracy !== undefined)
+        ? `${p.accuracy}%・${p.total} 筆`
+        : '待驗證';
+
     if (!data.length) {
-      podium.innerHTML   = '<div class="col-span-3 text-outline text-sm text-center py-12">暫無節目資料</div>';
+      podium.innerHTML   = `<div class="col-span-3 text-outline text-sm text-center py-12">${_currentSector ? '此類別暫無回測資料' : '暫無節目資料'}</div>`;
       fullList.innerHTML = '';
       return;
     }
 
     // Podium: render top-3 in display order [#2, #1, #3]
     const top3 = data.slice(0, 3);
-    const displayOrder = top3.length >= 3 ? [1, 0, 2]   // indices into top3
+    const displayOrder = top3.length >= 3 ? [1, 0, 2]
                        : top3.length === 2 ? [null, 0, 1]
                        : [null, 0, null];
 
     podium.innerHTML = displayOrder.map(origIdx => {
       if (origIdx === null) return '<div></div>';
-      const p      = top3[origIdx];
-      const rank   = origIdx + 1;                        // 1-based rank
-      const dataIdx = origIdx;                           // index in _rankData
+      const p       = top3[origIdx];
+      const rank    = origIdx + 1;
+      const dataIdx = origIdx;
       const rankStr = String(rank).padStart(2, '0');
-      const bg   = _rankColors[origIdx % _rankColors.length];
-      const icon = _rankIcons[origIdx  % _rankIcons.length];
+      const bg      = _rankColors[origIdx % _rankColors.length];
+      const icon    = _rankIcons[origIdx  % _rankIcons.length];
       const isFirst = rank === 1;
+      const accDisp = _accDisp(p);
+      const epStr   = p.episodes !== '--' ? `${p.episodes} 集` : '--';
 
       if (isFirst) {
         return `
@@ -1983,11 +2680,12 @@ async function loadRankings() {
               </div>
             </div>
             <div class="text-center px-2">
-              <div class="font-['Epilogue'] font-black text-3xl text-white/20 mb-1">${rankStr}</div>
-              <h4 class="font-['Epilogue'] font-bold text-sm text-white leading-tight">${p.podcaster}</h4>
-              <p class="text-[10px] text-on-tertiary-container mt-1">${p.episodes} 集</p>
+              <div class="font-['Epilogue'] font-black text-6xl text-white/20 mb-1">${rankStr}</div>
+              <h4 class="font-['Epilogue'] font-bold text-[28px] text-white leading-tight w-full truncate">${p.podcaster}</h4>
+              <p class="text-xl text-on-tertiary-container mt-1">${epStr}</p>
+              <p class="text-xl font-bold text-on-tertiary-container/80 mt-0.5">準確率 ${accDisp}</p>
             </div>
-            <button onclick="openRankedPodcaster(${dataIdx})" class="px-4 py-1.5 bg-on-primary-container text-white rounded-full font-label text-[10px] font-bold uppercase tracking-widest hover:opacity-90 transition-all">More</button>
+            <button onclick="openRankedPodcaster(${dataIdx})" class="px-4 py-1.5 bg-on-primary-container text-white rounded-full font-label text-xl font-bold uppercase tracking-widest hover:opacity-90 transition-all">More</button>
           </div>`;
       } else {
         return `
@@ -1998,38 +2696,42 @@ async function loadRankings() {
               </div>
             </div>
             <div class="text-center px-2">
-              <div class="font-['Epilogue'] font-black text-3xl text-outline/20 mb-1">${rankStr}</div>
-              <h4 class="font-['Epilogue'] font-bold text-sm text-tertiary-container leading-tight">${p.podcaster}</h4>
-              <p class="text-[10px] text-outline mt-1">${p.episodes} 集</p>
+              <div class="font-['Epilogue'] font-black text-6xl text-outline/20 mb-1">${rankStr}</div>
+              <h4 class="font-['Epilogue'] font-bold text-[28px] text-tertiary-container leading-tight w-full truncate">${p.podcaster}</h4>
+              <p class="text-xl text-outline mt-1">${epStr}</p>
+              <p class="text-xl font-bold text-secondary mt-0.5">準確率 ${accDisp}</p>
             </div>
-            <button onclick="openRankedPodcaster(${dataIdx})" class="px-4 py-1.5 border border-secondary text-secondary rounded-full font-label text-[10px] font-bold uppercase tracking-widest hover:bg-secondary hover:text-white transition-all">More</button>
+            <button onclick="openRankedPodcaster(${dataIdx})" class="px-4 py-1.5 border border-secondary text-secondary rounded-full font-label text-xl font-bold uppercase tracking-widest hover:bg-secondary hover:text-white transition-all">More</button>
           </div>`;
       }
     }).join('');
 
-    // Full list #4 onwards
-    const rest = data.slice(3);
+    // Full list：sector 模式從 #1 開始，否則從 #4 開始
+    const listStart = _currentSector ? 0 : 3;
+    const rest = data.slice(listStart);
     fullList.innerHTML = rest.map((p, i) => {
-      const rank    = i + 4;
-      const dataIdx = i + 3;
+      const rank    = i + listStart + 1;
+      const dataIdx = i + listStart;
       const rankStr = String(rank).padStart(2, '0');
-      const bg   = _rankColors[dataIdx % _rankColors.length];
-      const icon = _rankIcons[dataIdx  % _rankIcons.length];
+      const bg      = _rankColors[dataIdx % _rankColors.length];
+      const icon    = _rankIcons[dataIdx  % _rankIcons.length];
+      const accDisp = _accDisp(p);
+      const epStr   = p.episodes !== '--' ? `${p.episodes} 集` : '--';
       return `
         <div class="flex items-center justify-between p-4 bg-surface-container-low rounded-lg hover:bg-surface-container-highest transition-all">
           <div class="flex items-center gap-4">
-            <span class="text-2xl font-black text-outline/30 italic w-8">${rankStr}</span>
+            <span class="text-5xl font-black text-outline/30 italic w-16">${rankStr}</span>
             <div class="w-12 h-12 rounded-full overflow-hidden">
               <div class="w-full h-full flex items-center justify-center" style="background:${bg}">
                 <span class="material-symbols-outlined text-white/70 text-xl" style="font-variation-settings:'FILL' 1">${icon}</span>
               </div>
             </div>
             <div>
-              <h4 class="font-bold text-tertiary-container">${p.podcaster}</h4>
-              <p class="text-xs text-outline font-medium">${p.episodes} 集</p>
+              <h4 class="font-bold text-tertiary-container text-xl">${p.podcaster}</h4>
+              <p class="text-base text-outline font-medium">${epStr} · 準確率 ${accDisp}</p>
             </div>
           </div>
-          <button onclick="openRankedPodcaster(${dataIdx})" class="px-5 py-2 border border-secondary text-secondary rounded-full font-label text-xs font-bold uppercase tracking-widest hover:bg-secondary hover:text-white transition-all">More</button>
+          <button onclick="openRankedPodcaster(${dataIdx})" class="px-5 py-2 border border-secondary text-secondary rounded-full font-label text-base font-bold uppercase tracking-widest hover:bg-secondary hover:text-white transition-all">More</button>
         </div>`;
     }).join('') || '<p class="text-outline text-sm">暫無更多資料</p>';
 
@@ -2231,6 +2933,12 @@ window._selectedText = '';
 document.addEventListener('mouseup', (e) => {
   if (document.getElementById('glossary-card').contains(e.target)) return;
   if (document.getElementById('glossary-btn').contains(e.target)) return;
+
+  // 只在 deep-dive 頁面啟用劃字查詞功能
+  if (!document.getElementById('page-deep-dive').classList.contains('active')) {
+    document.getElementById('glossary-btn').classList.add('hidden');
+    return;
+  }
 
   const sel = window.getSelection();
   const text = sel ? sel.toString().trim() : '';
