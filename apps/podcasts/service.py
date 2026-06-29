@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import sys
 import re
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -63,32 +64,51 @@ def fix_content_with_gemini(batch_text: str) -> str:
 
     import concurrent.futures
 
+    MAX_ATTEMPTS = 5
     wait = 10
-    for attempt in range(1, 4):
+    for attempt in range(1, MAX_ATTEMPTS + 1):
         try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(
-                    client.models.generate_content,
-                    model="gemini-2.5-flash",
-                    contents=prompt,
-                )
+            executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            future = executor.submit(
+                client.models.generate_content,
+                model="gemini-2.5-flash",
+                contents=prompt,
+            )
+            try:
                 response = future.result(timeout=300)
+            except concurrent.futures.TimeoutError:
+                executor.shutdown(wait=False, cancel_futures=True)
+                raise
+            executor.shutdown(wait=False)
             return response.text.replace("```srt", "").replace("```", "").strip()
         except concurrent.futures.TimeoutError:
-            e = "請求逾時（120 秒無回應）"
-            if attempt < 3:
-                print(f"   [Gemini Warning] 第 {attempt} 次{e}，{wait} 秒後重試...")
+            err_msg = "請求逾時（300 秒無回應）"
+            if attempt < MAX_ATTEMPTS:
+                print(f"   [Gemini Warning] 第 {attempt} 次{err_msg}，{wait} 秒後重試...")
                 time.sleep(wait)
-                wait *= 2
+                wait = min(wait * 2, 300)
             else:
-                raise GeminiCorrectionError("請求逾時，三次嘗試均失敗")
+                raise GeminiCorrectionError("請求逾時，五次嘗試均失敗")
         except KeyboardInterrupt:
             raise
         except Exception as e:
-            if attempt < 3:
-                print(f"   [Gemini Warning] 第 {attempt} 次失敗（{e}），{wait} 秒後重試...")
-                time.sleep(wait)
-                wait *= 2
+            err_str = str(e)
+            is_429 = "429" in err_str or "RESOURCE_EXHAUSTED" in err_str
+            is_503 = "503" in err_str or "UNAVAILABLE" in err_str
+            if attempt < MAX_ATTEMPTS:
+                if is_429:
+                    actual_wait = 60
+                    tag = "（429 配額限制，等待 60 秒）"
+                elif is_503:
+                    actual_wait = max(wait * 3, 30)
+                    tag = "（503 流量過高）"
+                else:
+                    actual_wait = wait
+                    tag = ""
+                print(f"   [Gemini Warning] 第 {attempt} 次失敗（{e}）{tag}，{actual_wait} 秒後重試...")
+                time.sleep(actual_wait)
+                if not is_429:
+                    wait = min(wait * 2, 300)
             else:
                 raise GeminiCorrectionError(str(e))
 
@@ -279,6 +299,8 @@ def transcribe_and_fix(
         )
         fixed_batch = fix_content_with_gemini(batch)
         final_srt_blocks.append(fixed_batch)
+        if i + batch_size < len(srt_blocks):
+            time.sleep(5)
 
     print("   [Debug] 寫入最終 SRT 檔案...")
     with open(out_path, "w", encoding="utf-8") as f:
@@ -315,6 +337,8 @@ def fix_existing_srt_only(srt_path: Path) -> None:
         )
         fixed_batch = fix_content_with_gemini(batch)
         final_srt_blocks.append(fixed_batch)
+        if i + batch_size < len(srt_blocks):
+            time.sleep(5)
 
     with open(srt_path, "w", encoding="utf-8") as f:
         f.write("\n\n".join(final_srt_blocks))
@@ -331,6 +355,7 @@ def insert_to_db(
     show_name: str,
     episode_title: str,
     published_at=None,
+    image_url: str = "",
 ) -> None:
     """
     透過 Django ORM 將 Podcast 資料寫入資料庫。
@@ -344,10 +369,13 @@ def insert_to_db(
     with open(srt_path, "r", encoding="utf-8") as f:
         srt_content = f.read().strip()
 
-    # 取得或建立頻道
+    # 取得或建立頻道，有圖片時補上
     podcast, _ = Podcast.objects.get_or_create(
         show_name=show_name or "未知頻道",
     )
+    if image_url and not podcast.image_url:
+        podcast.image_url = image_url
+        podcast.save()
 
     # 取得或建立單集
     episode, _ = PodcastEpisode.objects.get_or_create(

@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html class="light" lang="zh-TW">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Pod2Invest — 設定偏好</title>
+<link href="https://fonts.googleapis.com/css2?family=Epilogue:wght@400;500;700;800&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          "secondary": "#286671",
+          "tertiary-container": "#113236",
+          "on-primary-container": "#d97f12",
+          "surface": "#fcf9f0",
+          "surface-container-low": "#f6f4ea",
+          "surface-container-lowest": "#ffffff",
+          "surface-container-high": "#eae8df",
+          "on-surface": "#1c1c16",
+          "on-surface-variant": "#414849",
+          "outline": "#717879",
+          "outline-variant": "#c1c8c9",
+          "error": "#ba1a1a",
+          "secondary-container": "#b0ecf9",
+        },
+        fontFamily: { "headline": ["Epilogue"], "body": ["Manrope"] },
+        borderRadius: { "DEFAULT": "1rem", "full": "9999px" },
+      },
+    },
+  }
+</script>
+<style>
+  body { font-family: 'Manrope', sans-serif; background: #fcf9f0; min-height: 100dvh; }
+  .option-card input[type="radio"], .option-card input[type="checkbox"] { display: none; }
+  .option-card label {
+    display: flex; align-items: center; gap: 12px;
+    padding: 14px 18px; border-radius: 12px;
+    border: 2px solid #c1c8c9; background: #ffffff;
+    cursor: pointer; transition: all 0.15s ease;
+    font-family: 'Manrope', sans-serif; font-size: 14px; color: #1c1c16;
+  }
+  .option-card input:checked + label {
+    border-color: #113236; background: #f0f7f7;
+    font-weight: 700; color: #113236;
+  }
+  .option-card label:hover { border-color: #286671; background: #f6f4ea; }
+  .step { display: none; }
+  .step.active { display: block; animation: fadeIn 0.2s ease; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+</style>
+</head>
+<body class="flex flex-col items-center justify-start px-4 py-10">
+
+  <div class="mb-8 text-center">
+    <h1 class="font-['Epilogue'] font-black text-4xl md:text-5xl tracking-[-0.03em] text-tertiary-container leading-none">Pod2Invest</h1>
+    <p class="text-secondary font-medium mt-2 text-sm">投資智識，從 Podcast 開始</p>
+    <div class="mt-5 inline-flex items-center gap-2 px-4 py-2 bg-green-50 border border-green-200 rounded-full">
+      <span class="text-green-600 text-sm">✓</span>
+      <p class="text-sm text-green-700 font-medium">歡迎，<span class="font-bold">{{ request.user.username }}</span>！帳號已建立成功</p>
+    </div>
+    <p class="text-on-surface-variant text-sm mt-4">填寫以下問卷，讓我們為你打造專屬的投資內容推薦</p>
+  </div>
+
+  <div class="w-full max-w-xl">
+    <!-- Progress bar -->
+    <div class="mb-6">
+      <div class="flex justify-between text-xs font-bold text-outline uppercase tracking-widest mb-2">
+        <span id="step-label">第 1 題，共 5 題</span>
+        <span id="step-pct">20%</span>
+      </div>
+      <div class="h-1.5 w-full bg-surface-container-high rounded-full overflow-hidden">
+        <div id="progress-bar" class="h-full bg-tertiary-container rounded-full transition-all duration-300" style="width:20%"></div>
+      </div>
+    </div>
+
+    <form method="post" action="/onboarding/" id="onboarding-form">
+      {% csrf_token %}
+
+      <!-- Step 1: 經驗 -->
+      <div class="step active" data-step="1">
+        <div class="bg-surface-container-lowest rounded-2xl shadow-[0px_20px_60px_rgba(28,28,22,0.08)] p-8">
+          <p class="text-secondary font-bold text-xs uppercase tracking-widest mb-2">投資經驗</p>
+          <h2 class="font-['Epilogue'] font-bold text-xl text-tertiary-container mb-6">你怎麼形容目前的投資狀態？</h2>
+          <div class="space-y-3">
+            <div class="option-card">
+              <input type="radio" name="level" id="lv-novice" value="Novice" required/>
+              <label for="lv-novice">
+                <span class="text-2xl">🌱</span>
+                <div><p class="font-bold">投資小白</p><p class="text-xs text-on-surface-variant mt-0.5">完全不懂，請用白話文教我</p></div>
+              </label>
+            </div>
+            <div class="option-card">
+              <input type="radio" name="level" id="lv-mid" value="Intermediate"/>
+              <label for="lv-mid">
+                <span class="text-2xl">📈</span>
+                <div><p class="font-bold">有基本經驗</p><p class="text-xs text-on-surface-variant mt-0.5">買過股票／基金，懂基本規則</p></div>
+              </label>
+            </div>
+            <div class="option-card">
+              <input type="radio" name="level" id="lv-expert" value="Expert"/>
+              <label for="lv-expert">
+                <span class="text-2xl">🎯</span>
+                <div><p class="font-bold">市場老手</p><p class="text-xs text-on-surface-variant mt-0.5">我有交易策略，請給我高密度數據</p></div>
+              </label>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 2: 關注領域（可複選） -->
+      <div class="step" data-step="2">
+        <div class="bg-surface-container-lowest rounded-2xl shadow-[0px_20px_60px_rgba(28,28,22,0.08)] p-8">
+          <p class="text-secondary font-bold text-xs uppercase tracking-widest mb-2">關注領域</p>
+          <h2 class="font-['Epilogue'] font-bold text-xl text-tertiary-container mb-2">你的投資戰場主要在哪裡？</h2>
+          <p class="text-xs text-outline mb-6">可以複選</p>
+          <div class="space-y-3">
+            <div class="option-card">
+              <input type="checkbox" name="markets" id="mk-tw" value="TW"/>
+              <label for="mk-tw">
+                <span class="text-2xl">🇹🇼</span>
+                <div><p class="font-bold">台股</p><p class="text-xs text-on-surface-variant mt-0.5">上市櫃、興櫃</p></div>
+              </label>
+            </div>
+            <div class="option-card">
+              <input type="checkbox" name="markets" id="mk-us" value="US"/>
+              <label for="mk-us">
+                <span class="text-2xl">🇺🇸</span>
+                <div><p class="font-bold">美股</p><p class="text-xs text-on-surface-variant mt-0.5">科技巨頭、美債</p></div>
+              </label>
+            </div>
+            <div class="option-card">
+              <input type="checkbox" name="markets" id="mk-crypto" value="Crypto"/>
+              <label for="mk-crypto">
+                <span class="text-2xl">₿</span>
+                <div><p class="font-bold">加密貨幣</p><p class="text-xs text-on-surface-variant mt-0.5">比特幣、Web3</p></div>
+              </label>
+            </div>
+            <div class="option-card">
+              <input type="checkbox" name="markets" id="mk-general" value="General"/>
+              <label for="mk-general">
+                <span class="text-2xl">🌍</span>
+                <div><p class="font-bold">還不確定</p><p class="text-xs text-on-surface-variant mt-0.5">想先聽聽看</p></div>
+              </label>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 3: 分析方法 -->
+      <div class="step" data-step="3">
+        <div class="bg-surface-container-lowest rounded-2xl shadow-[0px_20px_60px_rgba(28,28,22,0.08)] p-8">
+          <p class="text-secondary font-bold text-xs uppercase tracking-widest mb-2">分析方法</p>
+          <h2 class="font-['Epilogue'] font-bold text-xl text-tertiary-container mb-6">買進一檔標的時，你最看重什麼依據？</h2>
+          <div class="space-y-3">
+            <div class="option-card">
+              <input type="radio" name="style" id="st-tech" value="Technical" required/>
+              <label for="st-tech">
+                <span class="text-2xl">📊</span>
+                <div><p class="font-bold">K 線與成交量</p><p class="text-xs text-on-surface-variant mt-0.5">技術面分析</p></div>
+              </label>
+            </div>
+            <div class="option-card">
+              <input type="radio" name="style" id="st-fund" value="Fundamental"/>
+              <label for="st-fund">
+                <span class="text-2xl">📋</span>
+                <div><p class="font-bold">財報與公司體質</p><p class="text-xs text-on-surface-variant mt-0.5">基本面分析</p></div>
+              </label>
+            </div>
+            <div class="option-card">
+              <input type="radio" name="style" id="st-macro" value="Macro"/>
+              <label for="st-macro">
+                <span class="text-2xl">🌐</span>
+                <div><p class="font-bold">國際局勢與政策</p><p class="text-xs text-on-surface-variant mt-0.5">總經派</p></div>
+              </label>
+            </div>
+            <div class="option-card">
+              <input type="radio" name="style" id="st-passive" value="Passive"/>
+              <label for="st-passive">
+                <span class="text-2xl">🤝</span>
+                <div><p class="font-bold">聽專家的／跟著大盤</p><p class="text-xs text-on-surface-variant mt-0.5">被動追蹤指數</p></div>
+              </label>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 4: 獲利模式 -->
+      <div class="step" data-step="4">
+        <div class="bg-surface-container-lowest rounded-2xl shadow-[0px_20px_60px_rgba(28,28,22,0.08)] p-8">
+          <p class="text-secondary font-bold text-xs uppercase tracking-widest mb-2">獲利模式</p>
+          <h2 class="font-['Epilogue'] font-bold text-xl text-tertiary-container mb-6">你理想中的獲利模式比較接近哪一種？</h2>
+          <div class="space-y-3">
+            <div class="option-card">
+              <input type="radio" name="goal" id="gl-growth" value="Growth" required/>
+              <label for="gl-growth">
+                <span class="text-2xl">🚀</span>
+                <div><p class="font-bold">低買高賣賺價差</p><p class="text-xs text-on-surface-variant mt-0.5">主動交易，追求資產快速增長</p></div>
+              </label>
+            </div>
+            <div class="option-card">
+              <input type="radio" name="goal" id="gl-div" value="Dividend"/>
+              <label for="gl-div">
+                <span class="text-2xl">💰</span>
+                <div><p class="font-bold">穩定領股息</p><p class="text-xs text-on-surface-variant mt-0.5">存股，追求現金流</p></div>
+              </label>
+            </div>
+            <div class="option-card">
+              <input type="radio" name="goal" id="gl-passive" value="Passive"/>
+              <label for="gl-passive">
+                <span class="text-2xl">🏔️</span>
+                <div><p class="font-bold">長期持有大盤</p><p class="text-xs text-on-surface-variant mt-0.5">定期定額，複利效應</p></div>
+              </label>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 5: 資金規模 -->
+      <div class="step" data-step="5">
+        <div class="bg-surface-container-lowest rounded-2xl shadow-[0px_20px_60px_rgba(28,28,22,0.08)] p-8">
+          <p class="text-secondary font-bold text-xs uppercase tracking-widest mb-2">資金規模</p>
+          <h2 class="font-['Epilogue'] font-bold text-xl text-tertiary-container mb-6">每月扣除生活費後，大約能撥出多少投資預算？</h2>
+          <div class="space-y-3">
+            <div class="option-card">
+              <input type="radio" name="capital" id="cp-low" value="Low" required/>
+              <label for="cp-low">
+                <span class="text-2xl">🌱</span>
+                <div><p class="font-bold">5,000 元以下</p><p class="text-xs text-on-surface-variant mt-0.5">小資族，零股 / 小額定期定額</p></div>
+              </label>
+            </div>
+            <div class="option-card">
+              <input type="radio" name="capital" id="cp-mid" value="Medium"/>
+              <label for="cp-mid">
+                <span class="text-2xl">📦</span>
+                <div><p class="font-bold">5,000 ～ 30,000 元</p><p class="text-xs text-on-surface-variant mt-0.5">穩健，個股 / ETF 配置</p></div>
+              </label>
+            </div>
+            <div class="option-card">
+              <input type="radio" name="capital" id="cp-high" value="High"/>
+              <label for="cp-high">
+                <span class="text-2xl">💼</span>
+                <div><p class="font-bold">30,000 元以上</p><p class="text-xs text-on-surface-variant mt-0.5">充裕，資產配置 / 美債 / 稅務規劃</p></div>
+              </label>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Nav buttons -->
+      <div class="flex gap-3 mt-6">
+        <button type="button" id="btn-back"
+          onclick="changeStep(-1)"
+          class="hidden px-6 py-3.5 border-2 border-outline-variant rounded-full font-['Epilogue'] font-bold text-sm text-on-surface-variant hover:border-secondary hover:text-secondary transition-all">
+          上一題
+        </button>
+        <button type="button" id="btn-next"
+          onclick="changeStep(1)"
+          class="flex-1 py-3.5 bg-tertiary-container text-white rounded-full font-['Epilogue'] font-bold text-base hover:opacity-90 active:scale-[0.98] transition-all">
+          下一題
+        </button>
+        <button type="submit" id="btn-submit"
+          class="hidden flex-1 py-3.5 bg-on-primary-container text-white rounded-full font-['Epilogue'] font-bold text-base hover:opacity-90 active:scale-[0.98] transition-all">
+          開始探索 →
+        </button>
+      </div>
+    </form>
+  </div>
+
+<script>
+  let currentStep = 1;
+  const totalSteps = 5;
+
+  function changeStep(dir) {
+    // validate current step before going forward
+    if (dir === 1) {
+      const step = document.querySelector(`.step[data-step="${currentStep}"]`);
+      const required = step.querySelectorAll('input[type="radio"][required]');
+      const checkboxes = step.querySelectorAll('input[type="checkbox"]');
+
+      if (required.length > 0) {
+        const name = required[0].name;
+        if (!document.querySelector(`input[name="${name}"]:checked`)) {
+          required[0].closest('.option-card').querySelector('label').style.animation = 'shake 0.3s ease';
+          alert('請選擇一個選項才能繼續');
+          return;
+        }
+      }
+      if (checkboxes.length > 0 && !step.querySelector('input[type="checkbox"]:checked')) {
+        alert('請至少選擇一個選項');
+        return;
+      }
+    }
+
+    document.querySelector(`.step[data-step="${currentStep}"]`).classList.remove('active');
+    currentStep = Math.max(1, Math.min(totalSteps, currentStep + dir));
+    document.querySelector(`.step[data-step="${currentStep}"]`).classList.add('active');
+    updateNav();
+  }
+
+  function updateNav() {
+    const pct = Math.round((currentStep / totalSteps) * 100);
+    document.getElementById('step-label').textContent = `第 ${currentStep} 題，共 ${totalSteps} 題`;
+    document.getElementById('step-pct').textContent = pct + '%';
+    document.getElementById('progress-bar').style.width = pct + '%';
+    document.getElementById('btn-back').classList.toggle('hidden', currentStep === 1);
+    document.getElementById('btn-next').classList.toggle('hidden', currentStep === totalSteps);
+    document.getElementById('btn-submit').classList.toggle('hidden', currentStep !== totalSteps);
+  }
+</script>
+</body>
+</html>

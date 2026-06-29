@@ -28,6 +28,15 @@ def _normalize_key_text(s: Any) -> str:
     return _normalize_text(s).lower().replace(" ", "")
 
 
+def _clean_quote(s: Any) -> str:
+    """Strip inline timestamp markers （m:ss） from evidence_quote."""
+    import re as _re
+    s = _normalize_text(s)
+    s = _re.sub(r"（\d+:\d{2}）", "", s)
+    s = _re.sub(r"\s+", " ", s).strip()
+    return s
+
+
 def _safe_list(v: Any) -> list:
     if v is None:
         return []
@@ -54,7 +63,8 @@ def _clean_one_call_light(call: dict) -> Optional[dict]:
     direction = _normalize_text(call.get("direction")).lower()
     thesis = _normalize_text(call.get("thesis"))
     timeframe = _normalize_timeframe(call.get("timeframe"))
-    evidence_quote = _normalize_text(call.get("evidence_quote"))
+    evidence_quote = _clean_quote(call.get("evidence_quote"))
+    summary_label = _normalize_text(call.get("summary_label"))
 
     evidence_timestamps = _safe_list(call.get("evidence_timestamps"))
     evidence_timestamps = [_normalize_text(x) for x in evidence_timestamps if _normalize_text(x)]
@@ -68,6 +78,7 @@ def _clean_one_call_light(call: dict) -> Optional[dict]:
         "asset": asset,
         "direction": direction,
         "thesis": thesis,
+        "summary_label": summary_label,
         "timeframe": timeframe,
         "evidence_timestamps": evidence_timestamps,
         "evidence_quote": evidence_quote,
@@ -380,9 +391,11 @@ def extract_outlook_payload(
         "你的任務是從逐字稿中找出所有 mentioned_assets、entities，以及 outlook_calls。\n\n"
 
         "【outlook_call 定義】\n"
-        "只有當說話者『明確對某一檔單一股票未來表現或股價方向提出看法』時，才算 outlook_call。\n"
-        "例如：看好、看壞、會漲、會跌、有上行空間、有下行風險、長期有成長潛力、可長期佈局、"
-        "若基本面持續改善股價可能上升、未來表現會更好、估值會提升、目標價上看/下看。\n\n"
+        "只要說話者對某一檔單一股票表達以下任何一種看法，就算 outlook_call：\n"
+        "A. 方向型：看好/看壞、會漲/跌、有上行空間/下行風險、目標價上看/下看\n"
+        "B. 持有型：明確表示願意繼續持有、不賣出、長期佈局（例如：『現在不是下車點』『我一張不賣』『願意跟公司一起成長』）\n"
+        "C. 成長預測型：說話者或引述分析師/外資預估某公司未來 EPS、營收、出貨量、市占率等將成長（例如：『EPS 這幾年會呈現好公司狀態』『獲利有機會走升』『市佔率預估逼近雙位數』）\n"
+        "D. 條件型：若某條件成立，股票表現可能改變（例如：『若EV訂單兌現股價可能上修』）\n\n"
 
         "【輸出格式】\n"
         "只能輸出合法 JSON，不可包含任何解釋文字或 markdown。\n"
@@ -396,12 +409,13 @@ def extract_outlook_payload(
         '  },\n'
         '  "outlook_calls": [\n'
         "    {\n"
-        '      "asset": "公司名稱",\n'
+        '      "asset": "標的名稱（公司/指數/商品）",\n'
         '      "direction": "bullish 或 bearish",\n'
-        '      "thesis": "一句話概括核心投資主張，若無法概括可留空字串",\n'
-        '      "timeframe": "例如 2026(短中期)，或 null",\n'
+        '      "thesis": "一句話概括核心投資主張",\n'
+        '      "summary_label": "一句讓使用者第一眼看懂的預測摘要，含標的+方向+理由/時間，例如：台積電2026年前看漲，受惠AI伺服器需求擴張",\n'
+        '      "timeframe": "例如 2026 / 明年 / 短中期 / 長期，或 null",\n'
         '      "evidence_timestamps": ["5:53"],\n'
-        '      "evidence_quote": "最多 25 字"\n'
+        '      "evidence_quote": "說話者原話，最多 60 字，保留完整句意"\n'
         "    }\n"
         "  ]\n"
         "}\n\n"
@@ -413,25 +427,44 @@ def extract_outlook_payload(
         "Step4：只要符合 outlook_call 定義，就全部收錄，不要只選最強訊號的一筆。\n"
         "Step5：如果同一檔股票在同一段落或相鄰語句中，反覆表達同一個核心 outlook 概念，請合併成 1 筆，不要拆成很多筆。\n\n"
 
-        "【合法 asset】\n"
-        "只接受：\n"
-        "- 上市公司名稱（如 台積電、安森美、HIMS、博通）或台股\n"
-        "- 股票代號或 ticker（如 2330、NVDA、TSLA）\n\n"
+        "【合法 asset 的判斷標準】\n"
+        "只收錄『可在 Yahoo Finance 或台灣證交所查到即時單一報價』的標的：\n"
+        "- 上市公司名稱或股票代號（台積電、鴻海、聯發科、NVDA、TSLA、2330）\n"
+        "- ETF 代號（0050、00878、QQQ、SPY、ARKW）\n"
+        "- 主要股市指數（台股加權指數、大盤、S&P500、那斯達克、費半、道瓊）\n"
+        "- 大宗商品（黃金、原油、銅、白銀）\n\n"
 
-        "【以下全部禁止收錄到 outlook_calls】\n"
-        "- 產業或族群（AI、半導體、車用晶片）\n"
-        "- 商品（黃金、白銀、原油、銅）\n"
-        "- 指數（S&P500、費半、羅素2000）\n"
-        "- 國家或總體經濟（美國經濟、降息、通膨）\n"
-        "- 模糊對象（企業、供應鏈、廠商）\n\n"
+        "【以下全部禁止收錄到 outlook_calls — 附說明為何不合法】\n"
+        "- 無人機 → 不是股票名稱，沒有單一可查報價（相關個股應各自拆開來說）\n"
+        "- 軍工、紡織類股、航運類股 → 是產業族群，無法用單一數字回測\n"
+        "- AI概念、半導體業、科技股、記憶體 → 同上，是族群或產業\n"
+        "- 模糊總體（市場、供應鏈、廠商、相關個股）\n"
+        "- 國家或總體政策（美國經濟、降息、通膨）→ 除非明確指某一可追蹤指數\n\n"
+
+        "【合法 vs 禁止 範例】\n"
+        "合法 ✓（收錄）：\n"
+        "  ✓ 『我認為現在這個價格絕對不會是長期投資人下車的點』→ 持有型 bullish\n"
+        "  ✓ 『我至今維持一張不賣，因為我看重它長線的發展潛力』→ 持有型 bullish\n"
+        "  ✓ 『鴻海的獲利有機會跟著AI伺服器出貨量走升』→ 成長預測型 bullish\n"
+        "  ✓ 『根據外資預估，鴻海這幾年EPS會呈現好公司狀態』→ 成長預測型 bullish\n"
+        "  ✓ 『AI ASIC業務預估從不到1%成長到2027年的18%』→ 成長預測型 bullish\n"
+        "  ✓ 台積電明年有望受惠AI需求帶動股價上漲 → 方向型 bullish\n"
+        "  ✓ 鴻海若EV訂單未兌現股價可能下修 → 條件型 bearish\n"
+        "禁止 ✗（不收錄）：\n"
+        "  ✗ 『京元電子股價已翻了一倍以上』→ 已發生的事實，無未來方向\n"
+        "  ✗ 『群翊股價已來到260之上』→ 現況陳述，無未來方向\n"
+        "  ✗ 『今年我有賣出世豐』→ 過去行為\n"
+        "  ✗ 台積電去年EPS達40元 → 過去事實\n"
+        "  ✗ 黃金今年已漲了30% → 過去價格表現\n"
+        "判斷關鍵：只要說話者**隱含或明說**對這檔股票未來仍看好/看壞，就算 valid，不需要一定出現「漲」「跌」這類字眼。\n\n"
 
         "【非常重要規則】\n"
-        "1）不得從『利多事件』自行推論 bullish。\n"
-        "2）evidence_quote 必須盡量貼近原文。\n"
+        "1）不得從『利多事件』自行推論 bullish，必須有說話者明確的未來方向判斷。\n"
+        "2）evidence_quote 必須是說話者的原話，盡量保留完整句意（最多 60 字）。\n"
         "3）長期成長潛力、可長期佈局、投資價值存在，屬於合法 bullish outlook，不可忽略。\n"
         "4）條件式看法也可收錄，例如：若公司達標股價可能上升。\n"
         "5）若逐字稿沒有任何符合條件，請輸出 {\"mentioned_assets\": [], \"entities\": {\"companies_or_stocks\": [], \"countries_or_regions\": [], \"people\": []}, \"outlook_calls\": []}。\n"
-        "6）mentioned_assets 只要是單一股票名稱或 ticker，就應列出；即使沒有 outlook 也要列出。\n\n"
+        "6）mentioned_assets 只要是單一股票名稱、ticker、指數名稱、大宗商品名稱，就應列出；即使沒有 outlook 也要列出。\n\n"
 
         "【同概念合併規則】\n"
         "同一檔股票如果在同一段落或相鄰語句中，多句話其實在表達同一個核心 outlook thesis，必須合併成 1 筆，不可拆成很多筆。\n"
@@ -456,7 +489,7 @@ def extract_outlook_payload(
         model=model,
         prompt_text=prompt,
         temperature=0.0,
-        max_output_tokens=2500,
+        max_output_tokens=8000,
         max_tries=6,
     )
 
@@ -517,6 +550,7 @@ def extract_outlook_payload(
         "mentioned_assets": mentioned_assets,
         "entities": normalized_entities,
         "outlook_calls": outlook_calls,
+        "_raw_text": text,  # debug 用，正式流程中不使用
     }
 
     _append_raw(

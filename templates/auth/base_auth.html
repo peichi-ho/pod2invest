@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html class="light" lang="zh-TW">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Pod2Invest</title>
+<link href="https://fonts.googleapis.com/css2?family=Epilogue:wght@400;500;700;800&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          "secondary": "#286671",
+          "tertiary-container": "#113236",
+          "on-primary-container": "#d97f12",
+          "surface": "#fcf9f0",
+          "surface-container-low": "#f6f4ea",
+          "surface-container-lowest": "#ffffff",
+          "surface-container-high": "#eae8df",
+          "on-surface": "#1c1c16",
+          "on-surface-variant": "#414849",
+          "outline": "#717879",
+          "outline-variant": "#c1c8c9",
+          "error": "#ba1a1a",
+          "secondary-container": "#b0ecf9",
+        },
+        fontFamily: { "headline": ["Epilogue"], "body": ["Manrope"] },
+        borderRadius: { "DEFAULT": "1rem", "full": "9999px" },
+      },
+    },
+  }
+</script>
+<style>
+  body { font-family: 'Manrope', sans-serif; background: #fcf9f0; min-height: 100dvh; }
+  .material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+</style>
+</head>
+<body class="flex flex-col items-center justify-center min-h-screen px-4 py-12">
+
+  <!-- 品牌標題 -->
+  <div class="mb-10 text-center">
+    <h1 class="font-['Epilogue'] font-black text-5xl md:text-7xl tracking-[-0.03em] text-tertiary-container leading-none">
+      Pod2Invest
+    </h1>
+    <p class="text-secondary font-medium mt-3 text-base">投資智識，從 Podcast 開始</p>
+  </div>
+
+  <!-- 卡片區（由各頁面 block 填入） -->
+  <div class="w-full max-w-md bg-surface-container-lowest rounded-2xl shadow-[0px_20px_60px_rgba(28,28,22,0.10)] p-8 md:p-10">
+    {% block content %}{% endblock %}
+  </div>
+
+</body>
+</html>

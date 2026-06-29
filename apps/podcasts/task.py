@@ -54,6 +54,19 @@ def parse_selection(s: str, max_index: int) -> list[int] | None:
 
 load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
 
+
+def notify(message: str) -> None:
+    """發送 Discord 通知，失敗不影響主流程"""
+    import requests as req
+    webhook_url = os.getenv("DISCORD_WEBHOOK_URL", "")
+    if not webhook_url:
+        return
+    try:
+        req.post(webhook_url, json={"content": message}, timeout=10)
+    except Exception:
+        pass
+
+
 from service import (
     input_nonempty,
     input_int,
@@ -91,6 +104,7 @@ def main():
     show = itunes_search_first_podcast(podcast_name)
     feed_url = show.get("feedUrl")
     show_name = show.get("collectionName", podcast_name)
+    image_url = show.get("artworkUrl600") or show.get("artworkUrl100", "")
 
     if not feed_url:
         raise RuntimeError(
@@ -167,6 +181,21 @@ def main():
             if published_at == datetime.min.replace(tzinfo=timezone.utc):
                 published_at = None
 
+            # 檢查資料庫是否已有此集逐字稿，有的話直接跳過
+            try:
+                from apps.podcasts.models import Podcast, PodcastEpisode
+                existing_podcast = Podcast.objects.using("podcasts").filter(show_name=show_name).first()
+                if existing_podcast:
+                    existing_episode = PodcastEpisode.objects.using("podcasts").filter(
+                        podcast=existing_podcast,
+                        episode_title=title,
+                    ).select_related("transcript").first()
+                    if existing_episode and getattr(existing_episode, "transcript", None):
+                        print(f"   [DB Skip] 資料庫已有此集逐字稿，略過：{title}")
+                        continue
+            except Exception as db_check_err:
+                print(f"   [!] 資料庫檢查失敗（{db_check_err}），繼續處理...")
+
             # 下載音檔（如果不存在）
             if not audio_path.exists():
                 print(f"下載音檔: {title}")
@@ -182,6 +211,7 @@ def main():
             except GeminiCorrectionError as e:
                 print(f"   [!] Gemini 校正失敗，略過資料庫寫入：{title}")
                 correction_failed.append(title)
+                notify(f"❌ [{show_name}] {title} Gemini 校正失敗")
                 continue
 
             print(f"任務成功：{sub_path.name}")
@@ -194,7 +224,9 @@ def main():
                     show_name=show_name,
                     episode_title=title,
                     published_at=published_at,
+                    image_url=image_url,
                 )
+                notify(f"✅ [{show_name}] {title} 處理完成")
             except Exception as db_err:
                 print(f"   [資料庫錯誤] {db_err}")
 
@@ -202,6 +234,7 @@ def main():
             import traceback
             traceback.print_exc()
             print(f"任務失敗：{title} | 原因：{e}")
+            notify(f"❌ [{show_name}] {title} 任務失敗（{e}）")
 
     if correction_failed:
         print(f"\n{'='*50}")

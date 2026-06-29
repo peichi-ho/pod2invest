@@ -28,6 +28,14 @@ def _normalize_key_text(s: Any) -> str:
     return _normalize_text(s).lower().replace(" ", "")
 
 
+def _clean_quote(s: Any) -> str:
+    import re as _re
+    s = _normalize_text(s)
+    s = _re.sub(r"（\d+:\d{2}）", "", s)
+    s = _re.sub(r"\s+", " ", s).strip()
+    return s
+
+
 def _safe_list(v: Any) -> list:
     if v is None:
         return []
@@ -69,7 +77,8 @@ def _clean_candidate_call(call: dict) -> Optional[dict]:
     direction = _normalize_text(call.get("direction")).lower()
     thesis = _normalize_text(call.get("thesis"))
     timeframe = _normalize_timeframe(call.get("timeframe"))
-    evidence_quote = _normalize_text(call.get("evidence_quote"))
+    evidence_quote = _clean_quote(call.get("evidence_quote"))
+    summary_label = _normalize_text(call.get("summary_label"))
 
     evidence_timestamps = _safe_list(call.get("evidence_timestamps"))
     evidence_timestamps = [_normalize_text(x) for x in evidence_timestamps if _normalize_text(x)]
@@ -83,6 +92,7 @@ def _clean_candidate_call(call: dict) -> Optional[dict]:
         "asset": asset,
         "direction": direction,
         "thesis": thesis,
+        "summary_label": summary_label,
         "timeframe": timeframe,
         "evidence_timestamps": evidence_timestamps,
         "evidence_quote": evidence_quote,
@@ -147,6 +157,7 @@ def review_outlook_payload(
     inline_text: str,
     candidate_calls: list[dict],
     raw_save_path: Optional[Path] = None,
+    published_at=None,
 ) -> dict:
     cleaned_candidates = []
     for c in candidate_calls or []:
@@ -154,11 +165,29 @@ def review_outlook_payload(
         if cc is not None:
             cleaned_candidates.append(cc)
 
+    # 組成發布日說明
+    if published_at is not None:
+        try:
+            pub_str = published_at.strftime("%Y-%m-%d")
+        except Exception:
+            pub_str = str(published_at)[:10]
+        published_at_block = (
+            "【本集發布日期】\n"
+            f"本集 Podcast 發布於 {pub_str}。\n"
+            "請以此日期為基準判斷「未來」：\n"
+            "- 說話者提及的時間點必須在此日期之後，才算未來方向性預測\n"
+            "- 例如發布於 2024-09-01：「2025年看好台積電」→ 未來，valid\n"
+            "- 例如發布於 2024-09-01：「今年已漲了30%」→ 過去事實，reject\n"
+            "- 若逐字稿中出現「今年」「明年」「下半年」等相對時間，請依發布日換算成絕對年份後再判斷\n\n"
+        )
+    else:
+        published_at_block = ""
+
     prompt = (
         "你是一位投資逐字稿審核員。\n"
         "你的任務不是做最終整合，而是逐筆審核候選 outlook_calls 是否成立。\n\n"
-
-        "【你的任務】\n"
+        + published_at_block
+        + "【你的任務】\n"
         "對每一筆候選項目，根據完整逐字稿做審核：\n"
         "1. 判斷是否為 valid\n"
         "2. 若 valid，從全文挑出『最能單獨成立』的 evidence_quote\n"
@@ -178,19 +207,26 @@ def review_outlook_payload(
         "除非你能從全文另找一個更完整的 conclusion / prediction / conditional 句子來替換。\n\n"
 
         "【valid 的定義】\n"
-        "只有當說話者對單一股票形成以下任一類型的未來判斷時，才算 valid：\n"
-        "1. 對未來表現、未來獲利、未來估值、未來股價方向的明確看法\n"
+        "只有當說話者對以下合法標的形成『未來』判斷時，才算 valid：\n"
+        "合法標的：上市公司/股票、ETF、主要股市指數（台股大盤/加權指數、S&P500、那斯達克、費半）、大宗商品（黃金、原油、銅）\n"
+        "合法類型：\n"
+        "1. 對未來表現、未來股價/指數/商品價格方向的明確看法\n"
         "2. 條件式推論：若某條件成立，未來表現可能變好或變差\n"
-        "3. 對公司競爭力、策略、需求、供給、估值風險如何影響未來的結論\n\n"
+        "3. 對競爭力、策略、需求、供給、估值風險如何影響未來的結論\n"
+        "4. 持有建議：說話者明確表示願意繼續持有、不賣出，隱含對未來成長的信心（例如『現在絕對不是下車的點』『我一張不賣』），且能找到配套的成長 thesis\n"
+        "5. 未來獲利/業績預測：說話者明確預期某公司未來 EPS、營收、出貨量將成長（例如『EPS 將呈現好公司狀態』『獲利有機會走升』）\n\n"
 
         "【必須 reject 的情況】\n"
-        "1. 單純事件描述\n"
-        "2. 單純數據變化或 KPI 描述\n"
-        "3. 單純市場已發生的價格反應\n"
-        "4. 單純產品擴張、專案採用、合作、AI 布局、供應鏈受惠敘事\n"
-        "5. 問句、拋題、半句、殘句、舉例句\n"
-        "6. 非單一股票、非單一上市公司\n"
-        "7. evidence_quote 無法單獨成立\n\n"
+        "1. 描述過去已發生的事實，且無任何未來方向推論（已買、已賣、已翻倍、已達到目標價）\n"
+        "   特別注意：「已翻倍」「已達260」「已賣出」這類過去完成式必須 reject\n"
+        "2. 描述當下現狀（現在估值高、目前股價低）—— 除非有明確的未來方向推論\n"
+        "3. 單純事件描述（公司發布財報、獲利創新高）\n"
+        "4. 單純數據變化或 KPI 描述（EPS 成長X%、本益比X倍）\n"
+        "5. 單純產品擴張、合作、AI 布局等事實性敘事，未明說對未來股價/指數的影響\n"
+        "6. 問句、拋題、半句、殘句、舉例句\n"
+        "7. 產業/族群/概念（半導體業、記憶體、AI概念、無人機、軍工、紡織類股）—— 無法用單一數字回測\n"
+        "8. evidence_quote 無法單獨成立\n"
+        "9. evidence_quote 整句都在描述已發生的事：出現「當年」「去年」「已漲」「已跌」「漲了X%」「現在漲回來」等詞即為過去事實\n\n"
 
         "【evidence_quote 硬性要求】\n"
         "1. 必須是完整句意\n"
@@ -243,12 +279,13 @@ def review_outlook_payload(
         "{\n"
         '  "reviewed_calls": [\n'
         "    {\n"
-        '      "asset": "公司名",\n'
+        '      "asset": "標的名稱（公司/指數/商品）",\n'
         '      "direction": "bullish 或 bearish",\n'
         '      "timeframe": "null / 2025 / 2026 / 短中期 / 未來幾年 / 未來兩年 / 長期",\n'
         '      "thesis": "一句完整投資判斷",\n'
+        '      "summary_label": "一句讓使用者第一眼看懂的預測摘要，含標的+方向+理由/時間，例如：台積電2026年前看漲，受惠AI伺服器需求",\n'
         '      "evidence_timestamps": ["m:ss"],\n'
-        '      "evidence_quote": "可單獨成立的完整原句",\n'
+        '      "evidence_quote": "說話者原話，可單獨成立的完整句意，最多 60 字",\n'
         '      "sentence_role": "conclusion / prediction / conditional",\n'
         '      "verdict": "valid"\n'
         "    }\n"
@@ -275,7 +312,7 @@ def review_outlook_payload(
         model=model,
         prompt_text=prompt,
         temperature=0.0,
-        max_output_tokens=3500,
+        max_output_tokens=6000,
         max_tries=6,
     )
 
@@ -321,6 +358,8 @@ def review_outlook_payload(
 
         cc["sentence_role"] = sentence_role
         cc["verdict"] = "valid"
+        if not cc.get("summary_label"):
+            cc["summary_label"] = _normalize_text(c.get("summary_label"))
         cleaned_reviewed.append(cc)
 
     cleaned_reviewed = _clamp_timestamps(cleaned_reviewed, max_per_call=4)
@@ -370,6 +409,7 @@ def review_outlook_calls(
     inline_text: str,
     candidate_calls: list[dict],
     raw_save_path: Optional[Path] = None,
+    published_at=None,
 ) -> list[dict]:
     payload = review_outlook_payload(
         client=client,
@@ -377,5 +417,6 @@ def review_outlook_calls(
         inline_text=inline_text,
         candidate_calls=candidate_calls,
         raw_save_path=raw_save_path,
+        published_at=published_at,
     )
     return payload.get("reviewed_calls", [])

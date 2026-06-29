@@ -6,16 +6,35 @@ import time
 from typing import Optional
 
 from google import genai
+from google.genai import types
 
-from django.conf import settings
 
+def make_client(api_key: str = "") -> genai.Client:
+    import os
+    project = os.getenv("VERTEX_PROJECT_ID", "").strip()
+    location = os.getenv("VERTEX_LOCATION", "us-central1").strip()
 
-def make_client() -> genai.Client:
+    if project:
+        # Vertex AI 模式：透過 GOOGLE_APPLICATION_CREDENTIALS 自動驗證
+        return genai.Client(
+            vertexai=True,
+            project=project,
+            location=location,
+        )
+
+    # 原本的 Gemini API key 模式
     return genai.Client(
-        vertexai=True,
-        project=settings.VERTEX_PROJECT_ID,
-        location=settings.VERTEX_LOCATION,
+        api_key=api_key,
+        http_options=types.HttpOptions(api_version="v1beta"),
     )
+
+
+def _normalize_model_name(model: str) -> str:
+    """Vertex AI 不接受 'models/' 前綴，AI Studio 需要它。自動偵測並轉換。"""
+    import os
+    if os.getenv("VERTEX_PROJECT_ID", "").strip() and model.startswith("models/"):
+        return model[len("models/"):]
+    return model
 
 
 def gemini_generate_with_retry(
@@ -25,19 +44,33 @@ def gemini_generate_with_retry(
     temperature: float,
     max_output_tokens: int,
     max_tries: int = 6,
+    thinking_budget: int = 0,
 ):
     base = 1.0
     last_err: Optional[Exception] = None
+
+    # 僅在支援 thinking 的模型（非 lite）上設定 thinking_budget
+    _is_thinking_model = "lite" not in model
+    if _is_thinking_model and thinking_budget == 0:
+        config = types.GenerateContentConfig(
+            temperature=temperature,
+            max_output_tokens=max_output_tokens,
+            thinking_config=types.ThinkingConfig(thinking_budget=0),
+        )
+    else:
+        config = types.GenerateContentConfig(
+            temperature=temperature,
+            max_output_tokens=max_output_tokens,
+        )
+
+    model = _normalize_model_name(model)
 
     for attempt in range(1, max_tries + 1):
         try:
             return client.models.generate_content(
                 model=model,
                 contents=[{"role": "user", "parts": [{"text": prompt_text}]}],
-                config={
-                    "temperature": temperature,
-                    "max_output_tokens": max_output_tokens,
-                },
+                config=config,
             )
         except Exception as e:
             last_err = e

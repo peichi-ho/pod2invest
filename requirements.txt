@@ -29,7 +29,11 @@ faster-whisper
 torch==2.10.0
 numpy==2.4.2
 sentence-transformers
-rank-bm25
+hdbscan
+scikit-learn
+umap-learn
+python-igraph
+leidenalg
 
 # --- dependencies ---
 annotated-types==0.7.0

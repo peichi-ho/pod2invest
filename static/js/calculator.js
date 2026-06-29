@@ -1,0 +1,790 @@
+// ── Calculator state ──────────────────────────────────────────
+let riskMultiplier  = 1.0;
+let stockPeriod     = '1y';
+let stockCurrentPrice = 0;
+let simUnit         = 'year';
+let _chartDebounce  = null;
+let _hostYield      = null;
+let _hostCalcData   = null;
+let _newsCache      = [];
+let _bullUserEdited = false;
+let _bearUserEdited = false;
+
+function _initSimDates() {
+  const today     = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+  const oneYearAgo = new Date(yesterday);
+  oneYearAgo.setFullYear(yesterday.getFullYear() - 1);
+  document.getElementById('sim-start-date').value = oneYearAgo.toISOString().slice(0, 10);
+  document.getElementById('sim-end-date').value   = yesterday.toISOString().slice(0, 10);
+}
+
+_initSimDates();
+
+// ── Host calc badge helpers ───────────────────────────────────
+function _checkHostYieldDiff() {
+  if (_hostYield == null) return;
+  const cur = parseFloat(document.getElementById('sim-yield-base').value);
+  const btn = document.getElementById('host-yield-reset');
+  if (Math.abs(cur - _hostYield) > 0.01) btn.classList.remove('hidden');
+  else btn.classList.add('hidden');
+}
+
+function resetToHostYield() {
+  if (_hostYield == null) return;
+  document.getElementById('sim-yield-base').value = _hostYield;
+  _bullUserEdited = false;
+  _bearUserEdited = false;
+  onBaseYieldChange();
+  document.getElementById('host-yield-reset').classList.add('hidden');
+}
+
+// ── Scenario derive helpers ───────────────────────────────────
+function _deriveScenarios(base) {
+  if (base === 0) return { bull: 5, bear: -5 };
+  if (base > 0)   return { bull: +(base * 1.5).toFixed(1), bear: +(base * 0.5).toFixed(1) };
+  return           { bull: +(base * 0.5).toFixed(1), bear: +(base * 1.5).toFixed(1) };
+}
+
+function onBaseYieldChange() {
+  const base = parseFloat(document.getElementById('sim-yield-base').value);
+  if (isNaN(base)) return;
+  const { bull, bear } = _deriveScenarios(base);
+  if (!_bullUserEdited) document.getElementById('sim-yield-bull').value = bull;
+  if (!_bearUserEdited) document.getElementById('sim-yield-bear').value = bear;
+  _refreshIfActive();
+}
+
+function _refreshIfActive() {
+  if (!document.getElementById('results-section').classList.contains('hidden')) {
+    calcWealth();
+  }
+}
+
+function _checkHostCalcDiff() {
+  if (!_hostCalcData) return;
+  const ticker  = document.getElementById('sim-ticker').value.trim();
+  const endDate = document.getElementById('sim-end-date').value;
+  const changed = ticker !== _hostCalcData.ticker || endDate !== _hostCalcData.endDate;
+  document.getElementById('host-calc-badge').style.display = changed ? 'flex' : 'none';
+}
+
+function resetToHostCalc() {
+  if (!_hostCalcData) return;
+  document.getElementById('sim-ticker').value   = _hostCalcData.ticker;
+  document.getElementById('sim-end-date').value = _hostCalcData.endDate;
+  document.getElementById('host-calc-badge').style.display = 'none';
+  fetchStockInfo();
+}
+
+// ── Slider sync (capital only) ────────────────────────────────
+function syncSlider(id) {
+  const inputEl = document.getElementById('sim-' + id);
+  const sliderEl = document.getElementById('slider-' + id);
+  if (inputEl && sliderEl) sliderEl.value = inputEl.value;
+}
+
+function syncInput(id) {
+  const sliderEl = document.getElementById('slider-' + id);
+  const inputEl  = document.getElementById('sim-' + id);
+  if (sliderEl && inputEl) inputEl.value = sliderEl.value;
+}
+
+// ── Wealth calculation ────────────────────────────────────────
+function getSimYears() {
+  const s = document.getElementById('sim-start-date').value;
+  const e = document.getElementById('sim-end-date').value;
+  if (!s || !e) return 1;
+  return Math.max((new Date(e) - new Date(s)) / (365.25 * 24 * 3600 * 1000), 0);
+}
+
+function _periodLabel(years) {
+  if (years <= 0) return '';
+  const totalDays = Math.round(years * 365.25);
+  const yr  = Math.floor(totalDays / 365);
+  const rem = totalDays - yr * 365;
+  const mo  = Math.floor(rem / 30);
+  const day = rem - mo * 30;
+
+  if (yr > 0) {
+    if (mo > 0) return `${yr}年${mo}月`;
+    return `${yr}年`;
+  }
+  if (mo > 0) {
+    if (day > 0) return `${mo}月${day}天`;
+    return `${mo}月`;
+  }
+  return `${totalDays}天`;
+}
+
+function toggleScenarioHint() {
+  const box = document.getElementById('scenario-hint-box');
+  if (box) box.classList.toggle('hidden');
+  // Close when clicking outside
+  if (!box.classList.contains('hidden')) {
+    setTimeout(() => {
+      document.addEventListener('click', function _close(e) {
+        if (!document.getElementById('scenario-hint-wrap').contains(e.target)) {
+          box.classList.add('hidden');
+          document.removeEventListener('click', _close);
+        }
+      });
+    }, 0);
+  }
+}
+
+function calcWealth() {
+  const capital  = parseFloat(document.getElementById('sim-capital').value) || 0;
+  const baseRate = parseFloat(document.getElementById('sim-yield-base').value);
+  const bullRate = parseFloat(document.getElementById('sim-yield-bull').value);
+  const bearRate = parseFloat(document.getElementById('sim-yield-bear').value);
+  const years    = getSimYears();
+  const months   = Math.max(Math.round(years * 12), 1);
+  const period   = _periodLabel(years);
+
+  if (isNaN(baseRate)) return;
+
+  // Shares & invested capital
+  const shares    = (stockCurrentPrice > 0 && capital > 0) ? Math.floor(capital / stockCurrentPrice) : 0;
+  const invested  = (stockCurrentPrice > 0 && shares > 0)  ? shares * stockCurrentPrice : capital;
+  const remaining = Math.max(capital - invested, 0);
+
+  // Compound interest: final = invested × (1 + annualRate%)^years
+  const baseFinal  = invested * Math.pow(1 + baseRate / 100, years);
+  const baseProfit = baseFinal - invested;
+  const baseTotal  = invested > 0 ? (baseFinal / invested - 1) * 100 : 0;
+  const sign       = v => v >= 0 ? '+' : '';
+  const upColor    = 'text-[#286671]';
+  const downColor  = 'text-[#ba1a1a]';
+  const retColor   = baseRate >= 0 ? upColor : downColor;
+
+  // Show results section
+  document.getElementById('results-section').classList.remove('hidden');
+
+  // 輸入條件
+  document.getElementById('res-period').textContent        = period || '—';
+  document.getElementById('res-annual-return').textContent = sign(baseRate) + baseRate.toFixed(1) + '% 年化（基準假設）';
+
+  // 持倉資訊
+  if (stockCurrentPrice > 0 && capital > 0) {
+    document.getElementById('res-shares').textContent   = shares + ' 股';
+    document.getElementById('res-invested').textContent = 'NT$' + Math.round(invested).toLocaleString();
+    document.getElementById('res-remaining').textContent = 'NT$' + Math.round(remaining).toLocaleString();
+  } else {
+    document.getElementById('res-shares').textContent    = '—';
+    document.getElementById('res-invested').textContent  = capital > 0 ? 'NT$' + Math.round(capital).toLocaleString() : '—';
+    document.getElementById('res-remaining').textContent = '—';
+  }
+
+  // 試算結果
+  document.getElementById('res-final-value').textContent = 'NT$' + Math.round(baseFinal).toLocaleString();
+
+  const profitEl = document.getElementById('res-profit');
+  profitEl.textContent = sign(baseProfit) + 'NT$' + Math.round(Math.abs(baseProfit)).toLocaleString();
+  profitEl.className = 'text-sm font-bold ' + retColor;
+
+  const returnEl = document.getElementById('res-total-return');
+  returnEl.textContent = sign(baseTotal) + baseTotal.toFixed(2) + '%';
+  returnEl.className = 'text-sm font-bold ' + retColor;
+
+  const trendIcon = document.getElementById('res-trend-icon');
+  if (trendIcon) trendIcon.textContent = baseRate >= 0 ? 'trending_up' : 'trending_down';
+
+  const dispEl = document.getElementById('sim-period-display');
+  if (dispEl) dispEl.textContent = period ? `投資期間：${period}` : '';
+
+  renderScenarioChart(invested, months, bullRate, baseRate, bearRate);
+}
+
+function _fmtVal(v) {
+  if (Math.abs(v) >= 100000000) return (v / 100000000).toFixed(1) + '億';
+  if (Math.abs(v) >= 10000000)  return (v / 10000).toFixed(0) + '萬';
+  if (Math.abs(v) >= 1000000)   return (v / 10000).toFixed(1) + '萬';
+  if (Math.abs(v) >= 100000)    return (v / 10000).toFixed(1) + '萬';
+  return Math.round(v).toLocaleString();
+}
+
+function renderScenarioChart(invested, months, bullRate, baseRate, bearRate) {
+  const svg = document.getElementById('scenario-svg');
+  svg.innerHTML = '';
+
+  const W = 700, H = 260, padL = 72, padR = 24, padT = 16, padB = 40;
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  const ns = 'http://www.w3.org/2000/svg';
+
+  // Data points: monthly
+  function genPoints(annualRate) {
+    if (annualRate == null || isNaN(annualRate)) return null;
+    const mr = Math.pow(1 + annualRate / 100, 1 / 12) - 1;
+    return Array.from({ length: months + 1 }, (_, n) => invested * Math.pow(1 + mr, n));
+  }
+
+  const bullPts = genPoints(bullRate);
+  const basePts = genPoints(baseRate);
+  const bearPts = genPoints(bearRate);
+
+  const allVals = [...(bullPts || []), ...basePts, ...(bearPts || [])];
+  const dataMin = Math.min(...allVals);
+  const dataMax = Math.max(...allVals);
+  const dataRange = dataMax - dataMin;
+
+  // Y-axis: ensure minimum visible range = 20% of invested so chart doesn't over-zoom
+  const minRange = invested * 0.20;
+  const visRange = Math.max(dataRange, minRange);
+  const midVal   = (dataMax + dataMin) / 2;
+  const lo = midVal - visRange * 0.6;
+  const hi = midVal + visRange * 0.6;
+
+  const toX = n => padL + (n / months) * (W - padL - padR);
+  const toY = v => padT + (1 - (v - lo) / (hi - lo)) * (H - padT - padB);
+
+  // Adaptive X-axis labels
+  function getXLabels() {
+    let interval, fmt;
+    if (months < 3) {
+      interval = 1;
+      fmt = n => n === 0 ? '現在' : `第${n}月`;
+    } else if (months <= 12) {
+      interval = Math.ceil(months / 6);
+      fmt = n => n === 0 ? '現在' : `第${n}月`;
+    } else if (months <= 36) {
+      interval = 3;
+      fmt = n => n === 0 ? '現在' : `第${Math.round(n / 3)}季`;
+    } else {
+      interval = 6;
+      fmt = n => n === 0 ? '現在' : `第${Math.round(n / 12)}年`;
+    }
+    const pts = [];
+    for (let n = 0; n <= months; n += interval) pts.push({ n, label: fmt(n) });
+    if (pts[pts.length - 1].n !== months) pts.push({ n: months, label: fmt(months) });
+    return pts;
+  }
+
+  // Grid lines — nice ticks
+  function niceStep(range, targetCount) {
+    const rough = range / targetCount;
+    const mag = Math.pow(10, Math.floor(Math.log10(rough)));
+    const norm = rough / mag;
+    const nice = norm < 1.5 ? 1 : norm < 3.5 ? 2 : norm < 7.5 ? 5 : 10;
+    return nice * mag;
+  }
+  const step = niceStep(hi - lo, 4);
+  const tickStart = Math.ceil(lo / step) * step;
+  const ticks = [];
+  for (let v = tickStart; v <= hi + step * 0.01; v += step) {
+    if (v >= lo - step * 0.01) ticks.push(Math.round(v));
+  }
+  ticks.forEach(val => {
+    const y = toY(val);
+    if (y < padT - 2 || y > H - padB + 2) return;
+    const gl = document.createElementNS(ns, 'line');
+    gl.setAttribute('x1', padL); gl.setAttribute('x2', W - padR);
+    gl.setAttribute('y1', y);   gl.setAttribute('y2', y);
+    gl.setAttribute('stroke', '#e5e3d9'); gl.setAttribute('stroke-width', '1');
+    svg.appendChild(gl);
+    const gt = document.createElementNS(ns, 'text');
+    gt.setAttribute('x', padL - 6); gt.setAttribute('y', y + 4);
+    gt.setAttribute('fill', '#717879'); gt.setAttribute('font-family', 'Manrope');
+    gt.setAttribute('font-size', '11'); gt.setAttribute('font-weight', '600');
+    gt.setAttribute('text-anchor', 'end');
+    gt.textContent = _fmtVal(val);
+    svg.appendChild(gt);
+  });
+
+  // Draw lines
+  function drawLine(pts, color, dash) {
+    if (!pts) return;
+    let d = '';
+    pts.forEach((v, i) => { d += (i === 0 ? 'M' : 'L') + `${toX(i).toFixed(1)},${toY(v).toFixed(1)}`; });
+    const path = document.createElementNS(ns, 'path');
+    path.setAttribute('d', d); path.setAttribute('fill', 'none');
+    path.setAttribute('stroke', color); path.setAttribute('stroke-width', '2.5');
+    path.setAttribute('stroke-linecap', 'round');
+    if (dash) path.setAttribute('stroke-dasharray', dash);
+    svg.appendChild(path);
+  }
+
+  drawLine(bearPts, '#ba1a1a', '6,3');
+  drawLine(basePts, '#113236');
+  drawLine(bullPts, '#286671', '6,3');
+
+  // X-axis labels
+  getXLabels().forEach(({ n, label }) => {
+    const xt = document.createElementNS(ns, 'text');
+    xt.setAttribute('x', toX(n).toFixed(1)); xt.setAttribute('y', H - padB + 16);
+    xt.setAttribute('fill', '#717879'); xt.setAttribute('font-family', 'Manrope');
+    xt.setAttribute('font-size', '11'); xt.setAttribute('font-weight', '600');
+    xt.setAttribute('text-anchor', 'middle');
+    xt.textContent = label;
+    svg.appendChild(xt);
+  });
+
+  // Legend: show annual rate, not total return %
+  const fmtRate = r => r == null || isNaN(r) ? '' : `(${r >= 0 ? '+' : ''}${r.toFixed(1)}% 年化)`;
+  const bullEl = document.getElementById('legend-bull-rate');
+  const baseEl = document.getElementById('legend-base-rate');
+  const bearEl = document.getElementById('legend-bear-rate');
+  if (bullEl) bullEl.textContent = fmtRate(bullRate);
+  if (baseEl) baseEl.textContent = fmtRate(baseRate);
+  if (bearEl) bearEl.textContent = fmtRate(bearRate);
+
+  // Range note: difference between bull and bear at end
+  const rangeNote = document.getElementById('scenario-range-note');
+  const rangeVal  = document.getElementById('scenario-range-val');
+  if (rangeNote && rangeVal && bullPts && bearPts) {
+    const diff = Math.abs(bullPts[months] - bearPts[months]);
+    rangeVal.textContent = 'NT$' + Math.round(diff).toLocaleString();
+    rangeNote.classList.remove('hidden');
+  } else if (rangeNote) {
+    rangeNote.classList.add('hidden');
+  }
+
+  // ── Hover tooltip ───────────────────────────────────────────
+  const overlay = document.createElementNS(ns, 'g');
+  overlay.setAttribute('id', 'chart-hover-overlay');
+
+  // Invisible hit area
+  const hitRect = document.createElementNS(ns, 'rect');
+  hitRect.setAttribute('x', padL); hitRect.setAttribute('y', padT);
+  hitRect.setAttribute('width', W - padL - padR); hitRect.setAttribute('height', H - padT - padB);
+  hitRect.setAttribute('fill', 'transparent');
+  overlay.appendChild(hitRect);
+
+  // Crosshair vertical line
+  const vLine = document.createElementNS(ns, 'line');
+  vLine.setAttribute('stroke', '#9b9e9f'); vLine.setAttribute('stroke-width', '1');
+  vLine.setAttribute('stroke-dasharray', '4,2');
+  vLine.setAttribute('y1', padT); vLine.setAttribute('y2', H - padB);
+  vLine.setAttribute('visibility', 'hidden');
+  overlay.appendChild(vLine);
+
+  // Tooltip box (foreignObject for HTML rendering)
+  const fo = document.createElementNS(ns, 'foreignObject');
+  fo.setAttribute('width', '160'); fo.setAttribute('height', '110');
+  fo.setAttribute('visibility', 'hidden');
+  const foDiv = document.createElement('div');
+  foDiv.setAttribute('xmlns', 'http://www.w3.org/1999/xhtml');
+  foDiv.style.cssText = 'background:#2d3233;color:#e1e3e3;border-radius:8px;padding:8px 10px;font-size:11px;font-family:Manrope,sans-serif;line-height:1.6;pointer-events:none;box-shadow:0 2px 8px rgba(0,0,0,0.3)';
+  fo.appendChild(foDiv);
+  overlay.appendChild(fo);
+
+  // Dot markers
+  function makeDot(color) {
+    const c = document.createElementNS(ns, 'circle');
+    c.setAttribute('r', '4'); c.setAttribute('fill', color);
+    c.setAttribute('stroke', '#fff'); c.setAttribute('stroke-width', '1.5');
+    c.setAttribute('visibility', 'hidden');
+    overlay.appendChild(c); return c;
+  }
+  const bullDot = bullPts ? makeDot('#286671') : null;
+  const baseDot = makeDot('#113236');
+  const bearDot = bearPts ? makeDot('#ba1a1a') : null;
+
+  svg.appendChild(overlay);
+
+  function getXLabel(n) {
+    if (n === 0) return '現在';
+    if (months <= 36) return `第 ${n} 月`;
+    return `第 ${Math.round(n / 12)} 年`;
+  }
+
+  hitRect.addEventListener('mousemove', e => {
+    const rect = svg.getBoundingClientRect();
+    const scaleX = W / rect.width;
+    const mx = (e.clientX - rect.left) * scaleX;
+    const rawN = Math.round((mx - padL) / (W - padL - padR) * months);
+    const n = Math.max(0, Math.min(months, rawN));
+    const x = toX(n);
+
+    vLine.setAttribute('x1', x); vLine.setAttribute('x2', x);
+    vLine.setAttribute('visibility', 'visible');
+
+    const bv  = basePts[n];
+    const buv = bullPts ? bullPts[n] : null;
+    const bev = bearPts ? bearPts[n] : null;
+
+    if (baseDot) { baseDot.setAttribute('cx', x); baseDot.setAttribute('cy', toY(bv)); baseDot.setAttribute('visibility', 'visible'); }
+    if (bullDot && buv != null) { bullDot.setAttribute('cx', x); bullDot.setAttribute('cy', toY(buv)); bullDot.setAttribute('visibility', 'visible'); }
+    if (bearDot && bev != null) { bearDot.setAttribute('cx', x); bearDot.setAttribute('cy', toY(bev)); bearDot.setAttribute('visibility', 'visible'); }
+
+    const sign = v => v >= invested ? '+' : '';
+    const fv = v => 'NT$' + Math.round(v).toLocaleString();
+    let html = `<div style="font-weight:700;margin-bottom:4px;color:#aecfd4">${getXLabel(n)}</div>`;
+    if (buv != null) html += `<div><span style="color:#4fb3c1">▲ 樂觀</span>　${fv(buv)}</div>`;
+    html += `<div><span style="color:#8ba9ae">● 基準</span>　${fv(bv)}</div>`;
+    if (bev != null) html += `<div><span style="color:#e57373">▼ 保守</span>　${fv(bev)}</div>`;
+    foDiv.innerHTML = html;
+
+    // Position tooltip: left or right of crosshair
+    const foW = 165, foH = 110;
+    const txOffset = 10;
+    let tx = x + txOffset;
+    if (tx + foW > W - padR) tx = x - foW - txOffset;
+    fo.setAttribute('x', tx); fo.setAttribute('y', padT + 4);
+    fo.setAttribute('width', foW); fo.setAttribute('height', foH);
+    fo.setAttribute('visibility', 'visible');
+  });
+
+  hitRect.addEventListener('mouseleave', () => {
+    vLine.setAttribute('visibility', 'hidden');
+    fo.setAttribute('visibility', 'hidden');
+    if (bullDot) bullDot.setAttribute('visibility', 'hidden');
+    if (baseDot) baseDot.setAttribute('visibility', 'hidden');
+    if (bearDot) bearDot.setAttribute('visibility', 'hidden');
+  });
+}
+
+// ── Stock info & chart ────────────────────────────────────────
+async function fetchStockInfo() {
+  const ticker = document.getElementById('sim-ticker').value.trim();
+  if (!ticker) return;
+  document.getElementById('sim-yield-base').value = '';
+  document.getElementById('sim-yield-bull').value = '';
+  document.getElementById('sim-yield-bear').value = '';
+  _bullUserEdited = false;
+  _bearUserEdited = false;
+  document.getElementById('results-section').classList.add('hidden');
+  // (scenario chart now lives inside results-section)
+  const status = document.getElementById('stock-query-status');
+  status.textContent = '查詢中...';
+  status.classList.remove('hidden');
+  document.getElementById('stock-svg').classList.add('hidden');
+  document.getElementById('stock-chart-placeholder').classList.remove('hidden');
+  document.getElementById('stock-chart-placeholder').textContent = '載入中...';
+  document.getElementById('stock-info').classList.add('hidden');
+  document.getElementById('sim-price-row').classList.add('hidden');
+  try {
+    const startDate = document.getElementById('sim-start-date').value;
+    const endDate   = document.getElementById('sim-end-date').value;
+    const url = (startDate && endDate)
+      ? `/api/calculator/stock-chart/?ticker=${encodeURIComponent(ticker)}&start_date=${startDate}&end_date=${endDate}`
+      : `/api/calculator/stock-chart/?ticker=${encodeURIComponent(ticker)}&period=1y`;
+
+    const res  = await fetch(url);
+    const data = await res.json();
+    if (!res.ok) {
+      status.textContent = data.error || '找不到此股票，請確認代號或名稱';
+      status.classList.remove('hidden');
+      document.getElementById('stock-chart-placeholder').textContent = '查詢個股後顯示走勢圖';
+      return;
+    }
+    const prices       = data.data;
+    const last         = prices[prices.length - 1].close;
+    const periodReturn = (last / prices[0].close - 1) * 100;
+
+    stockCurrentPrice = last;
+    document.getElementById('sim-current-price-display').textContent = 'NT$' + last.toFixed(1);
+    document.getElementById('sim-stock-name').textContent = data.name;
+    document.getElementById('sim-price-row').classList.remove('hidden');
+    status.textContent = '';
+    status.classList.add('hidden');
+
+    const bestPeriod = _pickBestPeriod(startDate, endDate);
+    stockPeriod = bestPeriod;
+    _highlightPeriodBtn(bestPeriod);
+    renderStockChart(data);
+    _fetchAndRenderChart(ticker, bestPeriod);
+    fetchStockNews(ticker);
+  } catch(e) {
+    status.textContent = '查詢失敗，請稍後再試';
+    status.classList.remove('hidden');
+    document.getElementById('stock-chart-placeholder').textContent = '查詢個股後顯示走勢圖';
+    document.getElementById('stock-chart-placeholder').classList.remove('hidden');
+    document.getElementById('stock-svg').classList.add('hidden');
+  }
+}
+
+function setStockPeriod(period) {
+  stockPeriod = period;
+  _highlightPeriodBtn(period);
+  const ticker = document.getElementById('sim-ticker').value.trim();
+  if (ticker) _fetchAndRenderChart(ticker, period);
+}
+
+function _highlightPeriodBtn(period) {
+  document.querySelectorAll('.stock-period-btn').forEach(btn => {
+    btn.className = btn.dataset.period === period
+      ? 'stock-period-btn px-3 py-1.5 rounded-full font-label text-xs font-bold transition-all bg-tertiary-container text-white'
+      : 'stock-period-btn px-3 py-1.5 rounded-full font-label text-xs font-bold transition-all text-secondary';
+  });
+}
+
+function _pickBestPeriod(startDate, endDate) {
+  if (!startDate || !endDate) return '1y';
+  const days = (new Date(endDate) - new Date(startDate)) / 86400000;
+  if (days <= 45)  return '1mo';
+  if (days <= 135) return '3mo';
+  if (days <= 270) return '6mo';
+  return '1y';
+}
+
+async function _fetchAndRenderChart(ticker, period) {
+  document.getElementById('stock-chart-placeholder').textContent = '載入中...';
+  document.getElementById('stock-chart-placeholder').classList.remove('hidden');
+  document.getElementById('stock-svg').classList.add('hidden');
+  try {
+    const res  = await fetch(`/api/calculator/stock-chart/?ticker=${encodeURIComponent(ticker)}&period=${period}`);
+    const data = await res.json();
+    if (!res.ok) return;
+    document.getElementById('stock-chart-placeholder').classList.add('hidden');
+    renderStockChart(data);
+  } catch(e) {}
+}
+
+async function fetchChartForPeriod(ticker) { await _fetchAndRenderChart(ticker, stockPeriod); }
+async function fetchChartForDates(ticker)  { await _fetchAndRenderChart(ticker, stockPeriod); }
+
+function renderStockChart(data) {
+  const svg    = document.getElementById('stock-svg');
+  svg.innerHTML = '';
+  svg.classList.remove('hidden');
+  document.getElementById('stock-chart-placeholder').classList.add('hidden');
+  const prices = data.data;
+  if (!prices.length) return;
+
+  const W = 800, H = 340, padL = 58, padR = 16, padT = 16, padB = 40;
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+  const ns   = 'http://www.w3.org/2000/svg';
+  const minP = Math.min(...prices.map(d => d.close));
+  const maxP = Math.max(...prices.map(d => d.close));
+  const n    = prices.length;
+  const toX  = i => padL + (i / (n - 1)) * (W - padL - padR);
+  const toY  = v => padT + (1 - (v - minP) / (maxP - minP + 0.01)) * (H - padT - padB);
+  const isUp = prices[n - 1].close >= prices[0].close;
+  const lineColor = isUp ? '#113236' : '#ba1a1a';
+
+  [0, 0.25, 0.5, 0.75, 1].forEach(r => {
+    const val = minP + r * (maxP - minP);
+    const y   = toY(val);
+    const gl  = document.createElementNS(ns, 'line');
+    gl.setAttribute('x1', padL); gl.setAttribute('x2', W - padR);
+    gl.setAttribute('y1', y); gl.setAttribute('y2', y);
+    gl.setAttribute('stroke', '#e5e3d9'); gl.setAttribute('stroke-width', '1');
+    svg.appendChild(gl);
+    const gt = document.createElementNS(ns, 'text');
+    gt.setAttribute('x', padL - 6); gt.setAttribute('y', y + 4);
+    gt.setAttribute('fill', '#717879'); gt.setAttribute('font-family', 'Manrope');
+    gt.setAttribute('font-size', '11'); gt.setAttribute('font-weight', '600');
+    gt.setAttribute('text-anchor', 'end');
+    gt.textContent = val >= 1000 ? val.toFixed(0) : val.toFixed(2);
+    svg.appendChild(gt);
+  });
+
+  let d = '';
+  prices.forEach((p, i) => { d += (i === 0 ? 'M' : ' L') + `${toX(i)},${toY(p.close)}`; });
+  const path = document.createElementNS(ns, 'path');
+  path.setAttribute('d', d); path.setAttribute('fill', 'none');
+  path.setAttribute('stroke', lineColor); path.setAttribute('stroke-width', '2.5');
+  path.setAttribute('stroke-linecap', 'round');
+  svg.appendChild(path);
+
+  for (let i = 0; i <= 4; i++) {
+    const idx = Math.round(i * (n - 1) / 4);
+    const xt  = document.createElementNS(ns, 'text');
+    xt.setAttribute('x', toX(idx)); xt.setAttribute('y', H - padB + 20);
+    xt.setAttribute('fill', '#717879'); xt.setAttribute('font-family', 'Manrope');
+    xt.setAttribute('font-size', '11'); xt.setAttribute('font-weight', '600');
+    xt.setAttribute('text-anchor', 'middle');
+    xt.textContent = prices[idx].date.slice(5);
+    svg.appendChild(xt);
+  }
+
+  const lastClose = prices[n - 1].close;
+  const change    = ((lastClose - prices[0].close) / prices[0].close * 100).toFixed(2);
+  const annualizedReturn = (stockPeriod === '3mo'
+    ? (Math.pow(1 + parseFloat(change) / 100, 4) - 1) * 100
+    : stockPeriod === '6mo'
+    ? (Math.pow(1 + parseFloat(change) / 100, 2) - 1) * 100
+    : stockPeriod === '2y'
+    ? (Math.pow(1 + parseFloat(change) / 100, 0.5) - 1) * 100
+    : parseFloat(change)).toFixed(1);
+
+  document.getElementById('stock-name').textContent          = data.name;
+  document.getElementById('stock-last-price').textContent    = 'NT$' + lastClose.toFixed(1);
+  document.getElementById('stock-chart-subtitle').textContent = data.name;
+  const changeEl = document.getElementById('stock-change');
+  changeEl.textContent = (change >= 0 ? '+' : '') + change + '%';
+  changeEl.className   = `font-['Epilogue'] font-bold text-lg ${isUp ? 'text-[#286671]' : 'text-[#ba1a1a]'}`;
+  const histEl = document.getElementById('stock-hist-return');
+  histEl.textContent = (annualizedReturn >= 0 ? '+' : '') + annualizedReturn + '%';
+  histEl.className   = `font-['Epilogue'] font-bold text-lg ${annualizedReturn >= 0 ? 'text-[#286671]' : 'text-[#ba1a1a]'}`;
+  document.getElementById('stock-info').classList.remove('hidden');
+}
+
+// ── Stock news ────────────────────────────────────────────────
+async function fetchStockNews(ticker) {
+  const section = document.getElementById('stock-news-section');
+  const list    = document.getElementById('stock-news-list');
+  section.classList.add('hidden');
+  list.innerHTML = '';
+  _newsCache = [];
+  try {
+    const res  = await fetch(`/api/calculator/stock-news/?ticker=${encodeURIComponent(ticker)}`);
+    const data = await res.json();
+    if (!res.ok || !data.news?.length) return;
+    _newsCache = data.news;
+    list.innerHTML = data.news.map((n, i) => {
+      const date      = n.pub ? new Date(n.pub).toLocaleDateString('zh-TW') : '';
+      const safeTitle = n.title.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+      return `
+        <div onclick="openNewsPanel(_newsCache[${i}])"
+             class="flex items-start gap-3 p-3 rounded-lg bg-surface-container-lowest hover:bg-surface-container cursor-pointer transition-colors">
+          <div class="flex-1 min-w-0">
+            <p class="text-sm font-semibold text-on-surface leading-snug line-clamp-2">${safeTitle}</p>
+            <p class="text-[10px] text-outline mt-1">${n.provider}${date ? ' · ' + date : ''}</p>
+          </div>
+          <span class="material-symbols-outlined text-outline/50 text-sm flex-shrink-0 mt-0.5">chevron_right</span>
+        </div>`;
+    }).join('');
+    section.classList.remove('hidden');
+  } catch(e) {}
+}
+
+// ── News panel ────────────────────────────────────────────────
+function _newsPanelShowContent(body, text, linkUrl) {
+  body.innerHTML = '';
+  const paras = (text || '').split(/\n\n+/);
+  paras.forEach(para => {
+    if (!para.trim()) return;
+    const p = document.createElement('p');
+    p.className = 'text-sm leading-relaxed text-on-surface mb-3';
+    const lines = para.split('\n');
+    lines.forEach((line, i) => {
+      p.appendChild(document.createTextNode(line));
+      if (i < lines.length - 1) p.appendChild(document.createElement('br'));
+    });
+    body.appendChild(p);
+  });
+  if (!body.children.length) {
+    const p = document.createElement('p');
+    p.className = 'text-sm leading-relaxed text-on-surface';
+    p.textContent = text;
+    body.appendChild(p);
+  }
+  if (linkUrl) {
+    const a = document.createElement('a');
+    a.href = linkUrl; a.target = '_blank'; a.rel = 'noopener';
+    a.className = 'inline-flex items-center gap-1 mt-4 text-xs text-primary hover:underline';
+    a.innerHTML = '<span class="material-symbols-outlined text-sm">open_in_new</span>閱讀完整原文';
+    body.appendChild(a);
+  }
+}
+
+function _newsPanelShowFallback(body, url) {
+  body.innerHTML = '';
+  const msg = document.createElement('p');
+  msg.className = 'text-sm text-outline mb-3';
+  msg.textContent = '無法直接載入文章內容。';
+  body.appendChild(msg);
+  const a = document.createElement('a');
+  a.href = url; a.target = '_blank'; a.rel = 'noopener';
+  a.className = 'inline-flex items-center gap-1 text-sm text-primary hover:underline';
+  a.innerHTML = '<span class="material-symbols-outlined text-base">open_in_new</span>開啟原文';
+  body.appendChild(a);
+}
+
+async function openNewsPanel(n) {
+  document.getElementById('news-panel-title').textContent = n.title;
+  const date = n.pub ? new Date(n.pub).toLocaleDateString('zh-TW') : '';
+  document.getElementById('news-panel-meta').textContent = [n.provider, date].filter(Boolean).join(' · ');
+  document.getElementById('news-panel-overlay').classList.remove('hidden');
+  document.getElementById('news-panel').classList.remove('translate-x-full');
+
+  const body = document.getElementById('news-panel-body');
+  body.innerHTML = '<p class="text-sm text-outline">載入內文中...</p>';
+  try {
+    const res  = await fetch(`/api/calculator/news-content/?url=${encodeURIComponent(n.url)}`);
+    const data = await res.json();
+    if (!data.error && data.content) _newsPanelShowContent(body, data.content, data.real_url || n.url);
+    else if (n.snippet) _newsPanelShowContent(body, n.snippet, n.url);
+    else _newsPanelShowFallback(body, n.url);
+  } catch(e) {
+    if (n.snippet) _newsPanelShowContent(body, n.snippet, n.url);
+    else _newsPanelShowFallback(body, n.url);
+  }
+}
+
+function closeNewsPanel() {
+  document.getElementById('news-panel').classList.add('translate-x-full');
+  document.getElementById('news-panel-overlay').classList.add('hidden');
+}
+
+// ── Calculator nav helpers ────────────────────────────────────
+function resetCalculator() {
+  document.getElementById('results-section').classList.add('hidden');
+  // (scenario chart now lives inside results-section)
+  document.getElementById('sim-ticker').value = '';
+  document.getElementById('sim-stock-name').textContent = '';
+  document.getElementById('sim-current-price-display').textContent = '';
+  document.getElementById('stock-query-status').textContent = '';
+  document.getElementById('stock-query-status').classList.add('hidden');
+  document.getElementById('stock-chart-subtitle').textContent = '查詢個股後顯示走勢';
+  document.getElementById('stock-chart-placeholder').classList.remove('hidden');
+  const svg = document.getElementById('stock-svg');
+  if (svg) { svg.classList.add('hidden'); svg.innerHTML = ''; }
+  document.getElementById('sim-yield-base').value = '';
+  document.getElementById('sim-yield-bull').value = '';
+  document.getElementById('sim-yield-bear').value = '';
+  _bullUserEdited = false;
+  _bearUserEdited = false;
+  stockCurrentPrice = 0;
+  _hostYield = null;
+  _hostCalcData = null;
+  document.getElementById('host-yield-reset').classList.add('hidden');
+  document.getElementById('host-calc-badge').style.display = 'none';
+  _initSimDates();
+}
+
+function goToCalculatorWithStock(stockName, endDate) {
+  document.getElementById('sim-yield-base').value = '';
+  document.getElementById('sim-yield-bull').value = '';
+  document.getElementById('sim-yield-bear').value = '';
+  _bullUserEdited = false;
+  _bearUserEdited = false;
+  document.getElementById('sim-capital').value  = '';
+  document.getElementById('slider-capital').value = '0';
+  document.getElementById('results-section').classList.add('hidden');
+  const today       = new Date().toISOString().slice(0, 10);
+  const resolvedEnd = endDate || (() => { const d = new Date(); d.setFullYear(d.getFullYear() + 1); return d.toISOString().slice(0, 10); })();
+  _hostCalcData = { ticker: stockName, endDate: resolvedEnd };
+  const endLabel = endDate ? endDate.replace(/-/g, '/') : '未指定';
+  document.getElementById('host-calc-label').textContent = `主持人：${stockName}　截止 ${endLabel}`;
+  document.getElementById('host-calc-badge').style.display = 'none';
+  document.getElementById('sim-ticker').value     = stockName;
+  document.getElementById('sim-start-date').value = today;
+  document.getElementById('sim-end-date').value   = resolvedEnd;
+  showPage('calculator');
+  fetchStockInfo();
+}
+
+function parseYears(timeframe) {
+  if (!timeframe) return null;
+  if (/短期/.test(timeframe)) return 1 / 12;
+  if (/中期/.test(timeframe)) return 3 / 12;
+  if (/長期/.test(timeframe)) return 1;
+  const yearMatch  = timeframe.match(/(\d+)\s*年/);
+  const monthMatch = timeframe.match(/(\d+)\s*個?月/);
+  const qMatch     = timeframe.match(/Q[1-4]/i);
+  if (yearMatch)  return parseFloat(yearMatch[1]);
+  if (monthMatch) return parseFloat((parseInt(monthMatch[1]) / 12).toFixed(1));
+  if (qMatch)     return 0.5;
+  return null;
+}
+
+function openCalculatorWithTicker(t) {
+  document.getElementById('sim-ticker').value = t.ticker;
+  showPage('calculator');
+  _hostYield = t.expected_return != null ? t.expected_return : null;
+  document.getElementById('host-yield-reset').classList.add('hidden');
+  if (_hostYield != null) document.getElementById('host-yield-label').textContent = _hostYield;
+  fetchStockInfo().then(() => {
+    if (t.expected_return != null) {
+      _bullUserEdited = false;
+      _bearUserEdited = false;
+      document.getElementById('sim-yield-base').value = t.expected_return;
+      onBaseYieldChange();
+    }
+  });
+}

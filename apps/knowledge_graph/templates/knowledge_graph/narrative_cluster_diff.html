@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>敘事群聚兩期比較</title>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #1a1a1a; color: #eee;
+      font-family: "PingFang TC", "Microsoft JhengHei", sans-serif;
+      height: 100vh; display: flex; flex-direction: column; overflow: hidden;
+    }
+
+    /* ── 控制列 ── */
+    #control-bar {
+      flex-shrink: 0; display: flex; align-items: center; gap: 10px;
+      padding: 8px 16px; background: rgba(10,10,10,0.95);
+      border-bottom: 1px solid #333; flex-wrap: wrap;
+    }
+    .period-group {
+      display: flex; align-items: center; gap: 6px;
+      padding: 5px 10px; border-radius: 7px; border: 1px solid #444;
+    }
+    .period-group.pa { border-color: #555; }
+    .period-group.pb { border-color: #1a6fb5; }
+    .period-label {
+      font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 4px; white-space: nowrap;
+    }
+    .pa .period-label { background: #3a3a3a; color: #aaa; }
+    .pb .period-label { background: #1a3a5c; color: #7ec8ff; }
+    #control-bar label { font-size: 12px; color: #999; white-space: nowrap; }
+    #control-bar input[type="date"],
+    #control-bar select {
+      background: #2a2a2a; border: 1px solid #444; border-radius: 6px;
+      color: #eee; font-size: 12px; padding: 4px 7px; outline: none; cursor: pointer;
+    }
+    #control-bar input[type="date"] { width: 128px; }
+    #control-bar select { min-width: 130px; }
+    .btn { padding: 6px 18px; border-radius: 6px; border: none; font-size: 13px; cursor: pointer; }
+    .btn-primary { background: #1a6fb5; color: #fff; }
+    .btn-primary:hover { background: #2585d4; }
+    .btn-ai { background: #7c3aed; color: #fff; }
+    .btn-ai:hover { background: #9333ea; }
+    .btn-ai.loading { background: #4c1d95; }
+    .btn:disabled { opacity: .4; cursor: not-allowed; }
+
+    /* ── 主體：左右並排 ── */
+    #panels { flex: 1; display: flex; overflow: hidden; }
+    .panel {
+      flex: 1; display: flex; flex-direction: column; overflow: hidden;
+      border-right: 1px solid #2a2a2a;
+    }
+    .panel:last-child { border-right: none; }
+
+    .panel-header {
+      flex-shrink: 0; padding: 6px 14px;
+      display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+      border-bottom: 1px solid #252525;
+    }
+    .panel-header.pa { background: rgba(40,40,40,0.7); }
+    .panel-header.pb { background: rgba(20,40,70,0.5); }
+    .panel-title { font-size: 13px; font-weight: 600; }
+    .pa .panel-title { color: #aaa; }
+    .pb .panel-title { color: #7ec8ff; }
+    .panel-meta { font-size: 11px; color: #555; }
+    .panel-meta span { color: #888; }
+
+    .panel-svg-wrap { flex: 1; position: relative; overflow: hidden; }
+    .panel-svg-wrap svg { width: 100%; height: 100%; display: block; }
+
+    /* ── D3 樣式 ── */
+    .cluster-hull        { opacity: .15; }
+    .cluster-hull-stroke { fill: none; stroke-width: 2; opacity: .4; }
+    .node-circle         { stroke: #1a1a1a; stroke-width: 1.5; cursor: grab; }
+    .node-circle:active  { cursor: grabbing; }
+    .node-label { font-size: 11px; fill: #e5e7eb; text-anchor: middle; dominant-baseline: central; pointer-events: none; user-select: none; }
+    .cluster-label { font-size: 12px; font-weight: 600; text-anchor: middle; pointer-events: none; user-select: none; }
+
+    /* ── Loading ── */
+    .empty {
+      position: absolute; inset: 0; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; color: #444; gap: 10px;
+    }
+    .empty .icon { font-size: 40px; }
+    .empty p { font-size: 13px; }
+    #spinner-overlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,.6);
+      display: none; flex-direction: column; align-items: center; justify-content: center;
+      gap: 14px; z-index: 200; color: #888;
+    }
+    .spinner { width: 36px; height: 36px; border: 3px solid #333; border-top-color: #1a6fb5; border-radius: 50%; animation: spin .8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Tooltip ── */
+    #tooltip {
+      position: fixed; background: rgba(15,15,15,0.96); border: 1px solid #444;
+      border-radius: 8px; padding: 9px 13px; font-size: 12px; color: #ddd;
+      pointer-events: none; display: none; max-width: 280px; z-index: 300; line-height: 1.6;
+    }
+    #tooltip .tt-name { font-size: 13px; font-weight: 600; color: #fff; margin-bottom: 3px; }
+    #tooltip .tt-rels { color: #6b7280; font-size: 11px; }
+    #tooltip .tt-rels span { color: #93c5fd; }
+  </style>
+</head>
+<body>
+
+<!-- 控制列 -->
+<div id="control-bar">
+  <div class="period-group pa">
+    <span class="period-label">期間 A</span>
+    <input type="date" id="a-start">
+    <label>→</label>
+    <input type="date" id="a-end">
+  </div>
+  <div class="period-group pb">
+    <span class="period-label">期間 B</span>
+    <input type="date" id="b-start">
+    <label>→</label>
+    <input type="date" id="b-end">
+  </div>
+  <div style="display:flex;align-items:center;gap:6px">
+    <label>關係類型</label>
+    <select id="relation-type">
+      <option value="Supply">Supply（上下游）</option>
+      <option value="Co-impact">Co-impact（共同受惠）</option>
+      <option value="Substitution">Substitution（競爭替代）</option>
+    </select>
+  </div>
+  <div style="display:flex;align-items:center;gap:6px">
+    <label>產業</label>
+    <select id="industry-select"><option value="">全部</option></select>
+  </div>
+  <button class="btn btn-primary" id="run-btn" onclick="runDiff()">比較</button>
+  <button class="btn btn-ai" id="ai-btn" onclick="nameWithAI()" disabled>AI 生成主題名</button>
+</div>
+
+<!-- 兩欄 -->
+<div id="panels">
+  <div class="panel" id="panel-a">
+    <div class="panel-header pa">
+      <span class="panel-title">期間 A</span>
+      <span class="panel-meta" id="meta-a">請先選擇時間範圍</span>
+    </div>
+    <div class="panel-svg-wrap" id="wrap-a">
+      <div class="empty"><div class="icon">📅</div><p>選好時間後按「比較」</p></div>
+      <svg id="svg-a"></svg>
+    </div>
+  </div>
+
+  <div class="panel" id="panel-b">
+    <div class="panel-header pb">
+      <span class="panel-title">期間 B</span>
+      <span class="panel-meta" id="meta-b"></span>
+    </div>
+    <div class="panel-svg-wrap" id="wrap-b">
+      <svg id="svg-b"></svg>
+    </div>
+  </div>
+</div>
+
+<div id="spinner-overlay">
+  <div class="spinner"></div>
+  <p>兩期 Embedding + 分群中，請稍候…</p>
+</div>
+
+<div id="tooltip"></div>
+
+<script>
+const PALETTE = [
+  "#3b82f6","#10b981","#f59e0b","#ec4899","#8b5cf6",
+  "#06b6d4","#f97316","#84cc16","#e11d48","#14b8a6",
+  "#a78bfa","#34d399","#fbbf24","#fb7185","#38bdf8",
+];
+const UNMATCHED_A = "#52525b";
+const NEW_B       = "#4ade80";
+
+let simA = null, simB = null;
+let _diffData = null;
+
+// ── 初始化 ─────────────────────────────────────────────────────────────────
+(async () => {
+  try {
+    const r = await fetch("/api/knowledge-graph/latest-date/");
+    const d = await r.json();
+    if (d.latest_date) {
+      const latest = new Date(d.latest_date);
+      const fmt = d => d.toISOString().split("T")[0];
+      const bEnd   = new Date(latest);
+      const bStart = new Date(latest); bStart.setDate(bStart.getDate() - 6);
+      const aEnd   = new Date(latest); aEnd.setDate(aEnd.getDate() - 7);
+      const aStart = new Date(latest); aStart.setDate(aStart.getDate() - 13);
+      document.getElementById("b-start").value = fmt(bStart);
+      document.getElementById("b-end").value   = fmt(bEnd);
+      document.getElementById("a-start").value = fmt(aStart);
+      document.getElementById("a-end").value   = fmt(aEnd);
+    }
+  } catch(e) {}
+
+  try {
+    const r = await fetch("/api/knowledge-graph/industries/");
+    const d = await r.json();
+    const sel = document.getElementById("industry-select");
+    (d.industries || []).forEach(ind => {
+      const o = document.createElement("option"); o.value = o.textContent = ind; sel.appendChild(o);
+    });
+  } catch(e) {}
+})();
+
+// ── 執行比較 ───────────────────────────────────────────────────────────────
+async function runDiff() {
+  const params = new URLSearchParams({
+    a_start:       document.getElementById("a-start").value,
+    a_end:         document.getElementById("a-end").value,
+    b_start:       document.getElementById("b-start").value,
+    b_end:         document.getElementById("b-end").value,
+    relation_type: document.getElementById("relation-type").value,
+  });
+  const ind = document.getElementById("industry-select").value;
+  if (ind) params.set("industry", ind);
+
+  setLoading(true);
+  try {
+    const resp = await fetch("/api/knowledge-graph/narrative-cluster-diff-data/?" + params);
+    const data = await resp.json();
+    if (data.error) { alert("錯誤：" + data.error); return; }
+    render(data);
+  } catch(e) {
+    alert("請求失敗：" + e.message);
+  } finally {
+    setLoading(false);
+  }
+}
+
+// ── 主渲染 ────────────────────────────────────────────────────────────────
+function render(data) {
+  _diffData = data;
+  document.getElementById("ai-btn").disabled = false;
+
+  const clustersA = data.clusters_a || [];
+  const clustersB = data.clusters_b || [];
+  const matchedB  = data.matched_b  || {};   // { "b_idx": a_cluster_id }
+  const meta      = data.meta       || {};
+
+  // ── 建立顏色對照：matched pair 兩邊同色 ──────────────────────────
+  const bIdxToColor = {};
+  const aCidToColor = {};
+
+  Object.entries(matchedB).forEach(([biStr, aCid]) => {
+    const bi  = Number(biStr);
+    const col = PALETTE[bi % PALETTE.length];
+    bIdxToColor[bi]   = col;
+    aCidToColor[aCid] = col;
+  });
+  clustersB.forEach((_, bi) => {
+    if (!(bi in bIdxToColor)) bIdxToColor[bi] = NEW_B;
+  });
+
+  // ── 標頭 meta ─────────────────────────────────────────────────────
+  const aStart = document.getElementById("a-start").value;
+  const aEnd   = document.getElementById("a-end").value;
+  const bStart = document.getElementById("b-start").value;
+  const bEnd   = document.getElementById("b-end").value;
+  document.getElementById("meta-a").innerHTML =
+    `<span>${aStart} ~ ${aEnd}</span> ｜ ${clustersA.length} 個群聚`;
+  document.getElementById("meta-b").innerHTML =
+    `<span>${bStart} ~ ${bEnd}</span> ｜ ${clustersB.length} 個群聚` +
+    (meta.new_themes         ? ` ｜ <span style="color:#4ade80">+${meta.new_themes} 新興</span>` : "") +
+    (meta.disappeared_themes ? ` ｜ <span style="color:#f87171">-${meta.disappeared_themes} 消失</span>` : "");
+
+  // ── 畫兩邊 ────────────────────────────────────────────────────────
+  renderPanel("svg-a", "wrap-a", clustersA, (c) => aCidToColor[c.cluster_id] || UNMATCHED_A);
+  renderPanel("svg-b", "wrap-b", clustersB, (_, bi) => bIdxToColor[bi] || NEW_B);
+}
+
+// ── 單一面板 ──────────────────────────────────────────────────────────────
+function renderPanel(svgId, wrapId, clusters, colorFn) {
+  const wrap = document.getElementById(wrapId);
+  const emp  = wrap.querySelector(".empty");
+  if (emp) emp.style.display = "none";
+
+  const W = wrap.clientWidth, H = wrap.clientHeight;
+  const svg = d3.select(`#${svgId}`);
+  svg.selectAll("*").remove();
+
+  if (!clusters.length) {
+    if (emp) { emp.style.display = "flex"; emp.querySelector("p").textContent = "無資料"; }
+    return;
+  }
+
+  const g = svg.append("g");
+  svg.call(d3.zoom().scaleExtent([.2, 5]).on("zoom", e => g.attr("transform", e.transform)));
+
+  const hullG  = g.append("g");
+  const labelG = g.append("g");
+  const nodeG  = g.append("g");
+
+  // 全域 companyRels
+  const companyRels = {};
+  clusters.forEach(c => {
+    (c.relations || []).forEach(rel => {
+      [rel.source, rel.target].forEach(co => {
+        if (!companyRels[co]) companyRels[co] = [];
+        companyRels[co].push(rel);
+      });
+    });
+  });
+
+  const centers = gridCenters(clusters.length, W, H, 80);
+  const clusterMeta = [];
+  const nodes = [];
+
+  clusters.forEach((cluster, ci) => {
+    const color = colorFn(cluster, ci);
+    clusterMeta.push({ cluster_id: cluster.cluster_id, color, theme: cluster.theme_label || "" });
+
+    (cluster.exclusive_companies || []).forEach(co => {
+      const rels = companyRels[co] || [];
+      nodes.push({
+        id: co, cluster_id: cluster.cluster_id, ci,
+        color, edgeCount: rels.length, relations: rels,
+        r: Math.max(20, Math.min(40, 12 + rels.length * 4)),
+        x: centers[ci].x + (Math.random() - .5) * 50,
+        y: centers[ci].y + (Math.random() - .5) * 50,
+      });
+    });
+  });
+
+  const sim = d3.forceSimulation(nodes)
+    .force("x", d3.forceX(d => centers[d.ci].x).strength(0.22))
+    .force("y", d3.forceY(d => centers[d.ci].y).strength(0.22))
+    .force("collide", d3.forceCollide(d => d.r + 7).strength(0.85))
+    .force("charge", d3.forceManyBody().strength(-50))
+    .alphaDecay(0.03);
+
+  if (svgId === "svg-a") { if (simA) simA.stop(); simA = sim; }
+  else                   { if (simB) simB.stop(); simB = sim; }
+
+  const nodeEl = nodeG.selectAll(".node").data(nodes).join("g")
+    .attr("class", "node")
+    .call(d3.drag()
+      .on("start", (e,d) => { if(!e.active) sim.alphaTarget(.3).restart(); d.fx=d.x; d.fy=d.y; })
+      .on("drag",  (e,d) => { d.fx=e.x; d.fy=e.y; })
+      .on("end",   (e,d) => { if(!e.active) sim.alphaTarget(0); d.fx=null; d.fy=null; }))
+    .on("mouseover", showTip)
+    .on("mousemove", moveTip)
+    .on("mouseout",  hideTip);
+
+  nodeEl.append("circle").attr("class", "node-circle")
+    .attr("r", d => d.r).attr("fill", d => d.color).attr("fill-opacity", .75);
+  nodeEl.append("text").attr("class", "node-label").text(d => trunc(d.id, 6));
+
+  sim.on("tick", () => {
+    nodeEl.attr("transform", d => `translate(${d.x},${d.y})`);
+    hullG.selectAll("*").remove();
+    labelG.selectAll("*").remove();
+
+    clusterMeta.forEach(cm => {
+      const pts = nodes.filter(n => n.cluster_id === cm.cluster_id);
+      if (!pts.length) return;
+      drawHull(hullG, pts, cm.color);
+      if (cm.theme) {
+        const cx = d3.mean(pts, n => n.x);
+        const cy = d3.min(pts, n => n.y - n.r) - 16;
+        labelG.append("text").attr("class", "cluster-label")
+          .attr("fill", cm.color).attr("x", cx).attr("y", cy).text(cm.theme);
+      }
+    });
+  });
+}
+
+// ── Convex Hull ───────────────────────────────────────────────────────
+function drawHull(g, pts, color) {
+  const stroke = el => el.attr("fill","none").attr("class","cluster-hull-stroke").attr("stroke",color);
+
+  if (pts.length === 1) {
+    g.append("circle").attr("cx",pts[0].x).attr("cy",pts[0].y).attr("r",pts[0].r+18).attr("fill",color).attr("class","cluster-hull");
+    stroke(g.append("circle").attr("cx",pts[0].x).attr("cy",pts[0].y).attr("r",pts[0].r+18));
+    return;
+  }
+  if (pts.length === 2) {
+    const mx=(pts[0].x+pts[1].x)/2, my=(pts[0].y+pts[1].y)/2;
+    const dx=pts[1].x-pts[0].x, dy=pts[1].y-pts[0].y;
+    const rot=`rotate(${Math.atan2(dy,dx)*180/Math.PI},${mx},${my})`;
+    const rx=Math.sqrt(dx*dx+dy*dy)/2+24, ry=Math.max(pts[0].r,pts[1].r)+12;
+    g.append("ellipse").attr("cx",mx).attr("cy",my).attr("rx",rx).attr("ry",ry).attr("fill",color).attr("class","cluster-hull").attr("transform",rot);
+    stroke(g.append("ellipse").attr("cx",mx).attr("cy",my).attr("rx",rx).attr("ry",ry).attr("transform",rot));
+    return;
+  }
+  const hull = d3.polygonHull(pts.map(p=>[p.x,p.y]));
+  if (!hull) return;
+  const cen = d3.polygonCentroid(hull);
+  const pad = 28;
+  const exp = hull.map(([x,y])=>{
+    const dx=x-cen[0], dy=y-cen[1], d=Math.sqrt(dx*dx+dy*dy)||1;
+    return [cen[0]+dx*(d+pad)/d, cen[1]+dy*(d+pad)/d];
+  });
+  const pathD = "M"+exp.map(p=>p.join(",")).join("L")+"Z";
+  g.append("path").attr("d",pathD).attr("fill",color).attr("class","cluster-hull");
+  stroke(g.append("path").attr("d",pathD));
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────
+function gridCenters(n, W, H, m) {
+  const cols=Math.ceil(Math.sqrt(n)), rows=Math.ceil(n/cols);
+  const cW=(W-m*2)/cols, cH=(H-m*2)/rows;
+  return Array.from({length:n}, (_,i) => ({
+    x: m+(i%cols)*cW+cW/2,
+    y: m+Math.floor(i/cols)*cH+cH/2,
+  }));
+}
+
+function trunc(s,n){ return s.length>n ? s.slice(0,n)+"…":s; }
+function esc(s){ return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;"); }
+
+function showTip(event, d) {
+  const rels = (d.relations||[]).slice(0,3);
+  const rHtml = rels.map(r =>
+    `<div class="tt-rels"><span>${esc(r.source)}</span> → <span>${esc(r.target)}</span><br>${esc(r.reason||'')}</div>`
+  ).join("");
+  document.getElementById("tooltip").innerHTML =
+    `<div class="tt-name">${esc(d.id)}</div>` +
+    `<div style="color:#888;font-size:11px;margin-bottom:4px">${d.edgeCount} 條連線</div>` +
+    rHtml;
+  document.getElementById("tooltip").style.display = "block";
+  moveTip(event);
+}
+function moveTip(event) {
+  const tt = document.getElementById("tooltip");
+  tt.style.left = Math.min(event.clientX+14, window.innerWidth-tt.offsetWidth-10) + "px";
+  tt.style.top  = Math.min(event.clientY-10, window.innerHeight-tt.offsetHeight-10) + "px";
+}
+function hideTip() { document.getElementById("tooltip").style.display = "none"; }
+
+function setLoading(on) {
+  document.getElementById("spinner-overlay").style.display = on ? "flex" : "none";
+  document.getElementById("run-btn").disabled = on;
+  if (on) document.getElementById("ai-btn").disabled = true;
+}
+
+// ── AI 生成主題名 ─────────────────────────────────────────────────────────
+async function nameWithAI() {
+  if (!_diffData) return;
+  const btn = document.getElementById("ai-btn");
+  btn.disabled = true;
+  btn.textContent = "生成中…";
+  btn.classList.add("loading");
+
+  // 收集 A 和 B 兩邊所有 cluster 的 sample_reasons
+  const allClusters = [
+    ...(_diffData.clusters_a || []).map(c => ({
+      cluster_id: `a_${c.cluster_id}`,
+      sample_reasons: c.sample_reasons || [],
+    })),
+    ...(_diffData.clusters_b || []).map(c => ({
+      cluster_id: `b_${c.cluster_id}`,
+      sample_reasons: c.sample_reasons || [],
+    })),
+  ].filter(c => c.sample_reasons.length > 0);
+
+  try {
+    const resp = await fetch("/api/knowledge-graph/name-clusters/", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ clusters: allClusters }),
+    });
+    const data = await resp.json();
+    if (data.error) { alert("命名失敗：" + data.error); return; }
+
+    // 將結果寫回 _diffData 的 cluster 物件
+    const labelMap = {};
+    (data.results || []).forEach(r => { labelMap[r.cluster_id] = r.theme_label; });
+
+    (_diffData.clusters_a || []).forEach(c => {
+      const lbl = labelMap[`a_${c.cluster_id}`];
+      if (lbl) c.theme_label = lbl;
+    });
+    (_diffData.clusters_b || []).forEach(c => {
+      const lbl = labelMap[`b_${c.cluster_id}`];
+      if (lbl) c.theme_label = lbl;
+    });
+
+    // 重新渲染兩邊（保留同一份資料，只更新 theme_label）
+    render(_diffData);
+  } catch(e) {
+    alert("請求失敗：" + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "AI 生成主題名";
+    btn.classList.remove("loading");
+  }
+}
+</script>
+</body>
+</html>

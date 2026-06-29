@@ -18,15 +18,17 @@ SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'django-insecure-預設字串請在.
 DEBUG = os.getenv('DJANGO_DEBUG', 'True') == 'True'
 ALLOWED_HOSTS = os.getenv("DJANGO_ALLOWED_HOSTS", "127.0.0.1,localhost").split(",")
 
-# Vertex AI / Gemini settings
-VERTEX_PROJECT_ID = os.getenv("VERTEX_PROJECT_ID", "gen-lang-client-0357610042")
-VERTEX_LOCATION = os.getenv("VERTEX_LOCATION", "us-central1")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
+# Gemini / AI Assistant settings
 
-# 讓 Google auth 函式庫自動找到服務帳戶金鑰
-_gac = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "")
-if _gac and not os.path.isabs(_gac):
-    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(BASE_DIR / _gac)
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
+VERTEX_PROJECT_ID = os.getenv("VERTEX_PROJECT_ID", "")
+VERTEX_LOCATION = os.getenv("VERTEX_LOCATION", "us-central1")
+
+# GCP 憑證：若 .env 裡是相對路徑，自動轉換為以專案根目錄為基準的絕對路徑
+_gcp_creds = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "")
+if _gcp_creds and not os.path.isabs(_gcp_creds):
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(BASE_DIR / _gcp_creds)
 
 # 股票資料快取秒數（避免 yfinance 太慢）
 STOCK_CACHE_TTL_SECONDS = int(os.getenv("STOCK_CACHE_TTL_SECONDS", "60"))
@@ -38,6 +40,7 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'django.contrib.postgres',
     'rest_framework',
     'apps.glossary.apps.GlossaryConfig',
     'apps.summaries.apps.SummariesConfig',
@@ -46,6 +49,7 @@ INSTALLED_APPS = [
     'apps.mindmap.apps.MindmapConfig',
     'apps.ai_assistant.apps.AiAssistantConfig',
     'apps.knowledge_graph.apps.KnowledgeGraphConfig',
+    'apps.accounts.apps.AccountsConfig',
 ]
 
 
@@ -142,6 +146,15 @@ DATABASES = {
             "sslmode": "require",
         },
     },
+    "accountsdb": {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": os.getenv("ACCOUNTS_DB_NAME", "postgres"),
+        "USER": os.getenv("ACCOUNTS_DB_USER", ""),
+        "PASSWORD": os.getenv("ACCOUNTS_DB_PASSWORD", ""),
+        "HOST": os.getenv("ACCOUNTS_DB_HOST", ""),
+        "PORT": os.getenv("ACCOUNTS_DB_PORT", "5432"),
+        "OPTIONS": {"sslmode": "require"},
+    },
 
 }
 # 資料庫 routing
@@ -151,6 +164,7 @@ DATABASE_ROUTERS = [
     "config.db_routers.PodcastsRouter",
     "config.db_routers.KnowledgeGraphRouter",
     "config.db_routers.AiAssistantRouter",
+    "config.db_routers.AccountsRouter",
 ]
 
 
@@ -175,5 +189,6 @@ USE_I18N = True
 USE_TZ = True
 
 STATIC_URL = "static/"
+STATICFILES_DIRS = [BASE_DIR / "static"]
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
