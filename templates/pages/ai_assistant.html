@@ -1,0 +1,28 @@
+<!-- ═══════════════════════════════════════════════ PAGE: AI ASSISTANT ═══ -->
+<div id="page-ai" class="page pt-20 pb-40 min-h-screen max-w-4xl mx-auto px-4">
+  <div class="flex items-center justify-between mb-6">
+    <button onclick="openHistoryDrawer()" class="flex items-center gap-2 px-4 py-2 rounded-full bg-surface-container-low text-on-surface-variant text-sm font-semibold hover:bg-surface-container transition-colors">
+      <span class="material-symbols-outlined text-base">history</span>對話記錄
+    </button>
+    <button onclick="startNewConversation()" class="flex items-center gap-2 px-4 py-2 rounded-full bg-surface-container-low text-on-surface-variant text-sm font-semibold hover:bg-surface-container transition-colors">
+      <span class="material-symbols-outlined text-base">add</span>新對話
+    </button>
+  </div>
+
+  <div class="flex flex-col space-y-6" id="chat-messages">
+    <div id="chat-empty-state" class="flex flex-col items-center justify-center py-16 space-y-4">
+      <div class="w-16 h-16 rounded-full bg-secondary-container flex items-center justify-center">
+        <span class="material-symbols-outlined text-on-secondary-container text-3xl">psychology</span>
+      </div>
+      <div class="text-center space-y-1">
+        <h3 class="font-['Epilogue'] font-bold text-xl text-tertiary-container">AI 投資助理</h3>
+        <p class="text-on-surface-variant text-sm">詢問股票、Podcast 重點或投資觀點</p>
+      </div>
+      <div class="flex flex-wrap gap-2 justify-center pt-2">
+        <button onclick="sendQuickAction('台積電最新股價與本益比？')" class="px-4 py-2 rounded-full border border-outline-variant bg-surface-container-lowest text-secondary font-label text-xs font-semibold hover:bg-secondary-container/30 transition-all">台積電股價與本益比</button>
+        <button onclick="sendQuickAction('最新一集Podcast重點摘要')" class="px-4 py-2 rounded-full border border-outline-variant bg-surface-container-lowest text-secondary font-label text-xs font-semibold hover:bg-secondary-container/30 transition-all">最新Podcast摘要</button>
+        <button onclick="sendQuickAction('現在有什麼值得關注的投資機會？')" class="px-4 py-2 rounded-full border border-outline-variant bg-surface-container-lowest text-secondary font-label text-xs font-semibold hover:bg-secondary-container/30 transition-all">近期投資機會</button>
+      </div>
+    </div>
+  </div>
+</div>

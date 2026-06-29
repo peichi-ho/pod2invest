@@ -1,0 +1,181 @@
+<!-- ═══════════════════════════════════════════════ PAGE: PROFILE ═══ -->
+<div id="page-profile" class="page pt-24 px-6 max-w-5xl mx-auto space-y-12 pb-8">
+  <section class="flex flex-col md:flex-row items-center md:items-start gap-8 md:gap-12">
+    <div class="relative">
+      <div class="w-32 h-32 md:w-44 md:h-44 rounded-full p-1 bg-gradient-to-br from-on-primary-container to-secondary">
+        <div class="w-full h-full rounded-full overflow-hidden bg-surface-container-lowest">
+          <div class="w-full h-full flex flex-col items-center justify-center gap-1" style="background:#d97f12">
+            <span class="material-symbols-outlined text-white/70 text-3xl" style="font-variation-settings:'FILL' 1">person</span>
+          </div>
+        </div>
+      </div>
+      <div class="absolute -bottom-2 left-1/2 -translate-x-1/2 bg-tertiary-container text-on-tertiary px-4 py-1.5 rounded-full text-[10px] font-['Epilogue'] font-bold uppercase tracking-widest whitespace-nowrap shadow-lg">Premium Curator</div>
+    </div>
+    <div class="flex-1 text-center md:text-left space-y-4">
+      <h2 class="font-['Epilogue'] font-extrabold text-4xl md:text-6xl text-tertiary-container tracking-tight">Smart Investor</h2>
+      <p class="text-secondary font-medium text-lg max-w-md">Curating intelligence through deep-dive podcast summaries and predictive modeling.</p>
+      <div class="flex flex-wrap justify-center md:justify-start gap-3 pt-2">
+        <span class="px-4 py-2 rounded-full bg-surface-container-low text-on-surface-variant text-sm font-semibold">Joined Oct 2023</span>
+        <button class="px-6 py-2 rounded-full bg-on-primary-container text-white font-['Epilogue'] text-xs font-bold uppercase tracking-widest hover:opacity-90 transition-all active:scale-95">Edit Profile</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="grid grid-cols-1 md:grid-cols-3 gap-4">
+    <div class="bg-surface-container-lowest p-8 rounded-lg shadow-[0px_20px_40px_rgba(28,28,22,0.04)] flex flex-col justify-between h-48 border border-outline-variant/10">
+      <span class="text-secondary font-['Epilogue'] text-xs font-bold uppercase tracking-widest">Total Listen Time</span>
+      <div class="flex items-baseline gap-2"><span class="text-5xl font-['Epilogue'] font-bold text-tertiary-container">142.5</span><span class="text-xl font-['Epilogue'] text-on-surface-variant">h</span></div>
+      <div class="w-full h-1 bg-surface-container rounded-full overflow-hidden"><div class="w-3/4 h-full bg-on-primary-container"></div></div>
+    </div>
+    <div class="bg-tertiary-container p-8 rounded-lg shadow-xl flex flex-col justify-between h-48">
+      <span class="text-on-tertiary-container font-['Epilogue'] text-xs font-bold uppercase tracking-widest">Summaries Read</span>
+      <div class="flex items-baseline gap-2 text-white"><span class="text-6xl font-['Epilogue'] font-bold">84</span><span class="material-symbols-outlined text-on-primary-container" style="font-variation-settings: 'FILL' 1;">auto_awesome</span></div>
+      <p class="text-on-tertiary-container text-sm">Top 5% of active readers this month</p>
+    </div>
+    <div class="bg-surface-container-low p-8 rounded-lg flex flex-col justify-between h-48">
+      <span class="text-secondary font-['Epilogue'] text-xs font-bold uppercase tracking-widest">Global Rank</span>
+      <div class="space-y-1">
+        <h3 class="text-2xl font-['Epilogue'] font-extrabold text-tertiary-container">Top 1% Global Leader</h3>
+        <p class="text-on-surface-variant text-sm">Tier: Diamond Investor</p>
+      </div>
+      <div class="flex -space-x-2">
+        <div class="w-8 h-8 rounded-full border-2 border-surface bg-surface-container-high"></div>
+        <div class="w-8 h-8 rounded-full border-2 border-surface bg-surface-container-highest"></div>
+        <div class="w-8 h-8 rounded-full border-2 border-surface flex items-center justify-center bg-on-primary-container text-[10px] text-white font-bold">+12</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="space-y-6">
+    <div class="flex justify-between items-end">
+      <h3 class="font-['Epilogue'] font-bold text-2xl text-tertiary-container">個人偏好設定</h3>
+      <button onclick="savePreferences()" class="px-5 py-2 rounded-full bg-on-primary-container text-white font-label text-xs font-bold uppercase tracking-widest hover:opacity-90 transition-all active:scale-95">儲存</button>
+    </div>
+
+    <div class="bg-surface-container-lowest rounded-lg p-6 border border-outline-variant/10 space-y-4">
+      <div class="flex items-center gap-2 mb-1">
+        <span class="material-symbols-outlined text-secondary text-lg" style="font-variation-settings:'FILL' 1">tune</span>
+        <h4 class="font-['Epilogue'] font-bold text-base text-tertiary-container">投資風格</h4>
+      </div>
+      <div class="flex gap-3 flex-wrap" id="pref-style">
+        <button data-val="conservative" onclick="togglePref('pref-style',this,'single')" class="pref-chip px-5 py-2 rounded-full border border-outline-variant/40 bg-surface-container text-on-surface-variant font-label text-sm font-semibold transition-all hover:border-secondary/40">保守穩健</button>
+        <button data-val="balanced"     onclick="togglePref('pref-style',this,'single')" class="pref-chip px-5 py-2 rounded-full border border-outline-variant/40 bg-surface-container text-on-surface-variant font-label text-sm font-semibold transition-all hover:border-secondary/40">平衡配置</button>
+        <button data-val="aggressive"   onclick="togglePref('pref-style',this,'single')" class="pref-chip px-5 py-2 rounded-full border border-outline-variant/40 bg-surface-container text-on-surface-variant font-label text-sm font-semibold transition-all hover:border-secondary/40">積極成長</button>
+      </div>
+    </div>
+
+    <div class="bg-surface-container-lowest rounded-lg p-6 border border-outline-variant/10 space-y-4">
+      <div class="flex items-center gap-2 mb-1">
+        <span class="material-symbols-outlined text-secondary text-lg" style="font-variation-settings:'FILL' 1">category</span>
+        <h4 class="font-['Epilogue'] font-bold text-base text-tertiary-container">偏好主題 <span class="text-xs text-outline font-normal">（可多選）</span></h4>
+      </div>
+      <div class="flex gap-3 flex-wrap" id="pref-topics">
+        <button data-val="macro"      onclick="togglePref('pref-topics',this,'multi')" class="pref-chip px-5 py-2 rounded-full border border-outline-variant/40 bg-surface-container text-on-surface-variant font-label text-sm font-semibold transition-all hover:border-secondary/40">總體經濟</button>
+        <button data-val="tech"       onclick="togglePref('pref-topics',this,'multi')" class="pref-chip px-5 py-2 rounded-full border border-outline-variant/40 bg-surface-container text-on-surface-variant font-label text-sm font-semibold transition-all hover:border-secondary/40">科技產業</button>
+        <button data-val="crypto"     onclick="togglePref('pref-topics',this,'multi')" class="pref-chip px-5 py-2 rounded-full border border-outline-variant/40 bg-surface-container text-on-surface-variant font-label text-sm font-semibold transition-all hover:border-secondary/40">加密貨幣</button>
+        <button data-val="stocks"     onclick="togglePref('pref-topics',this,'multi')" class="pref-chip px-5 py-2 rounded-full border border-outline-variant/40 bg-surface-container text-on-surface-variant font-label text-sm font-semibold transition-all hover:border-secondary/40">個股分析</button>
+        <button data-val="realestate" onclick="togglePref('pref-topics',this,'multi')" class="pref-chip px-5 py-2 rounded-full border border-outline-variant/40 bg-surface-container text-on-surface-variant font-label text-sm font-semibold transition-all hover:border-secondary/40">房地產</button>
+        <button data-val="forex"      onclick="togglePref('pref-topics',this,'multi')" class="pref-chip px-5 py-2 rounded-full border border-outline-variant/40 bg-surface-container text-on-surface-variant font-label text-sm font-semibold transition-all hover:border-secondary/40">外匯原物料</button>
+        <button data-val="etf"        onclick="togglePref('pref-topics',this,'multi')" class="pref-chip px-5 py-2 rounded-full border border-outline-variant/40 bg-surface-container text-on-surface-variant font-label text-sm font-semibold transition-all hover:border-secondary/40">ETF 被動投資</button>
+      </div>
+    </div>
+
+    <div class="bg-surface-container-lowest rounded-lg p-6 border border-outline-variant/10 space-y-4">
+      <div class="flex items-center gap-2 mb-1">
+        <span class="material-symbols-outlined text-secondary text-lg" style="font-variation-settings:'FILL' 1">headphones</span>
+        <h4 class="font-['Epilogue'] font-bold text-base text-tertiary-container">摘要深度偏好</h4>
+      </div>
+      <div class="flex gap-3 flex-wrap" id="pref-depth">
+        <button data-val="novice" onclick="togglePref('pref-depth',this,'single')" class="pref-chip px-5 py-2 rounded-full border border-outline-variant/40 bg-surface-container text-on-surface-variant font-label text-sm font-semibold transition-all hover:border-secondary/40">新手模式</button>
+        <button data-val="pro"    onclick="togglePref('pref-depth',this,'single')" class="pref-chip px-5 py-2 rounded-full border border-outline-variant/40 bg-surface-container text-on-surface-variant font-label text-sm font-semibold transition-all hover:border-secondary/40">專業模式</button>
+      </div>
+    </div>
+
+    <p id="pref-saved-msg" class="text-secondary text-sm font-semibold hidden text-center">✓ 偏好已儲存，下次推薦將依此調整</p>
+  </section>
+
+  <section class="grid grid-cols-1 lg:grid-cols-2 gap-12">
+    <div class="space-y-6">
+      <div class="flex justify-between items-end">
+        <h3 class="font-['Epilogue'] font-bold text-2xl text-tertiary-container">Saved Insights</h3>
+        <button class="text-secondary font-bold text-sm hover:underline">View All</button>
+      </div>
+      <div class="space-y-4">
+        <div onclick="showPage('deep-dive')" class="group flex gap-4 p-4 rounded-lg bg-surface-container-lowest hover:bg-surface-container-low transition-colors cursor-pointer border border-transparent hover:border-outline-variant/20">
+          <div class="w-20 h-20 rounded bg-surface-container overflow-hidden shrink-0">
+            <div class="w-full h-full flex flex-col items-center justify-center gap-1" style="background:#113236"><span class="material-symbols-outlined text-white/70 text-3xl" style="font-variation-settings:'FILL' 1">psychology</span><span class="text-white/60 text-[10px] font-bold uppercase tracking-widest">Tech Trends</span></div>
+          </div>
+          <div class="flex flex-col justify-center">
+            <span class="text-[10px] font-['Epilogue'] font-bold text-on-primary-container uppercase tracking-widest">Tech Trends</span>
+            <h4 class="font-['Epilogue'] font-bold text-tertiary-container group-hover:text-secondary transition-colors">The Future of Generative AI in FinTech</h4>
+            <p class="text-sm text-on-surface-variant line-clamp-1">12 min read • Saved 2 days ago</p>
+          </div>
+        </div>
+        <div class="group flex gap-4 p-4 rounded-lg bg-surface-container-lowest hover:bg-surface-container-low transition-colors cursor-pointer">
+          <div class="w-20 h-20 rounded bg-surface-container overflow-hidden shrink-0">
+            <div class="w-full h-full flex flex-col items-center justify-center gap-1" style="background:#286671"><span class="material-symbols-outlined text-white/70 text-3xl" style="font-variation-settings:'FILL' 1">show_chart</span><span class="text-white/60 text-[10px] font-bold uppercase tracking-widest">Markets</span></div>
+          </div>
+          <div class="flex flex-col justify-center">
+            <span class="text-[10px] font-['Epilogue'] font-bold text-on-primary-container uppercase tracking-widest">Markets</span>
+            <h4 class="font-['Epilogue'] font-bold text-tertiary-container group-hover:text-secondary transition-colors">Macro Economics: 2024 Interest Rate Pivot</h4>
+            <p class="text-sm text-on-surface-variant line-clamp-1">18 min read • Saved 1 week ago</p>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="space-y-6">
+      <div class="flex justify-between items-end">
+        <h3 class="font-['Epilogue'] font-bold text-2xl text-tertiary-container">Calculation History</h3>
+        <button onclick="showPage('calculator')" class="text-secondary font-bold text-sm hover:underline">New Sim</button>
+      </div>
+      <div class="bg-surface-container-low rounded-lg overflow-hidden">
+        <table class="w-full text-left">
+          <thead class="bg-surface-container-high/50">
+            <tr>
+              <th class="px-6 py-4 font-['Epilogue'] text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">Strategy</th>
+              <th class="px-6 py-4 font-['Epilogue'] text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">Yield</th>
+              <th class="px-6 py-4 text-right"></th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-outline-variant/10">
+            <tr class="hover:bg-surface-container-lowest transition-colors cursor-pointer" onclick="showPage('calculator')">
+              <td class="px-6 py-5"><p class="font-bold text-tertiary-container">Aggressive Growth</p><p class="text-[10px] text-on-surface-variant">10yr Compound • $50k Base</p></td>
+              <td class="px-6 py-5"><span class="text-on-primary-container font-['Epilogue'] font-bold">+14.2%</span></td>
+              <td class="px-6 py-5 text-right"><span class="material-symbols-outlined text-secondary text-sm">chevron_right</span></td>
+            </tr>
+            <tr class="hover:bg-surface-container-lowest transition-colors cursor-pointer" onclick="showPage('calculator')">
+              <td class="px-6 py-5"><p class="font-bold text-tertiary-container">Dividend Shield</p><p class="text-[10px] text-on-surface-variant">5yr Income • $120k Base</p></td>
+              <td class="px-6 py-5"><span class="text-secondary font-['Epilogue'] font-bold">+6.8%</span></td>
+              <td class="px-6 py-5 text-right"><span class="material-symbols-outlined text-secondary text-sm">chevron_right</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="space-y-6 pb-12">
+    <h3 class="font-['Epilogue'] font-bold text-2xl text-tertiary-container">Settings</h3>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <button class="flex items-center justify-between p-6 bg-surface-container-lowest rounded-lg border border-outline-variant/10 hover:border-secondary/30 transition-all group">
+        <div class="flex items-center gap-4"><span class="material-symbols-outlined text-secondary">person_outline</span><span class="font-['Epilogue'] font-bold text-tertiary-container">Personal Info</span></div>
+        <span class="material-symbols-outlined text-outline-variant group-hover:text-secondary transition-colors">arrow_forward</span>
+      </button>
+      <button class="flex items-center justify-between p-6 bg-surface-container-lowest rounded-lg border border-outline-variant/10 hover:border-secondary/30 transition-all group">
+        <div class="flex items-center gap-4"><span class="material-symbols-outlined text-secondary">security</span><span class="font-['Epilogue'] font-bold text-tertiary-container">Security</span></div>
+        <span class="material-symbols-outlined text-outline-variant group-hover:text-secondary transition-colors">arrow_forward</span>
+      </button>
+      <button class="flex items-center justify-between p-6 bg-surface-container-lowest rounded-lg border border-outline-variant/10 hover:border-secondary/30 transition-all group">
+        <div class="flex items-center gap-4"><span class="material-symbols-outlined text-secondary">notifications_active</span><span class="font-['Epilogue'] font-bold text-tertiary-container">Notifications</span></div>
+        <span class="material-symbols-outlined text-outline-variant group-hover:text-secondary transition-colors">arrow_forward</span>
+      </button>
+      <form method="post" action="/logout/">
+        {% csrf_token %}
+        <button type="submit" class="w-full flex items-center justify-between p-6 bg-surface-container-lowest rounded-lg border border-outline-variant/10 hover:bg-error-container/20 transition-all group">
+          <div class="flex items-center gap-4"><span class="material-symbols-outlined text-error">logout</span><span class="font-['Epilogue'] font-bold text-error">Logout</span></div>
+          <span class="material-symbols-outlined text-error opacity-0 group-hover:opacity-100 transition-all">power_settings_new</span>
+        </button>
+      </form>
+    </div>
+  </section>
+</div>

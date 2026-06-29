@@ -3,6 +3,7 @@ from django.db import models
 
 class Podcast(models.Model):
     show_name = models.CharField(max_length=255, verbose_name="頻道名稱")
+    image_url = models.TextField(blank=True, default="")
 
     class Meta:
         db_table = 'podcasts_show'

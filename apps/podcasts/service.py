@@ -341,6 +341,7 @@ def insert_to_db(
     show_name: str,
     episode_title: str,
     published_at=None,
+    image_url: str = "",
 ) -> None:
     """
     透過 Django ORM 將 Podcast 資料寫入資料庫。
@@ -354,10 +355,13 @@ def insert_to_db(
     with open(srt_path, "r", encoding="utf-8") as f:
         srt_content = f.read().strip()
 
-    # 取得或建立頻道
+    # 取得或建立頻道，有圖片時補上
     podcast, _ = Podcast.objects.get_or_create(
         show_name=show_name or "未知頻道",
     )
+    if image_url and not podcast.image_url:
+        podcast.image_url = image_url
+        podcast.save()
 
     # 取得或建立單集
     episode, _ = PodcastEpisode.objects.get_or_create(

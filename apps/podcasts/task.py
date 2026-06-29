@@ -91,6 +91,7 @@ def main():
     show = itunes_search_first_podcast(podcast_name)
     feed_url = show.get("feedUrl")
     show_name = show.get("collectionName", podcast_name)
+    image_url = show.get("artworkUrl600") or show.get("artworkUrl100", "")
 
     if not feed_url:
         raise RuntimeError(
@@ -209,6 +210,7 @@ def main():
                     show_name=show_name,
                     episode_title=title,
                     published_at=published_at,
+                    image_url=image_url,
                 )
             except Exception as db_err:
                 print(f"   [資料庫錯誤] {db_err}")

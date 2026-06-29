@@ -16,13 +16,51 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path, include
-from django.shortcuts import render
+from django.shortcuts import render, redirect
+from django.contrib.auth import authenticate, login, logout
+from django.contrib.auth.forms import AuthenticationForm, UserCreationForm
+from django.contrib.auth.decorators import login_required
+from apps.accounts.views import onboarding_view
 
+@login_required(login_url='/login/')
 def frontend_index(request):
     return render(request, 'index.html')
 
+def login_view(request):
+    if request.user.is_authenticated:
+        return redirect('/')
+    error = None
+    if request.method == 'POST':
+        form = AuthenticationForm(request, data=request.POST)
+        if form.is_valid():
+            login(request, form.get_user())
+            return redirect('/')
+        error = '帳號或密碼錯誤，請再試一次。'
+    return render(request, 'auth/login.html', {'error': error})
+
+def signup_view(request):
+    if request.user.is_authenticated:
+        return redirect('/')
+    error = None
+    if request.method == 'POST':
+        form = UserCreationForm(request.POST)
+        if form.is_valid():
+            user = form.save()
+            login(request, user)
+            return redirect('/onboarding/')
+        error = list(form.errors.values())[0][0]
+    return render(request, 'auth/signup.html', {'error': error})
+
+def logout_view(request):
+    if request.method == 'POST':
+        logout(request)
+    return redirect('/login/')
+
 urlpatterns = [
     path('admin/', admin.site.urls),
+    path('login/',  login_view,  name='login'),
+    path('signup/', signup_view, name='signup'),
+    path('logout/', logout_view, name='logout'),
     path("api/glossary/", include("apps.glossary.urls")),
     path("api/summaries/", include("apps.summaries.urls")),
     path("api/mindmap/", include("apps.mindmap.urls")),
@@ -30,5 +68,7 @@ urlpatterns = [
     path("api/ai/", include("apps.ai_assistant.urls")),
     path("api/knowledge-graph/", include("apps.knowledge_graph.urls")),
     path("api/calculator/", include("apps.calculator.urls")),
+    path("api/accounts/", include("apps.accounts.urls")),
+    path('onboarding/', onboarding_view, name='onboarding'),
     path('', frontend_index),
 ]

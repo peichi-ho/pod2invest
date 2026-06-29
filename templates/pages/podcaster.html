@@ -1,0 +1,35 @@
+<!-- ═══════════════════════════════════════════════ PAGE: PODCASTER ═══ -->
+<div id="page-podcaster" class="page pt-20 pb-32 px-6 max-w-5xl mx-auto">
+  <button onclick="goBack()" class="flex items-center gap-1 text-secondary font-label text-sm font-semibold mb-6 hover:opacity-70 transition-opacity">
+    <span class="material-symbols-outlined text-base">arrow_back_ios</span>Rankings
+  </button>
+
+  <section class="flex flex-col items-center text-center mb-8">
+    <div id="podcaster-avatar" class="w-20 h-20 rounded-full overflow-hidden mb-4 shadow-lg">
+      <div id="podcaster-avatar-inner" class="w-full h-full flex items-center justify-center">
+        <span id="podcaster-avatar-icon" class="material-symbols-outlined text-white/80 text-4xl" style="font-variation-settings:'FILL' 1">podcasts</span>
+      </div>
+    </div>
+    <h2 id="podcaster-name" class="font-['Epilogue'] text-3xl font-bold tracking-tight text-tertiary-container mb-1">節目名稱</h2>
+    <p id="podcaster-host" class="text-sm text-outline font-medium mb-5">節目主持人</p>
+    <div class="flex gap-3 mb-6">
+      <div class="px-4 py-1.5 bg-surface-container-low rounded-full text-xs font-bold text-secondary border border-outline-variant/20">
+        <span id="podcaster-listeners">—</span> Listeners
+      </div>
+      <div class="px-4 py-1.5 bg-surface-container-low rounded-full text-xs font-bold text-on-primary-container border border-outline-variant/20">
+        <span id="podcaster-accuracy">—</span>
+      </div>
+    </div>
+    <div class="flex gap-4">
+      <button id="btn-all-episodes" onclick="switchPodcasterTab('episodes')" class="px-6 py-2.5 bg-tertiary-container text-white rounded-full font-label text-sm font-bold tracking-wide shadow-md transition-all">所有集數</button>
+      <button id="btn-all-views" onclick="switchPodcasterTab('views')" class="px-6 py-2.5 bg-surface-container-low text-secondary rounded-full font-label text-sm font-bold tracking-wide border border-secondary/30 transition-all">所有觀點</button>
+    </div>
+  </section>
+
+  <section id="tab-episodes" class="space-y-3">
+    <div id="podcaster-episodes-list" class="space-y-3"></div>
+  </section>
+  <section id="tab-views" class="space-y-3 hidden">
+    <div id="podcaster-views-list" class="space-y-3"></div>
+  </section>
+</div>
