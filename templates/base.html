@@ -1,0 +1,177 @@
+{% load static %}
+{% comment %}
+  base.html — 所有頁面共用的骨架模板
+  包含 head、header、導覽列、共用覆蓋層、JS 模組。
+  頁面內容由 index.html 透過 block pages 注入。
+{% endcomment %}
+<!DOCTYPE html>
+<html class="light" lang="zh-TW">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Pod2Invest</title>
+<link href="https://fonts.googleapis.com/css2?family=Epilogue:wght@400;500;700;800&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+<script id="tailwind-config">
+  tailwind.config = {
+    darkMode: "class",
+    theme: {
+      extend: {
+        colors: {
+          "on-error-container": "#93000a","on-error": "#ffffff","surface-tint": "#8d4f00",
+          "tertiary-fixed-dim": "#abccd1","on-primary-fixed": "#2d1600","on-tertiary-fixed-variant": "#2c4c50",
+          "on-primary-fixed-variant": "#6b3b00","on-secondary": "#ffffff","secondary": "#286671",
+          "on-tertiary-container": "#7a9b9f","on-primary-container": "#d97f12","error": "#ba1a1a",
+          "surface-dim": "#dcdad1","surface-container-highest": "#e5e3d9","surface-container-high": "#eae8df",
+          "inverse-surface": "#31312b","on-tertiary-fixed": "#001f23","on-surface-variant": "#414849",
+          "surface-container": "#f0eee5","inverse-primary": "#ffb875","tertiary-fixed": "#c7e9ed",
+          "secondary-fixed": "#b0ecf9","on-surface": "#1c1c16","surface-variant": "#e5e3d9",
+          "outline": "#717879","tertiary-container": "#113236","inverse-on-surface": "#f3f1e7",
+          "surface-container-lowest": "#ffffff","on-secondary-container": "#2f6d78","on-primary": "#ffffff",
+          "secondary-container": "#b0ecf9","error-container": "#ffdad6","on-secondary-fixed": "#001f25",
+          "on-secondary-fixed-variant": "#024e59","background": "#fcf9f0","on-tertiary": "#ffffff",
+          "primary": "#291300","primary-fixed": "#ffdcc0","surface-container-low": "#f6f4ea",
+          "surface-bright": "#fcf9f0","primary-fixed-dim": "#ffb875","surface": "#fcf9f0",
+          "tertiary": "#001d20","on-background": "#1c1c16","primary-container": "#472500",
+          "outline-variant": "#c1c8c9","secondary-fixed-dim": "#95d0dc"
+        },
+        fontFamily: { "headline": ["Epilogue"], "body": ["Manrope"], "label": ["Manrope"] },
+        borderRadius: {"DEFAULT": "1rem", "lg": "2rem", "xl": "3rem", "full": "9999px"},
+      },
+    },
+  }
+</script>
+<style>
+  .material-symbols-outlined {
+    font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+  }
+  body { min-height: 100dvh; font-family: 'Manrope', sans-serif; background: #fcf9f0; }
+  .page { display: none; animation: fadeIn 0.25s ease; }
+  .page.active { display: block; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes slideUp { from { opacity: 0; transform: translateY(40px); } to { opacity: 1; transform: translateY(0); } }
+  .animate-slide-up { animation: slideUp 0.25s ease; }
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+  .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+  .asymmetric-grid { display: grid; grid-template-columns: 1.2fr 0.8fr; gap: 2rem; }
+  @media (max-width: 768px) { .asymmetric-grid { grid-template-columns: 1fr; } }
+  .nav-btn { color: #286671; }
+  .nav-btn.active { color: #113236; font-weight: bold; transform: scale(1.1); opacity: 1 !important; }
+  .nav-btn.active .nav-icon { font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+</style>
+</head>
+<body class="bg-surface text-on-surface pb-28">
+
+<!-- Top Navigation -->
+<header class="fixed top-0 w-full flex justify-between items-center px-6 h-16 bg-[#fcf9f0]/80 backdrop-blur-xl z-50 shadow-[0px_10px_30px_rgba(28,28,22,0.06)] relative">
+  <div class="w-10"></div>
+  <h1 class="font-['Epilogue'] font-bold tracking-[-0.02em] text-2xl text-[#113236] absolute left-1/2 -translate-x-1/2">Pod2Invest</h1>
+  <button onclick="showPage('profile')" class="w-10 h-10 rounded-full overflow-hidden bg-surface-container-highest hover:opacity-80 transition-opacity">
+    <div class="w-full h-full flex flex-col items-center justify-center gap-1" style="background:#e5e3d9"><span class="material-symbols-outlined text-white/70 text-3xl" style="font-variation-settings:'FILL' 1">person</span><span class="text-white/60 text-[10px] font-bold uppercase tracking-widest">User</span></div>
+  </button>
+</header>
+
+<audio id="disc-audio"></audio>
+
+{% block pages %}{% endblock %}
+
+<!-- News panel -->
+<div id="news-panel-overlay" class="fixed inset-0 bg-black/40 z-40 hidden" onclick="closeNewsPanel()"></div>
+<div id="news-panel" class="fixed top-0 right-0 h-[calc(100vh-64px)] w-full max-w-lg bg-surface z-50 shadow-2xl flex flex-col translate-x-full transition-transform duration-300">
+  <div class="flex items-start justify-between p-4 border-b border-outline-variant/20">
+    <div class="flex-1 min-w-0 pr-3">
+      <h2 id="news-panel-title" class="font-['Epilogue'] font-bold text-base text-tertiary-container leading-snug"></h2>
+      <div id="news-panel-meta" class="mt-1 text-[11px] text-outline"></div>
+    </div>
+    <button onclick="closeNewsPanel()" class="flex-shrink-0 w-8 h-8 flex items-center justify-center rounded-full hover:bg-surface-container transition-colors mt-0.5">
+      <span class="material-symbols-outlined text-outline text-xl">close</span>
+    </button>
+  </div>
+  <div id="news-panel-body" class="flex-1 overflow-y-auto px-5 py-4 text-sm text-on-surface leading-relaxed whitespace-pre-wrap"></div>
+</div>
+
+<!-- AI history drawer -->
+<div id="ai-history-overlay" class="hidden fixed inset-0 z-[60] bg-black/40 backdrop-blur-sm" onclick="closeHistoryDrawer()"></div>
+<div id="ai-history-drawer" class="fixed top-0 left-0 h-full w-80 max-w-[85vw] z-[61] bg-[#fcf9f0] shadow-2xl transform -translate-x-full transition-transform duration-300 flex flex-col">
+  <div class="flex items-center justify-between px-5 py-4 border-b border-outline-variant/30">
+    <h2 class="font-['Epilogue'] font-bold text-lg text-tertiary-container">對話記錄</h2>
+    <button onclick="closeHistoryDrawer()" class="w-8 h-8 flex items-center justify-center rounded-full hover:bg-surface-container transition-colors">
+      <span class="material-symbols-outlined text-outline text-xl">close</span>
+    </button>
+  </div>
+  <div class="px-4 py-3 border-b border-outline-variant/20">
+    <button onclick="startNewConversation()" class="w-full flex items-center gap-3 px-4 py-3 rounded-xl bg-tertiary-container text-on-tertiary font-['Epilogue'] font-semibold text-sm hover:opacity-90 transition-all active:scale-95">
+      <span class="material-symbols-outlined text-sm">add</span>新對話
+    </button>
+  </div>
+  <div id="ai-history-list" class="flex-1 overflow-y-auto px-3 py-2 space-y-1">
+    <p class="text-outline text-xs text-center py-6">載入中...</p>
+  </div>
+</div>
+
+<!-- AI chat input bar -->
+<div id="ai-input-bar" class="hidden fixed bottom-[72px] w-full z-40 bg-[#fcf9f0]/90 backdrop-blur-xl pt-3 pb-3 px-4">
+  <div class="max-w-4xl mx-auto flex items-center gap-4 bg-surface-container-high rounded-full p-2 pl-6 shadow-lg">
+    <button class="text-secondary hover:text-on-primary-container transition-colors"><span class="material-symbols-outlined">attach_file</span></button>
+    <input id="chat-input" class="w-full bg-transparent border-none focus:ring-0 text-on-surface font-body text-sm placeholder:text-outline/60" placeholder="Ask about investment strategies..." type="text" onkeydown="if(event.key==='Enter') sendChat()"/>
+    <button onclick="sendChat()" class="bg-[#d97f12] text-white w-12 h-12 rounded-full flex items-center justify-center hover:opacity-90 active:scale-95 transition-all">
+      <span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">send</span>
+    </button>
+  </div>
+</div>
+
+<!-- Bottom nav -->
+<nav class="fixed bottom-0 w-full z-50 flex justify-around items-center px-4 pb-6 pt-3 bg-[#fcf9f0]/80 backdrop-blur-xl rounded-t-[32px] shadow-[0px_-10px_30px_rgba(28,28,22,0.06)]">
+  <button onclick="showPage('discover')" id="nav-discover" class="nav-btn flex flex-col items-center justify-center transition-all">
+    <span class="material-symbols-outlined nav-icon" style="font-variation-settings: 'FILL' 1;">explore</span>
+    <span class="font-['Manrope'] font-medium text-[10px] uppercase tracking-[0.05em] mt-1">Discover</span>
+  </button>
+  <button onclick="showPage('rankings')" id="nav-rankings" class="nav-btn flex flex-col items-center justify-center transition-all opacity-60">
+    <span class="material-symbols-outlined nav-icon">leaderboard</span>
+    <span class="font-['Manrope'] font-medium text-[10px] uppercase tracking-[0.05em] mt-1">Rankings</span>
+  </button>
+  <button onclick="showPage('ai')" id="nav-ai" class="nav-btn flex flex-col items-center justify-center transition-all opacity-60">
+    <span class="material-symbols-outlined nav-icon">psychology</span>
+    <span class="font-['Manrope'] font-medium text-[10px] uppercase tracking-[0.05em] mt-1">AI Assistant</span>
+  </button>
+  <button onclick="resetCalculator(); showPage('calculator')" id="nav-calculator" class="nav-btn flex flex-col items-center justify-center transition-all opacity-60">
+    <span class="material-symbols-outlined nav-icon">calculate</span>
+    <span class="font-['Manrope'] font-medium text-[10px] uppercase tracking-[0.05em] mt-1">Calculator</span>
+  </button>
+  <button onclick="window.location.href='/api/knowledge-graph/graph/'" id="nav-knowledge-graph" class="nav-btn flex flex-col items-center justify-center transition-all opacity-60">
+    <span class="material-symbols-outlined nav-icon">hub</span>
+    <span class="font-['Manrope'] font-medium text-[10px] uppercase tracking-[0.05em] mt-1">Graph</span>
+  </button>
+</nav>
+
+<!-- Glossary popup -->
+<div id="glossary-btn" class="hidden fixed z-[200] cursor-pointer">
+  <button onclick="lookupGlossary()" class="bg-tertiary-container text-white text-xs font-bold px-3 py-1.5 rounded-full shadow-lg">解釋</button>
+</div>
+<div id="glossary-card" class="bg-surface-container-lowest border border-outline-variant/30 rounded-xl shadow-2xl p-5 w-72" style="position:fixed; top:120px; left:50%; transform:translateX(-50%); z-index:9999; display:none;">
+  <div class="flex justify-between items-start mb-2">
+    <p id="gc-term" class="font-['Epilogue'] font-bold text-tertiary-container text-base"></p>
+    <button onclick="document.getElementById('glossary-card').style.display='none'" class="text-outline text-xs ml-2">✕</button>
+  </div>
+  <p id="gc-short" class="text-sm text-on-surface-variant leading-relaxed"></p>
+  <button id="gc-more-btn" onclick="showGlossaryLong()" class="mt-3 text-secondary font-bold text-xs uppercase tracking-wider hover:text-on-primary-container transition-colors">查看更多 ›</button>
+  <div id="gc-long" class="hidden mt-3 pt-3 border-t border-outline-variant/20 text-sm text-on-surface-variant leading-relaxed"></div>
+</div>
+
+<!-- JS modules -->
+<script src="{% static 'js/app.js' %}"></script>
+<script src="{% static 'js/discover.js' %}"></script>
+<script src="{% static 'js/rankings.js' %}"></script>
+<script src="{% static 'js/deep_dive.js' %}"></script>
+<script src="{% static 'js/calculator.js' %}"></script>
+<script src="{% static 'js/ai.js' %}"></script>
+<script src="{% static 'js/profile.js' %}"></script>
+<script>
+  calcWealth();
+  showPage('discover');
+  loadVerifiedInsights();
+</script>
+</body>
+</html>

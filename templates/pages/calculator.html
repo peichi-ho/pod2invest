@@ -1,0 +1,280 @@
+<!-- ═══════════════════════════════════════════════ PAGE: CALCULATOR ═══ -->
+<div id="page-calculator" class="page pt-24 px-6 max-w-7xl mx-auto pb-8">
+  <button onclick="goBack()" class="flex items-center gap-1 text-secondary font-label text-sm font-semibold mb-6 hover:opacity-70 transition-opacity">
+    <span class="material-symbols-outlined text-base">arrow_back_ios</span>返回
+  </button>
+  <section class="mb-10">
+    <h2 class="font-['Epilogue'] text-5xl md:text-7xl font-bold text-tertiary-container tracking-[-0.04em] mb-4">Wealth Simulator</h2>
+    <p class="text-secondary font-medium max-w-xl text-lg leading-relaxed">輸入個股代號，計算投資報酬。</p>
+  </section>
+
+  <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+    <!-- Left: Parameters -->
+    <div class="lg:col-span-4 space-y-6">
+      <div class="bg-surface-container-low p-8 rounded-lg space-y-6">
+        <div class="flex items-center justify-between border-b border-outline-variant/20 pb-4">
+          <h3 class="font-['Epilogue'] text-xl font-bold text-tertiary-container">Investment Parameters</h3>
+        </div>
+
+        <div class="space-y-2">
+          <label class="font-label text-xs font-bold uppercase tracking-widest text-outline">股票代號</label>
+          <div class="flex gap-2">
+            <input id="sim-ticker" type="text" placeholder="代號或名稱，如 2330 / 台積電"
+              onkeydown="if(event.key==='Enter') fetchStockInfo()"
+              oninput="_checkHostCalcDiff()"
+              class="flex-1 px-4 py-3 bg-surface-container-lowest border-none rounded-full focus:ring-2 focus:ring-secondary font-body text-on-surface-variant"/>
+            <button onclick="fetchStockInfo()" class="px-5 py-3 bg-tertiary-container text-white rounded-full font-label text-sm font-bold hover:opacity-90 active:scale-95 transition-all">查詢</button>
+          </div>
+          <div id="host-calc-badge" class="items-center gap-2 bg-secondary/10 border border-secondary/30 rounded-full px-3 py-1.5" style="display:none">
+            <span class="material-symbols-outlined text-sm text-secondary" style="font-size:14px">record_voice_over</span>
+            <span id="host-calc-label" class="text-[11px] text-secondary font-bold flex-1"></span>
+            <button onclick="resetToHostCalc()" class="text-[11px] font-bold text-secondary underline hover:no-underline whitespace-nowrap">一鍵回復</button>
+          </div>
+          <p id="stock-query-status" class="text-xs text-error font-semibold hidden"></p>
+        </div>
+
+        <div id="sim-price-row" class="hidden bg-surface-container-lowest rounded-lg px-5 py-4 space-y-1">
+          <div class="text-xs text-outline font-bold uppercase tracking-widest">股票名稱</div>
+          <div id="sim-stock-name" class="font-body text-sm font-semibold text-on-surface-variant"></div>
+          <div class="text-xs text-outline font-bold uppercase tracking-widest pt-2">目前股價</div>
+          <div id="sim-current-price-display" class="font-['Epilogue'] text-2xl font-bold text-tertiary-container"></div>
+        </div>
+
+        <div class="space-y-2">
+          <label class="font-label text-xs font-bold uppercase tracking-widest text-outline">投入金額 (NT$)</label>
+          <div class="relative">
+            <span class="absolute left-4 top-1/2 -translate-y-1/2 text-tertiary-container font-bold">$</span>
+            <input id="sim-capital" class="w-full pl-8 pr-4 py-4 bg-surface-container-lowest border-none rounded-DEFAULT focus:ring-2 focus:ring-secondary text-tertiary-container font-['Epilogue'] font-semibold" type="number" placeholder="請輸入投入金額" oninput="syncSlider('capital')"/>
+          </div>
+          <input id="slider-capital" type="range" min="0" max="300000" step="1000" value="0" oninput="syncInput('capital'); syncSlider('capital')" class="w-full accent-secondary h-1.5 cursor-pointer">
+        </div>
+
+        <div class="space-y-3">
+          <label class="font-label text-xs font-bold uppercase tracking-widest text-outline">投資期間</label>
+          <div class="flex flex-col gap-2">
+            <div class="space-y-1">
+              <span class="text-xs text-outline">起始日期</span>
+              <input id="sim-start-date" type="date" class="w-full px-4 py-3 bg-surface-container-lowest border-none rounded-DEFAULT focus:ring-2 focus:ring-secondary text-tertiary-container font-['Epilogue'] font-semibold"/>
+            </div>
+            <div class="space-y-1">
+              <span class="text-xs text-outline">結束日期</span>
+              <input id="sim-end-date" type="date" oninput="_checkHostCalcDiff()" class="w-full px-4 py-3 bg-surface-container-lowest border-none rounded-DEFAULT focus:ring-2 focus:ring-secondary text-tertiary-container font-['Epilogue'] font-semibold"/>
+            </div>
+          </div>
+          <p id="sim-period-display" class="text-xs text-outline"></p>
+        </div>
+
+        <div class="space-y-3">
+          <div class="flex items-center justify-between">
+            <label class="font-label text-xs font-bold uppercase tracking-widest text-outline">預期年化報酬率</label>
+            <button id="host-yield-reset" onclick="resetToHostYield()" class="hidden text-[10px] font-bold text-secondary border border-secondary/40 rounded-full px-2 py-0.5 hover:bg-secondary/10 transition-colors">
+              回主持人預設 <span id="host-yield-label"></span>%
+            </button>
+          </div>
+          <div class="space-y-2">
+            <div class="space-y-1">
+              <span class="text-xs text-outline font-semibold">基準情境</span>
+              <div class="relative">
+                <input id="sim-yield-base" class="w-full px-4 py-3 bg-surface-container-lowest border-none rounded-DEFAULT focus:ring-2 focus:ring-secondary text-tertiary-container font-['Epilogue'] font-semibold"
+                  type="number" placeholder="如 15" step="0.1"
+                  oninput="onBaseYieldChange(); _checkHostYieldDiff()"/>
+                <span class="absolute right-4 top-1/2 -translate-y-1/2 text-tertiary-container font-bold">%</span>
+              </div>
+            </div>
+            <div class="grid grid-cols-2 gap-2">
+              <div class="space-y-1">
+                <span class="text-xs text-[#286671] font-bold">樂觀情境</span>
+                <div class="relative">
+                  <input id="sim-yield-bull" class="w-full px-3 py-2.5 bg-surface-container-lowest border border-[#286671]/30 rounded-DEFAULT focus:ring-2 focus:ring-[#286671] text-[#286671] font-['Epilogue'] font-semibold text-sm"
+                    type="number" placeholder="自動" step="0.1"
+                    oninput="_bullUserEdited=true; _refreshIfActive()"/>
+                  <span class="absolute right-3 top-1/2 -translate-y-1/2 text-[#286671] font-bold text-xs">%</span>
+                </div>
+              </div>
+              <div class="space-y-1">
+                <span class="text-xs text-[#ba1a1a] font-bold">保守情境</span>
+                <div class="relative">
+                  <input id="sim-yield-bear" class="w-full px-3 py-2.5 bg-surface-container-lowest border border-[#ba1a1a]/30 rounded-DEFAULT focus:ring-2 focus:ring-[#ba1a1a] text-[#ba1a1a] font-['Epilogue'] font-semibold text-sm"
+                    type="number" placeholder="自動" step="0.1"
+                    oninput="_bearUserEdited=true; _refreshIfActive()"/>
+                  <span class="absolute right-3 top-1/2 -translate-y-1/2 text-[#ba1a1a] font-bold text-xs">%</span>
+                </div>
+              </div>
+            </div>
+            <div class="relative" id="scenario-hint-wrap">
+              <button type="button" onclick="toggleScenarioHint()"
+                class="flex items-center gap-1 text-[10px] text-outline/70 hover:text-outline transition-colors">
+                <span class="material-symbols-outlined" style="font-size:13px">info</span>
+                依基準情境自動推算，可自行修改
+              </button>
+              <div id="scenario-hint-box" class="hidden absolute left-0 bottom-full mb-1 z-20 w-64 bg-surface-container-highest text-on-surface rounded-lg shadow-lg p-3 text-[11px] leading-relaxed border border-outline-variant/30">
+                <div class="font-bold mb-1.5 text-tertiary-container">自動推算公式</div>
+                <div class="space-y-1 text-on-surface-variant">
+                  <div>基準 ≥ 0 時：</div>
+                  <div class="pl-2 font-mono text-[10px]">樂觀 = 基準 × 1.5　保守 = 基準 × 0.5</div>
+                  <div class="mt-1">基準 &lt; 0 時：</div>
+                  <div class="pl-2 font-mono text-[10px]">樂觀 = 基準 × 0.5　保守 = 基準 × 1.5</div>
+                </div>
+                <div class="mt-2 pt-2 border-t border-outline-variant/20 text-outline/70">三個數值均可自行修改</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <button onclick="calcWealth()" class="w-full py-3 bg-tertiary-container hover:opacity-90 active:scale-95 text-white font-label font-bold text-sm uppercase tracking-widest rounded-full transition-all">
+        試算
+      </button>
+
+    </div>
+
+    <!-- Right: Stock Trend Chart -->
+    <div class="lg:col-span-8">
+      <div class="bg-surface-container-lowest rounded-lg p-8 flex flex-col" style="min-height:520px;">
+        <div class="flex flex-wrap items-start justify-between gap-4 mb-8">
+          <div>
+            <h3 class="font-['Epilogue'] text-2xl font-bold text-tertiary-container">個股趨勢圖</h3>
+            <p id="stock-chart-subtitle" class="text-outline font-medium">查詢個股後顯示走勢</p>
+          </div>
+          <div class="flex gap-1 bg-surface-container-high rounded-full p-1">
+            <button onclick="setStockPeriod('1mo')" data-period="1mo" class="stock-period-btn px-3 py-1.5 rounded-full font-label text-xs font-bold transition-all text-secondary">1月</button>
+            <button onclick="setStockPeriod('3mo')" data-period="3mo" class="stock-period-btn px-3 py-1.5 rounded-full font-label text-xs font-bold transition-all text-secondary">3月</button>
+            <button onclick="setStockPeriod('6mo')" data-period="6mo" class="stock-period-btn px-3 py-1.5 rounded-full font-label text-xs font-bold transition-all text-secondary">6月</button>
+            <button onclick="setStockPeriod('1y')"  data-period="1y"  class="stock-period-btn px-3 py-1.5 rounded-full font-label text-xs font-bold transition-all bg-tertiary-container text-white">1年</button>
+          </div>
+        </div>
+        <div class="flex-grow relative flex items-center justify-center" style="min-height:300px;">
+          <p id="stock-chart-placeholder" class="text-outline text-sm">查詢個股後顯示走勢圖</p>
+          <svg id="stock-svg" class="w-full h-full hidden" viewBox="0 0 800 380" preserveAspectRatio="xMidYMid meet"></svg>
+        </div>
+        <div id="stock-info" class="hidden mt-5 pt-4 border-t border-outline-variant/20 flex gap-8">
+          <div><div class="text-xs text-outline font-bold uppercase tracking-widest mb-1">股票</div><div id="stock-name" class="font-['Epilogue'] font-bold text-tertiary-container text-lg"></div></div>
+          <div><div class="text-xs text-outline font-bold uppercase tracking-widest mb-1">最新收盤</div><div id="stock-last-price" class="font-['Epilogue'] font-bold text-tertiary-container text-lg"></div></div>
+          <div><div class="text-xs text-outline font-bold uppercase tracking-widest mb-1">區間漲跌</div><div id="stock-change" class="font-['Epilogue'] font-bold text-lg"></div></div>
+          <div><div class="text-xs text-outline font-bold uppercase tracking-widest mb-1">歷史年化報酬</div><div id="stock-hist-return" class="font-['Epilogue'] font-bold text-lg"></div></div>
+        </div>
+        <div id="stock-news-section" class="hidden mt-5 pt-4 border-t border-outline-variant/20">
+          <div class="text-xs text-outline font-bold uppercase tracking-widest mb-3">相關新聞</div>
+          <div id="stock-news-list" class="space-y-2"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Results Section (shown after 試算) -->
+  <div id="results-section" class="hidden mt-8">
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
+
+      <!-- Left: Investment Summary (4 cols — aligned with params) -->
+      <div class="lg:col-span-4">
+        <div class="bg-surface-container-low rounded-xl p-6 h-full flex flex-col gap-5">
+
+          <!-- 輸入條件 -->
+          <div>
+            <div class="text-[10px] text-outline font-bold uppercase tracking-widest mb-3">輸入條件</div>
+            <div class="space-y-2">
+              <div class="flex justify-between items-baseline">
+                <span class="text-sm text-on-surface-variant">投資期間</span>
+                <span id="res-period" class="text-sm font-bold text-tertiary-container">—</span>
+              </div>
+              <div class="flex justify-between items-baseline">
+                <span class="text-sm text-on-surface-variant">年化報酬率假設</span>
+                <span id="res-annual-return" class="text-sm font-bold text-tertiary-container">—</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="border-t border-outline-variant/20"></div>
+
+          <!-- 持倉資訊 -->
+          <div>
+            <div class="text-[10px] text-outline font-bold uppercase tracking-widest mb-3">持倉資訊</div>
+            <div class="space-y-2">
+              <div class="flex justify-between items-baseline">
+                <span class="text-sm text-on-surface-variant">可買股數</span>
+                <span id="res-shares" class="text-sm font-bold text-tertiary-container">—</span>
+              </div>
+              <div class="flex justify-between items-baseline">
+                <span class="text-sm text-on-surface-variant">實際投入</span>
+                <span id="res-invested" class="text-sm font-bold text-tertiary-container">—</span>
+              </div>
+              <div class="flex justify-between items-baseline">
+                <span class="text-sm text-on-surface-variant">剩餘現金</span>
+                <span id="res-remaining" class="text-sm font-bold text-tertiary-container">—</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="border-t border-outline-variant/20"></div>
+
+          <!-- 試算結果（基準情境）-->
+          <div class="flex-grow flex flex-col">
+            <div class="text-[10px] text-outline font-bold uppercase tracking-widest mb-3">試算結果（基準情境）</div>
+
+            <div class="text-xs text-outline mb-1">預估最終資產</div>
+            <div id="res-final-value" class="font-['Epilogue'] text-4xl font-extrabold text-tertiary-container tracking-tight leading-none mb-5">—</div>
+
+            <div class="space-y-2 mt-auto">
+              <div class="flex justify-between items-baseline">
+                <span class="text-sm text-on-surface-variant">預估收益</span>
+                <span id="res-profit" class="text-sm font-bold">—</span>
+              </div>
+              <div class="flex justify-between items-baseline">
+                <span class="text-sm text-on-surface-variant">預估總報酬率</span>
+                <span id="res-total-return" class="text-sm font-bold">—</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Footer note -->
+          <div class="flex items-center gap-1.5 pt-2 border-t border-outline-variant/10">
+            <span id="res-trend-icon" class="material-symbols-outlined text-secondary" style="font-size:16px">trending_up</span>
+            <span class="text-[10px] text-outline/60 leading-snug">基準情境模擬結果，不代表實際投資績效</span>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- Right: Scenario Chart (8 cols — aligned with stock chart) -->
+      <div class="lg:col-span-8">
+        <div class="bg-surface-container-lowest rounded-xl p-6 h-full flex flex-col">
+
+          <div class="flex items-start justify-between gap-3 mb-4">
+            <div>
+              <h3 class="font-['Epilogue'] text-xl font-bold text-tertiary-container">情境資產成長模擬</h3>
+              <p class="text-outline text-xs mt-1">以年化報酬率複利計算未來持有市值，不代表實際股價走勢</p>
+            </div>
+            <div class="flex flex-col gap-2 items-end shrink-0">
+              <div class="flex items-center gap-2">
+                <svg width="22" height="4"><line x1="0" y1="2" x2="22" y2="2" stroke="#286671" stroke-width="2.5" stroke-dasharray="5,3"/></svg>
+                <span class="text-xs font-bold text-[#286671]">樂觀 <span id="legend-bull-rate" class="font-['Epilogue'] opacity-80"></span></span>
+              </div>
+              <div class="flex items-center gap-2">
+                <svg width="22" height="4"><line x1="0" y1="2" x2="22" y2="2" stroke="#113236" stroke-width="2.5"/></svg>
+                <span class="text-xs font-bold text-tertiary-container">基準 <span id="legend-base-rate" class="font-['Epilogue'] opacity-80"></span></span>
+              </div>
+              <div class="flex items-center gap-2">
+                <svg width="22" height="4"><line x1="0" y1="2" x2="22" y2="2" stroke="#ba1a1a" stroke-width="2.5" stroke-dasharray="5,3"/></svg>
+                <span class="text-xs font-bold text-[#ba1a1a]">保守 <span id="legend-bear-rate" class="font-['Epilogue'] opacity-80"></span></span>
+              </div>
+            </div>
+          </div>
+
+          <svg id="scenario-svg" class="w-full flex-grow" viewBox="0 0 700 260" preserveAspectRatio="xMidYMid meet"></svg>
+
+          <div id="scenario-range-note" class="hidden mt-3 flex items-center justify-end gap-1 text-xs text-outline/70">
+            <span class="material-symbols-outlined" style="font-size:13px">swap_vert</span>
+            三情境區間差距：<span id="scenario-range-val" class="font-semibold text-tertiary-container"></span>
+          </div>
+
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Disclaimer -->
+    <p class="mt-5 text-xs text-outline/60 leading-relaxed">
+      ⚠️ 免責聲明：本試算工具僅供參考，所有數據與模擬結果不構成投資建議。投資涉及風險，過去績效不代表未來表現，投資人應自行判斷並承擔投資決策之責任。
+    </p>
+  </div>
+</div>

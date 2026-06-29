@@ -40,6 +40,7 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'django.contrib.postgres',
     'rest_framework',
     'apps.glossary.apps.GlossaryConfig',
     'apps.summaries.apps.SummariesConfig',
@@ -48,6 +49,7 @@ INSTALLED_APPS = [
     'apps.mindmap.apps.MindmapConfig',
     'apps.ai_assistant.apps.AiAssistantConfig',
     'apps.knowledge_graph.apps.KnowledgeGraphConfig',
+    'apps.accounts.apps.AccountsConfig',
 ]
 
 
@@ -144,6 +146,15 @@ DATABASES = {
             "sslmode": "require",
         },
     },
+    "accountsdb": {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": os.getenv("ACCOUNTS_DB_NAME", "postgres"),
+        "USER": os.getenv("ACCOUNTS_DB_USER", ""),
+        "PASSWORD": os.getenv("ACCOUNTS_DB_PASSWORD", ""),
+        "HOST": os.getenv("ACCOUNTS_DB_HOST", ""),
+        "PORT": os.getenv("ACCOUNTS_DB_PORT", "5432"),
+        "OPTIONS": {"sslmode": "require"},
+    },
 
 }
 # 資料庫 routing
@@ -153,6 +164,7 @@ DATABASE_ROUTERS = [
     "config.db_routers.PodcastsRouter",
     "config.db_routers.KnowledgeGraphRouter",
     "config.db_routers.AiAssistantRouter",
+    "config.db_routers.AccountsRouter",
 ]
 
 
@@ -177,5 +189,6 @@ USE_I18N = True
 USE_TZ = True
 
 STATIC_URL = "static/"
+STATICFILES_DIRS = [BASE_DIR / "static"]
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"

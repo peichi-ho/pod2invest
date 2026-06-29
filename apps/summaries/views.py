@@ -329,18 +329,33 @@ class AllBacktestingAPIView(APIView):
                 d["end_time"]   = d["end_time"].isoformat()   if d["end_time"]   else None
             return Response(data)
 
-        # 不指定 podcaster：抓全部，JOIN summary 取 podcaster
+        # 不指定 podcaster：每個節目各取 1 筆最佳記錄（pass/fail 優先於 pending）
         from django.db import connections
         with connections["summariesdb"].cursor() as c:
             c.execute("""
-                SELECT b.id, b.summary_id, b.ticker, b.asset, b.direction,
-                       b.thesis, b.timeframe_raw,
-                       b.start_time, b.end_time, b.result,
-                       s.podcaster, s.source_filename
-                FROM backtesting b
-                JOIN summaries_summaryrecord s ON b.summary_id = s.id
-                WHERE b.result != 'skip'
-                ORDER BY b.id DESC
+                WITH ranked AS (
+                    SELECT b.id, b.summary_id, b.ticker, b.asset, b.direction,
+                           b.thesis, b.timeframe_raw,
+                           b.start_time, b.end_time, b.result,
+                           s.podcaster, s.source_filename,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY s.podcaster
+                               ORDER BY
+                                   CASE b.result WHEN 'pass' THEN 0 WHEN 'fail' THEN 1 ELSE 2 END,
+                                   b.id DESC
+                           ) AS rn
+                    FROM backtesting b
+                    JOIN summaries_summaryrecord s ON b.summary_id = s.id
+                    WHERE b.result != 'skip'
+                      AND s.podcaster IS NOT NULL AND s.podcaster != ''
+                )
+                SELECT id, summary_id, ticker, asset, direction,
+                       thesis, timeframe_raw,
+                       start_time, end_time, result,
+                       podcaster, source_filename
+                FROM ranked
+                WHERE rn = 1
+                ORDER BY CASE result WHEN 'pass' THEN 0 WHEN 'fail' THEN 1 ELSE 2 END, id DESC
                 LIMIT %s
             """, [limit])
             rows = c.fetchall()
@@ -500,3 +515,11 @@ class GenerateFromPodcastAPIView(APIView):
                 {"detail": "摘要失敗", "error": str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+
+class PodcastImagesAPIView(APIView):
+    """回傳所有節目的封面圖 {show_name: image_url}"""
+    def get(self, request):
+        from apps.podcasts.models import Podcast
+        podcasts = Podcast.objects.using('podcasts').exclude(image_url='').values('show_name', 'image_url')
+        return Response({p['show_name']: p['image_url'] for p in podcasts})

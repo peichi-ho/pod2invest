@@ -1,0 +1,91 @@
+<!-- ═══════════════════════════════════════════════ PAGE: DEEP DIVE ═══ -->
+<div id="page-deep-dive" class="page pt-24 pb-32 px-6 max-w-7xl mx-auto">
+  <header class="mb-12">
+    <button onclick="goBack()" class="flex items-center gap-1 text-secondary font-label text-sm font-semibold mb-6 hover:opacity-70 transition-opacity">
+      <span class="material-symbols-outlined text-base">arrow_back_ios</span>返回
+    </button>
+    <div class="inline-block px-3 py-1 rounded-full bg-secondary-container/30 text-secondary font-label text-xs font-bold tracking-widest uppercase mb-4">Deep Dive Series</div>
+    <h1 id="dd-title" class="font-['Epilogue'] text-2xl md:text-3xl font-bold text-tertiary-container tracking-[-0.02em] leading-snug mb-3">載入中...</h1>
+    <p id="dd-podcaster" class="text-sm text-on-surface-variant font-body mb-8">Extracted from <span class="font-semibold"></span></p>
+    <audio id="dd-audio"></audio>
+    <div class="p-8 md:p-12 rounded-lg bg-tertiary-container text-surface relative overflow-hidden shadow-2xl">
+      <div class="absolute top-0 right-0 w-64 h-64 bg-on-primary-container/10 blur-3xl -mr-20 -mt-20"></div>
+      <p id="dd-one-sentence" class="font-['Epilogue'] text-2xl md:text-3xl font-medium leading-relaxed relative z-10 italic"></p>
+    </div>
+  </header>
+
+  <section class="space-y-6 mb-12">
+    <div class="flex justify-between items-end">
+      <h2 class="font-['Epilogue'] text-3xl font-bold text-tertiary-container">Viewpoint Verification</h2>
+      <div class="flex items-center gap-1.5 text-on-primary-container font-bold text-sm">
+        <span class="material-symbols-outlined text-sm" style="font-variation-settings:'FILL' 1">verified</span>Backtest Wall
+      </div>
+    </div>
+    <div id="dd-viewpoints" class="space-y-4"><p class="text-outline text-sm">載入中...</p></div>
+  </section>
+
+  <div class="space-y-12 mb-20">
+    <section class="space-y-6">
+      <div class="flex justify-between items-end">
+        <h2 class="font-['Epilogue'] text-3xl font-bold text-tertiary-container">Mind Map</h2>
+        <span class="text-secondary font-label text-sm font-semibold">Visualizing Moats</span>
+      </div>
+      <div id="mindmap-container" class="w-full rounded-lg bg-surface-container-low border border-outline-variant/20 overflow-x-auto" style="height: 500px;">
+        <p class="text-outline text-sm p-4">心智圖載入中...</p>
+      </div>
+    </section>
+
+    <section class="space-y-6">
+      <div class="flex items-center justify-between">
+        <h2 class="font-['Epilogue'] text-3xl font-bold text-tertiary-container">Investment Takeaways</h2>
+        <div class="flex gap-2 bg-surface-container-low rounded-full p-1 border border-outline-variant/20">
+          <button id="btn-mode-novice" onclick="switchDdMode('novice')" class="px-5 py-1.5 rounded-full font-label text-xs font-bold tracking-wide transition-all bg-tertiary-container text-white">Novice</button>
+          <button id="btn-mode-pro" onclick="switchDdMode('pro')" class="px-5 py-1.5 rounded-full font-label text-xs font-bold tracking-wide transition-all text-secondary">Pro</button>
+        </div>
+      </div>
+      <div id="dd-takeaways" class="space-y-4"><p class="text-outline text-sm">載入中...</p></div>
+    </section>
+  </div>
+
+  <section class="mb-20">
+    <div class="mb-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <h2 class="font-['Epilogue'] text-4xl font-bold text-tertiary-container">Critical Thesis Points</h2>
+    </div>
+    <div id="dd-audio-player" class="hidden mb-8 p-5 rounded-2xl bg-surface-container-low border border-outline-variant/20">
+      <div class="flex items-center gap-4">
+        <button id="dd-play-btn" onclick="toggleAudioPlay()"
+          class="w-11 h-11 rounded-full bg-on-primary-container text-white flex items-center justify-center flex-shrink-0 hover:scale-105 transition-transform shadow">
+          <span id="dd-play-icon" class="material-symbols-outlined text-xl" style="font-variation-settings:'FILL' 1">play_arrow</span>
+        </button>
+        <div class="flex-1 min-w-0">
+          <p class="text-[11px] font-bold text-outline uppercase tracking-widest mb-1.5">Play Summary Audio</p>
+          <div class="flex justify-between text-[11px] font-bold text-outline mb-1.5">
+            <span id="dd-current-time">0:00</span>
+            <span id="dd-duration">--:--</span>
+          </div>
+          <div id="dd-progress-bar" onclick="seekAudio(event)"
+            class="relative h-2 bg-surface-container-highest rounded-full cursor-pointer group">
+            <div id="dd-progress-fill" class="h-full bg-on-primary-container rounded-full transition-none" style="width:0%"></div>
+            <div id="dd-progress-thumb" class="absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-on-primary-container rounded-full shadow opacity-0 group-hover:opacity-100 transition-opacity" style="left:0%"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div id="dd-arguments" class="space-y-0"><p class="text-outline text-sm">載入中...</p></div>
+  </section>
+
+  <section id="dd-ticker-section" class="mb-20 hidden">
+    <div class="flex items-center gap-3 mb-6">
+      <h2 class="font-['Epilogue'] text-3xl font-bold text-tertiary-container">本集試算標的</h2>
+      <span class="px-3 py-1 rounded-full bg-on-primary-container/10 text-on-primary-container text-[10px] font-bold uppercase tracking-widest">節目提及</span>
+    </div>
+    <div id="dd-ticker-list" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"></div>
+  </section>
+
+  <section>
+    <h2 class="font-['Epilogue'] text-3xl font-bold text-tertiary-container mb-8">Related Recommendations</h2>
+    <div id="dd-related-grid" class="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <p class="text-outline text-sm">載入中...</p>
+    </div>
+  </section>
+</div>

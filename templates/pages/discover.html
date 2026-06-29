@@ -1,0 +1,59 @@
+<!-- ═══════════════════════════════════════════════ PAGE: DISCOVER ═══ -->
+<div id="page-discover" class="page active pt-24 px-6 max-w-5xl mx-auto space-y-10">
+  <section>
+    <div class="relative">
+      <input id="discover-search"
+        oninput="onSearchInput()"
+        onkeydown="onSearchKeydown(event)"
+        autocomplete="off"
+        class="w-full h-14 pl-14 pr-6 bg-surface-container-high rounded-full border-none focus:ring-2 focus:ring-secondary font-body text-on-surface-variant"
+        placeholder="Search insights, podcasts, or tickers..."
+        type="text"/>
+      <span class="material-symbols-outlined absolute left-5 top-1/2 -translate-y-1/2 text-outline">search</span>
+      <div id="search-dropdown" class="hidden absolute top-full left-0 right-0 mt-2 bg-surface-container-high rounded-2xl shadow-xl z-50 overflow-hidden" style="max-height:420px;overflow-y:auto;"></div>
+    </div>
+    <div id="discover-tags" class="flex gap-3 mt-6 overflow-x-auto pb-2 no-scrollbar">
+      <span class="text-outline text-sm self-center">載入中...</span>
+    </div>
+  </section>
+
+  <section id="tag-results-section" class="hidden">
+    <div class="flex justify-between items-end mb-5">
+      <h2 id="tag-results-title" class="text-2xl font-bold tracking-tight text-tertiary-container font-['Epilogue']">關鍵字結果</h2>
+      <button onclick="filterDiscoverByTag(null)" class="flex items-center gap-1 text-secondary text-sm font-semibold hover:opacity-70 transition-opacity">
+        <span class="material-symbols-outlined text-base">close</span>清除
+      </button>
+    </div>
+    <div id="tag-results-list" class="space-y-3"></div>
+  </section>
+
+  <section id="continue-listening-section">
+    <div class="flex justify-between items-end mb-6">
+      <h2 class="text-3xl font-bold tracking-tight text-tertiary-container font-['Epilogue']">Continue Listening</h2>
+      <span class="text-secondary text-sm font-semibold cursor-pointer underline decoration-2 underline-offset-4">View History</span>
+    </div>
+    <div id="continue-listening-card"><p class="text-outline text-sm">載入中...</p></div>
+  </section>
+
+  <section id="verified-insights-section">
+    <div class="flex justify-between items-end mb-6">
+      <h2 class="text-3xl font-bold tracking-tight text-tertiary-container font-['Epilogue']">Verified Insights</h2>
+      <div class="flex items-center gap-2 text-on-primary-container font-bold text-sm">
+        <span class="material-symbols-outlined text-sm" style="font-variation-settings: 'FILL' 1;">verified</span>Backtest Wall
+      </div>
+    </div>
+    <div id="insights-grid" class="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <p class="text-outline text-sm col-span-2">載入中...</p>
+    </div>
+  </section>
+
+  <section id="recommended-section" class="pb-6">
+    <div class="flex justify-between items-end mb-6">
+      <h2 class="text-3xl font-bold tracking-tight text-tertiary-container font-['Epilogue']">Recommended For You</h2>
+      <span class="text-secondary text-sm font-semibold cursor-pointer underline decoration-2 underline-offset-4">See All</span>
+    </div>
+    <div id="recommended-cards" class="flex gap-4 overflow-x-auto pb-4 no-scrollbar -mx-2 px-2">
+      <p class="text-outline text-sm">載入中...</p>
+    </div>
+  </section>
+</div>
