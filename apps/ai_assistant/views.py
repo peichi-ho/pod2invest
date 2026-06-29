@@ -82,20 +82,24 @@ def chat(request):
 
     # 呼叫 AI
     try:
-        answer = answer_user(query, history, user_mode=user_mode)
+        result = answer_user(query, history, user_mode=user_mode)
     except Exception as e:
         return JsonResponse({"ok": False, "error": f"AI error: {e}"}, status=500)
+
+    answer_text = result.get("answer", "")
+    follow_ups = result.get("follow_ups", [])
 
     try:
         # 儲存這輪的 user + assistant 訊息
         Message.objects.create(conversation=conversation, role="user", content=query)
-        Message.objects.create(conversation=conversation, role="assistant", content=answer)
+        Message.objects.create(conversation=conversation, role="assistant", content=answer_text)
     except Exception as e:
         return JsonResponse({"ok": False, "error": f"Save error: {e}"}, status=500)
 
     return JsonResponse({
         "ok": True,
-        "answer": answer,
+        "answer": answer_text,
+        "follow_ups": follow_ups,
         "conversation_id": conversation.pk,
     })
 
