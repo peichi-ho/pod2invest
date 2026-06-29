@@ -486,7 +486,7 @@ def search_podcast_transcript(
 
         return [
             PodcastHit(
-                episode_title=c["topic"] or c["source_filename"] or "",
+                episode_title=c["source_filename"] or c["topic"] or "",
                 publish_date=str(c["published_at"]) if c["published_at"] else "",
                 podcaster=c["podcaster"],
                 episode_number=None,
@@ -790,7 +790,7 @@ class Orchestrator:
         plan = self.plan(user_input, history)
 
         if bool(plan.get("out_of_scope")):
-            return "我是專注於財經領域的 AI 助理，無法回答這個問題。如果您有股票、基金、投資或財經相關的問題，歡迎隨時提問！"
+            return {"answer": "我是專注於財經領域的 AI 助理，無法回答這個問題。如果您有股票、基金、投資或財經相關的問題，歡迎隨時提問！", "follow_ups": []}
 
         use_tools = bool(plan.get("use_tools"))
         actions = plan.get("actions", []) or []
@@ -808,8 +808,17 @@ class Orchestrator:
             4. 若牽涉價格、報酬率、時間點、政策、法規等可能變動資訊，避免假裝精確，改用保守表述。
             5. 不要自稱 AI，不要寫多餘寒暄，不要重述題目。
             6. 若使用者問的是延續前一個話題的問題，請結合對話歷史作答。
+
+            輸出結尾（固定格式，不可省略）：
+            在正文結尾後，換行輸出以下區塊，提供 3 個使用者可能想繼續追問的問題：
+            <FOLLOWUP>
+            1. [問題一]
+            2. [問題二]
+            3. [問題三]
+            </FOLLOWUP>
             """
-            return self.finance_qa_llm(system, user_input, history)
+            raw = self.finance_qa_llm(system, user_input, history)
+            return self._parse_followup(raw)
 
         tool_results = self.run_tools(actions, user_mode=user_mode)
         tool_context = {"user_input": user_input, "tool_results": [asdict(r) for r in tool_results]}
@@ -846,6 +855,14 @@ class Orchestrator:
         - 不要輸出 JSON
         - 不要逐欄翻譯工具結果
         - 不要自稱 AI 或模型
+
+        輸出結尾（固定格式，不可省略）：
+        在正文結尾後，換行輸出以下區塊，提供 3 個使用者可能想繼續追問的問題：
+        <FOLLOWUP>
+        1. [問題一]
+        2. [問題二]
+        3. [問題三]
+        </FOLLOWUP>
         """
 
         user = (
@@ -855,7 +872,21 @@ class Orchestrator:
             f"工具結果 JSON：\n"
             + json.dumps(tool_context, ensure_ascii=False, indent=2)
         )
-        return self.final_llm(system, user, history)
+        raw = self.final_llm(system, user, history)
+        return self._parse_followup(raw)
+
+    @staticmethod
+    def _parse_followup(raw: str) -> Dict[str, Any]:
+        """Split LLM output into answer text and follow-up questions."""
+        m = re.search(r"<FOLLOWUP>(.*?)</FOLLOWUP>", raw or "", re.S)
+        if m:
+            answer = raw[:m.start()].strip()
+            lines = [l.strip() for l in m.group(1).strip().splitlines() if l.strip()]
+            follow_ups = [re.sub(r"^\d+\.\s*", "", l) for l in lines]
+        else:
+            answer = (raw or "").strip()
+            follow_ups = []
+        return {"answer": answer, "follow_ups": follow_ups}
 
     @staticmethod
     def _safe_json_parse(raw: str) -> Dict[str, Any]:
@@ -908,10 +939,9 @@ def get_agent() -> Orchestrator:
     return _agent
 
 
-def answer_user(query: str, history: Optional[List[Dict[str, str]]] = None, user_mode: Optional[str] = None) -> str:
+def answer_user(query: str, history: Optional[List[Dict[str, str]]] = None, user_mode: Optional[str] = None) -> Dict[str, Any]:
     """
     Public entry for Django views.
-    history: [{"role": "user"|"assistant", "content": "..."}]
-    user_mode: "pro" | "novice" — pre-filters podcast search to matching content tier
+    Returns {"answer": str, "follow_ups": list[str]}
     """
     return get_agent().answer(query, history or [], user_mode=user_mode)
