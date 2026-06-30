@@ -85,7 +85,9 @@ function _renderPage(page) {
   const activeBtn = document.getElementById(navId);
   if (activeBtn) { activeBtn.classList.add('active'); activeBtn.classList.remove('opacity-60'); }
 
-  document.getElementById('ai-input-bar').classList.toggle('hidden', page !== 'ai');
+  // Global input bar hidden — AI page has its own inline input
+  document.getElementById('ai-input-bar').classList.add('hidden');
+  if (page === 'ai' && typeof onAiPageShow === 'function') onAiPageShow();
 }
 
 // ── Accuracy cache (shared by discover, rankings, podcaster) ──

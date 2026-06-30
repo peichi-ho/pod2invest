@@ -329,7 +329,7 @@ class AllBacktestingAPIView(APIView):
                 d["end_time"]   = d["end_time"].isoformat()   if d["end_time"]   else None
             return Response(data)
 
-        # 不指定 podcaster：每個節目各取 1 筆最佳記錄（pass/fail 優先於 pending）
+        # 不指定 podcaster：每個節目各取 1 筆最新記錄，優先選還未驗證的（pending）
         from django.db import connections
         with connections["summariesdb"].cursor() as c:
             c.execute("""
@@ -341,7 +341,7 @@ class AllBacktestingAPIView(APIView):
                            ROW_NUMBER() OVER (
                                PARTITION BY s.podcaster
                                ORDER BY
-                                   CASE b.result WHEN 'pass' THEN 0 WHEN 'fail' THEN 1 ELSE 2 END,
+                                   CASE b.result WHEN 'pending' THEN 0 ELSE 1 END,
                                    b.id DESC
                            ) AS rn
                     FROM backtesting b
@@ -355,7 +355,7 @@ class AllBacktestingAPIView(APIView):
                        podcaster, source_filename
                 FROM ranked
                 WHERE rn = 1
-                ORDER BY CASE result WHEN 'pass' THEN 0 WHEN 'fail' THEN 1 ELSE 2 END, id DESC
+                ORDER BY id DESC
                 LIMIT %s
             """, [limit])
             rows = c.fetchall()

@@ -50,6 +50,7 @@
   body { min-height: 100dvh; font-family: 'Manrope', sans-serif; background: #fcf9f0; }
   .page { display: none; animation: fadeIn 0.25s ease; }
   .page.active { display: block; }
+  #page-ai.active { display: flex; }
   @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
   @keyframes slideUp { from { opacity: 0; transform: translateY(40px); } to { opacity: 1; transform: translateY(0); } }
   .animate-slide-up { animation: slideUp 0.25s ease; }
@@ -161,13 +162,13 @@
 </div>
 
 <!-- JS modules -->
-<script src="{% static 'js/app.js' %}"></script>
-<script src="{% static 'js/discover.js' %}"></script>
-<script src="{% static 'js/rankings.js' %}"></script>
-<script src="{% static 'js/deep_dive.js' %}"></script>
-<script src="{% static 'js/calculator.js' %}"></script>
-<script src="{% static 'js/ai.js' %}"></script>
-<script src="{% static 'js/profile.js' %}"></script>
+<script src="{% static 'js/app.js' %}?v=10"></script>
+<script src="{% static 'js/discover.js' %}?v=10"></script>
+<script src="{% static 'js/rankings.js' %}?v=10"></script>
+<script src="{% static 'js/deep_dive.js' %}?v=10"></script>
+<script src="{% static 'js/calculator.js' %}?v=10"></script>
+<script src="{% static 'js/ai.js' %}?v=10"></script>
+<script src="{% static 'js/profile.js' %}?v=10"></script>
 <script>
   calcWealth();
   showPage('discover');
