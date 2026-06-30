@@ -1,5 +1,6 @@
 // ── Continue Listening ────────────────────────────────────────
 let _discCurrentId = null;
+let _hotTagNames = [];  // shared with AI question cards
 
 function renderContinueListening(s) {
   const el = document.getElementById('continue-listening-card');
@@ -177,20 +178,15 @@ async function loadVerifiedInsights() {
       pending: { label: '⏳ 待驗證', border: 'border-outline-variant', badge: 'bg-surface-container text-outline' },
     };
 
-    const sorted = [
-      ...records.filter(r => r.result === 'pass'),
-      ...records.filter(r => r.result === 'fail'),
-      ...records.filter(r => r.result === 'pending'),
-    ].slice(0, 4);
-
-    grid.innerHTML = sorted.map(r => {
+    // 後端已依「最新 + 待驗證優先」排序並每節目取一筆，直接使用
+    grid.innerHTML = records.map(r => {
       const cfg = resultCfg[r.result] || resultCfg.pending;
       const episodeName = (r.source_filename || '').replace(/\.srt$/i, '') || '未知集數';
       const dir = dirLabel[r.direction || 'neutral'] || '觀察';
       const acc = accMap[r.podcaster];
       const accBadge = (acc && acc.total > 0)
-        ? `<span class="text-[10px] font-bold text-secondary ml-3 flex-shrink-0">⚡ ${acc.pct}% 準確率</span>`
-        : '';
+        ? `<span class="text-[10px] font-bold text-secondary ml-3 flex-shrink-0 whitespace-nowrap">⚡ ${acc.pct}% 準確率</span>`
+        : `<span class="text-[10px] font-bold text-outline ml-3 flex-shrink-0 whitespace-nowrap">尚無歷史紀錄</span>`;
       return `
         <div class="bg-surface-container-low p-6 rounded-lg border-l-4 ${cfg.border}">
           <div class="flex justify-between items-start mb-3">
@@ -331,7 +327,11 @@ async function loadHotTags() {
     if (res.ok) {
       const data = await res.json();
       const nodes = data.nodes || [];
-      if (nodes.length) { _renderTagBtns(nodes.map(n => n.name)); return; }
+      if (nodes.length) {
+        _hotTagNames = nodes.map(n => n.name);
+        _renderTagBtns(_hotTagNames);
+        return;
+      }
     }
   } catch { /* fall through */ }
 

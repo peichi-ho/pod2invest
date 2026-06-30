@@ -1,28 +1,49 @@
 <!-- ═══════════════════════════════════════════════ PAGE: AI ASSISTANT ═══ -->
-<div id="page-ai" class="page pt-20 pb-40 min-h-screen max-w-4xl mx-auto px-4">
-  <div class="flex items-center justify-between mb-6">
-    <button onclick="openHistoryDrawer()" class="flex items-center gap-2 px-4 py-2 rounded-full bg-surface-container-low text-on-surface-variant text-sm font-semibold hover:bg-surface-container transition-colors">
-      <span class="material-symbols-outlined text-base">history</span>對話記錄
-    </button>
-    <button onclick="startNewConversation()" class="flex items-center gap-2 px-4 py-2 rounded-full bg-surface-container-low text-on-surface-variant text-sm font-semibold hover:bg-surface-container transition-colors">
-      <span class="material-symbols-outlined text-base">add</span>新對話
-    </button>
+<div id="page-ai" class="page fixed inset-x-0" style="top: 64px; bottom: 72px; z-index: 10;">
+
+  <!-- ── Left Sidebar (absolute overlay) ────────────────── -->
+  <div id="ai-sidebar" class="absolute left-0 top-0 bottom-0 z-20 flex flex-col bg-[#f0ede4] border-r border-outline-variant/20 transition-all duration-300 overflow-hidden" style="width: 240px;">
+    <div class="flex items-center justify-between px-4 py-4 border-b border-outline-variant/20 flex-shrink-0">
+      <span class="font-['Epilogue'] font-bold text-tertiary-container text-sm ai-sidebar-label">AI 投資助理</span>
+      <button onclick="toggleAiSidebar()" class="w-8 h-8 flex items-center justify-center rounded-full hover:bg-surface-container transition-colors flex-shrink-0">
+        <span class="material-symbols-outlined text-outline text-base" id="ai-sidebar-toggle-icon">menu_open</span>
+      </button>
+    </div>
+    <div class="p-3 flex-shrink-0">
+      <button onclick="startNewConversation()" class="w-full flex items-center gap-2 px-3 py-2.5 rounded-xl bg-tertiary-container text-on-tertiary font-['Epilogue'] font-semibold text-sm hover:opacity-90 transition-all active:scale-95 justify-center">
+        <span class="material-symbols-outlined text-sm flex-shrink-0">add</span>
+        <span class="ai-sidebar-label">新對話</span>
+      </button>
+    </div>
+    <div id="ai-history-list" class="flex-1 overflow-y-auto px-2 py-1 space-y-0.5">
+      <p class="text-outline text-xs text-center py-6 ai-sidebar-label">載入中...</p>
+    </div>
   </div>
 
-  <div class="flex flex-col space-y-6" id="chat-messages">
-    <div id="chat-empty-state" class="flex flex-col items-center justify-center py-16 space-y-4">
-      <div class="w-16 h-16 rounded-full bg-secondary-container flex items-center justify-center">
-        <span class="material-symbols-outlined text-on-secondary-container text-3xl">psychology</span>
-      </div>
-      <div class="text-center space-y-1">
-        <h3 class="font-['Epilogue'] font-bold text-xl text-tertiary-container">AI 投資助理</h3>
-        <p class="text-on-surface-variant text-sm">詢問股票、Podcast 重點或投資觀點</p>
-      </div>
-      <div class="flex flex-wrap gap-2 justify-center pt-2">
-        <button onclick="sendQuickAction('台積電最新股價與本益比？')" class="px-4 py-2 rounded-full border border-outline-variant bg-surface-container-lowest text-secondary font-label text-xs font-semibold hover:bg-secondary-container/30 transition-all">台積電股價與本益比</button>
-        <button onclick="sendQuickAction('最新一集Podcast重點摘要')" class="px-4 py-2 rounded-full border border-outline-variant bg-surface-container-lowest text-secondary font-label text-xs font-semibold hover:bg-secondary-container/30 transition-all">最新Podcast摘要</button>
-        <button onclick="sendQuickAction('現在有什麼值得關注的投資機會？')" class="px-4 py-2 rounded-full border border-outline-variant bg-surface-container-lowest text-secondary font-label text-xs font-semibold hover:bg-secondary-container/30 transition-all">近期投資機會</button>
+  <!-- ── Main Content ─────────────────────────────────── -->
+  <!-- 左邊 padding 留給 sidebar，右邊不留白，內容在剩餘空間置中 -->
+  <div id="ai-main" class="w-full h-full flex flex-col" style="padding-left: 240px; padding-right: 0;">
+
+    <!-- Messages -->
+    <div id="chat-messages" class="flex-1 overflow-y-auto flex flex-col py-6 px-4 gap-4 w-full max-w-3xl mx-auto">
+      <div id="chat-empty-state" class="flex-1 flex flex-col items-center justify-center">
+        <p class="text-outline text-sm">載入中...</p>
       </div>
     </div>
+
+    <!-- Input: centered in same padded area -->
+    <div class="flex-shrink-0 py-4 px-4 bg-[#fcf9f0]/90 backdrop-blur-xl">
+      <div class="mx-auto flex items-center gap-3 bg-surface-container-high rounded-full p-2 pl-6 shadow-md" style="max-width: 600px;">
+        <input id="chat-input"
+          class="flex-1 bg-transparent border-none focus:ring-0 text-on-surface font-body text-sm placeholder:text-outline/60"
+          placeholder="Ask about investment strategies..."
+          type="text"
+          onkeydown="if(event.key==='Enter' && !event.isComposing) sendChat()"/>
+        <button onclick="sendChat()" class="bg-[#d97f12] text-white w-10 h-10 rounded-full flex items-center justify-center hover:opacity-90 active:scale-95 transition-all flex-shrink-0">
+          <span class="material-symbols-outlined text-sm" style="font-variation-settings:'FILL' 1">send</span>
+        </button>
+      </div>
+    </div>
+
   </div>
 </div>

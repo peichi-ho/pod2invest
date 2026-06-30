@@ -11,13 +11,11 @@ let _bullUserEdited = false;
 let _bearUserEdited = false;
 
 function _initSimDates() {
-  const today     = new Date();
-  const yesterday = new Date(today);
-  yesterday.setDate(today.getDate() - 1);
-  const oneYearAgo = new Date(yesterday);
-  oneYearAgo.setFullYear(yesterday.getFullYear() - 1);
-  document.getElementById('sim-start-date').value = oneYearAgo.toISOString().slice(0, 10);
-  document.getElementById('sim-end-date').value   = yesterday.toISOString().slice(0, 10);
+  const today      = new Date();
+  const oneYearLater = new Date(today);
+  oneYearLater.setFullYear(today.getFullYear() + 1);
+  document.getElementById('sim-start-date').value = today.toISOString().slice(0, 10);
+  document.getElementById('sim-end-date').value   = oneYearLater.toISOString().slice(0, 10);
 }
 
 _initSimDates();
@@ -227,14 +225,17 @@ function renderScenarioChart(invested, months, bullRate, baseRate, bearRate) {
   const allVals = [...(bullPts || []), ...basePts, ...(bearPts || [])];
   const dataMin = Math.min(...allVals);
   const dataMax = Math.max(...allVals);
-  const dataRange = dataMax - dataMin;
 
-  // Y-axis: ensure minimum visible range = 20% of invested so chart doesn't over-zoom
-  const minRange = invested * 0.20;
-  const visRange = Math.max(dataRange, minRange);
-  const midVal   = (dataMax + dataMin) / 2;
-  const lo = midVal - visRange * 0.6;
-  const hi = midVal + visRange * 0.6;
+  // Y-axis: 上限 = 樂觀情境最終值 +10%，下限 = 保守情境最終值 -10%
+  // 複利曲線單調遞增/遞減，最終值即整條線的極值；若情境值為負則改用加法緩衝避免方向反轉
+  const bullFinal = bullPts ? bullPts[months] : dataMax;
+  const bearFinal = bearPts ? bearPts[months] : dataMin;
+  const margin = (Math.abs(bullFinal) + Math.abs(bearFinal)) * 0.05 || invested * 0.1;
+  let hi = bullFinal >= 0 ? bullFinal * 1.1 : bullFinal - margin;
+  let lo = bearFinal >= 0 ? bearFinal * 0.9 : bearFinal + margin;
+  // 保險：若資料範圍超出上述邊界（極端情況），擴張包住全部資料
+  hi = Math.max(hi, dataMax);
+  lo = Math.min(lo, dataMin);
 
   const toX = n => padL + (n / months) * (W - padL - padR);
   const toY = v => padT + (1 - (v - lo) / (hi - lo)) * (H - padT - padB);
@@ -457,7 +458,9 @@ async function fetchStockInfo() {
   try {
     const startDate = document.getElementById('sim-start-date').value;
     const endDate   = document.getElementById('sim-end-date').value;
-    const url = (startDate && endDate)
+    // 股價走勢圖只能顯示歷史資料；若結束日期落在未來（試算期間），改抓近一年歷史價格
+    const isHistoricalRange = startDate && endDate && new Date(endDate) <= new Date();
+    const url = isHistoricalRange
       ? `/api/calculator/stock-chart/?ticker=${encodeURIComponent(ticker)}&start_date=${startDate}&end_date=${endDate}`
       : `/api/calculator/stock-chart/?ticker=${encodeURIComponent(ticker)}&period=1y`;
 
