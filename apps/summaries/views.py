@@ -343,7 +343,7 @@ class AllBacktestingAPIView(APIView):
                     FROM backtesting b
                     JOIN summaries_summaryrecord s ON b.summary_id = s.id
                     WHERE b.result != 'skip' AND b.start_time < %s
-                    ORDER BY b.id DESC
+                    ORDER BY b.start_time DESC, b.id DESC
                     LIMIT %s
                 """, [before, limit])
             else:
