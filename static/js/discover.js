@@ -2,6 +2,13 @@
 let _discCurrentId = null;
 let _hotTagNames = [];  // shared with AI question cards
 
+// ── Weekly Signals ──────────────────────────────────────────────
+let _signalDir = 'bullish';
+let _signalData = null;
+let _signalRecordsByAssetWeek = {};
+let _signalWeeks = [];
+let _signalWeekIndex = 0;
+
 function renderContinueListening(s) {
   const el = document.getElementById('continue-listening-card');
   if (!s) { el.innerHTML = '<p class="text-outline text-sm">暫無資料</p>'; return; }
@@ -159,56 +166,298 @@ async function loadDiscoverData() {
   } catch(e) { console.error('loadDiscoverData failed', e); }
 }
 
-// ── Verified Insights ─────────────────────────────────────────
+// ── Weekly Signals ─────────────────────────────────────────────
 let currentSummaryId = null;
 
-async function loadVerifiedInsights() {
+function toggleSignalDetail(chipBtn, asset, week, podcaster, event) {
+  if (event) event.stopPropagation();
+  const card = chipBtn.closest('.p-4');
+  const detail = card.querySelector('.signal-detail');
+  const key = `${asset}||${week}`;
+  const allRecords = _signalRecordsByAssetWeek[key] || [];
+  const seen = new Set();
+  const records = allRecords.filter(r => {
+    if (r.podcaster !== podcaster) return false;
+    const k = (r.thesis || '').trim();
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+
+  const isActive = chipBtn.dataset.active === '1';
+  card.querySelectorAll('.podcaster-chip').forEach(c => {
+    c.dataset.active = '';
+    c.classList.remove('bg-secondary', 'text-white', 'border-secondary');
+    c.classList.add('bg-surface-container-low', 'text-on-surface-variant', 'border-outline-variant/30');
+  });
+  if (isActive) { detail.classList.add('hidden'); detail.innerHTML = ''; return; }
+
+  chipBtn.dataset.active = '1';
+  chipBtn.classList.remove('bg-surface-container-low', 'text-on-surface-variant', 'border-outline-variant/30');
+  chipBtn.classList.add('bg-secondary', 'text-white', 'border-secondary');
+
+  const resultCfg = {
+    pass:    { label: '✓ 正確',   color: '#0f6e56', bg: '#e1f5ee' },
+    fail:    { label: '✗ 錯誤',   color: '#993c1d', bg: '#faece7' },
+    pending: { label: '⏳ 待驗證', color: '#717879', bg: '#f0eee5' },
+  };
+  const dirLabel = { bullish: '看多', bearish: '看空', neutral: '觀察' };
+  const acc = (_accuracyCache || {})[podcaster];
+
+  detail.innerHTML = records.map(r => {
+    const cfg = resultCfg[r.result] || resultCfg.pending;
+    const episodeName = (r.source_filename || '').replace(/\.srt$/i, '');
+    const dir = dirLabel[r.direction] || '';
+    return `
+      <div class="bg-surface-container-lowest rounded-xl border border-outline-variant/20 p-4">
+        <div class="flex justify-between items-center mb-2">
+          <span class="text-[10px] font-bold px-2 py-0.5 rounded-full" style="background:${cfg.bg};color:${cfg.color}">${cfg.label}</span>
+          <span class="text-[10px] font-semibold text-outline">${dir}</span>
+        </div>
+        <p class="text-sm font-bold text-tertiary-container font-['Epilogue'] leading-snug mb-2">${r.thesis || ''}</p>
+        <div class="text-[11px] text-outline mb-0.5 truncate" title="${episodeName}">${episodeName}</div>
+        ${acc ? `<div class="text-[11px] font-bold text-secondary mt-1">⚡ ${acc.pct}% 準確率</div>` : ''}
+        <button onclick="openDeepDive(${r.summary_id})" class="mt-3 w-full py-2 bg-on-primary-container text-white rounded-full font-label text-[11px] font-bold uppercase tracking-widest">Read Thesis</button>
+      </div>`;
+  }).join('') || '<p class="text-outline text-xs py-2">此 Podcaster 無驗證句</p>';
+  detail.classList.remove('hidden');
+}
+
+function toggleSingleSource(btn) {
+  const rest = btn.previousElementSibling;
+  const chevron = btn.querySelector('.single-chevron');
+  const label = btn.querySelector('.single-more-label');
+  const isHidden = rest.classList.toggle('hidden');
+  chevron.style.transform = isHidden ? '' : 'rotate(180deg)';
+  if (label) {
+    const count = rest.querySelectorAll(':scope > div').length;
+    label.textContent = isHidden ? `顯示更多（+${count}）` : '收起';
+  }
+}
+
+function setSignalDir(dir) {
+  _signalDir = dir;
+  ['bullish','bearish'].forEach(d => {
+    const btn = document.getElementById(`sig-tab-${d}`);
+    if (!btn) return;
+    const active = d === dir;
+    btn.className = `px-4 py-2 rounded-full text-xs font-bold ${active ? 'bg-tertiary-container text-white' : 'bg-surface-container text-outline'}`;
+  });
+  if (_signalData) renderSignalCards(_signalData);
+}
+
+function shiftSignalWeek(delta) {
+  const next = _signalWeekIndex + delta;
+  if (next < 0 || next >= _signalWeeks.length) return;
+  _signalWeekIndex = next;
+  if (_signalData) renderSignalCards(_signalData);
+}
+
+function renderSignalCards(records) {
+  const grid = document.getElementById('insights-grid');
+  const accMap = _accuracyCache || {};
+
+  function toWeekMon(dateStr) {
+    const d = new Date(dateStr);
+    const day = d.getUTCDay();
+    const diff = day === 0 ? -6 : 1 - day;
+    const mon = new Date(d);
+    mon.setUTCDate(d.getUTCDate() + diff);
+    return mon.toISOString().slice(0, 10);
+  }
+
+  _signalRecordsByAssetWeek = {};
+  for (const r of records) {
+    if (!r.start_time) continue;
+    const week = toWeekMon(r.start_time);
+    const key = `${r.asset}||${week}`;
+    if (!_signalRecordsByAssetWeek[key]) _signalRecordsByAssetWeek[key] = [];
+    if (!_signalRecordsByAssetWeek[key].find(x => x.id === r.id))
+      _signalRecordsByAssetWeek[key].push(r);
+  }
+
+  const weekMap = {};
+  for (const r of records) {
+    if (!r.start_time) continue;
+    const week = toWeekMon(r.start_time);
+    if (!weekMap[week]) weekMap[week] = {};
+    const asset = r.asset || '';
+    if (!weekMap[week][asset]) weekMap[week][asset] = { podcasters: {}, dir: r.direction };
+    const p = r.podcaster || '未知';
+    if (!weekMap[week][asset].podcasters[p]) weekMap[week][asset].podcasters[p] = 0;
+    weekMap[week][asset].podcasters[p]++;
+  }
+
+  const weeks = Object.keys(weekMap).sort().reverse();
+  if (!weeks.length) { grid.innerHTML = '<p class="text-outline text-sm">尚無資料</p>'; return; }
+
+  _signalWeeks = weeks;
+  _signalWeekIndex = Math.min(_signalWeekIndex, weeks.length - 1);
+
+  const prevBtn = document.getElementById('sig-prev-week');
+  const nextBtn = document.getElementById('sig-next-week');
+  if (prevBtn) prevBtn.disabled = _signalWeekIndex >= weeks.length - 1;
+  if (nextBtn) nextBtn.disabled = _signalWeekIndex <= 0;
+
+  const latestWeek = weeks[_signalWeekIndex];
+  const assets = weekMap[latestWeek];
+
+  const weekSun = new Date(latestWeek);
+  weekSun.setUTCDate(weekSun.getUTCDate() + 6);
+  const weekLabel = `${latestWeek} ~ ${weekSun.toISOString().slice(0,10)}`;
+  const el = document.getElementById('signals-week-label');
+  if (el) el.textContent = weekLabel;
+
+  const dirFilter = _signalDir;
+  const filtered = Object.entries(assets).filter(([, d]) => d.dir === dirFilter);
+
+  const allPodcasters = new Set();
+  let consensusCount = 0;
+  for (const [, d] of filtered) {
+    Object.keys(d.podcasters).forEach(p => allPodcasters.add(p));
+    if (Object.keys(d.podcasters).length >= 2) consensusCount++;
+  }
+  const s1 = document.getElementById('stat-total'); if (s1) s1.textContent = filtered.length;
+  const s2 = document.getElementById('stat-consensus'); if (s2) s2.textContent = consensusCount;
+  const s3 = document.getElementById('stat-podcasters'); if (s3) s3.textContent = allPodcasters.size;
+
+  const sorted = filtered.sort((a, b) => Object.keys(b[1].podcasters).length - Object.keys(a[1].podcasters).length);
+  const strongItems = sorted.filter(([, d]) => Object.keys(d.podcasters).length >= 3);
+  const weakItems   = sorted.filter(([, d]) => Object.keys(d.podcasters).length === 2);
+  const singleItems = sorted.filter(([, d]) => Object.keys(d.podcasters).length === 1);
+
+  function renderSingleCard(asset, data) {
+    const podcasters = Object.keys(data.podcasters);
+    const p = podcasters[0];
+    const pct = accMap[p]?.pct;
+    const accBarColor = pct >= 70 ? '#286671' : pct >= 55 ? '#d97f12' : '#c1c8c9';
+    const key = `${asset}||${latestWeek}`;
+    const allRec = _signalRecordsByAssetWeek[key] || [];
+    const seen = new Set();
+    const recs = allRec.filter(r => {
+      if (r.podcaster !== p) return false;
+      const k = (r.thesis || '').trim(); if (seen.has(k)) return false; seen.add(k); return true;
+    });
+    const resultCfg = {
+      pass:    { label: '✓ 正確',   color: '#0f6e56', bg: '#e1f5ee' },
+      fail:    { label: '✗ 錯誤',   color: '#993c1d', bg: '#faece7' },
+      pending: { label: '⏳ 待驗證', color: '#717879', bg: '#f0eee5' },
+    };
+    const thesisHtml = recs.map(r => {
+      const cfg = resultCfg[r.result] || resultCfg.pending;
+      const ep = (r.source_filename || '').replace(/\.srt$/i, '');
+      return `<div class="bg-surface-container-lowest rounded-xl border border-outline-variant/20 p-3 mt-2">
+        <div class="flex justify-between items-center mb-1.5">
+          <span class="text-[10px] font-bold px-2 py-0.5 rounded-full" style="background:${cfg.bg};color:${cfg.color}">${cfg.label}</span>
+        </div>
+        <p class="text-sm font-bold text-tertiary-container font-['Epilogue'] leading-snug mb-1.5">${r.thesis || ''}</p>
+        <div class="text-[11px] text-outline truncate mb-2" title="${ep}">${ep}</div>
+        <button onclick="openDeepDive(${r.summary_id})" class="w-full py-1.5 bg-on-primary-container text-white rounded-full font-label text-[11px] font-bold uppercase tracking-widest">Read Thesis</button>
+      </div>`;
+    }).join('');
+    return `
+      <div class="bg-white rounded-2xl overflow-hidden" style="border-left:3px solid #c1c8c9;border-top:0.5px solid #e5e3d9;border-right:0.5px solid #e5e3d9;border-bottom:0.5px solid #e5e3d9;border-radius:0 1rem 1rem 0;">
+        <div class="p-4">
+          <div class="flex justify-between items-start mb-2">
+            <div class="font-['Epilogue'] font-bold text-[17px] text-on-surface leading-tight">${asset}</div>
+            <span class="text-[11px] px-2.5 py-1 rounded-full bg-surface-container text-outline font-semibold">單一來源</span>
+          </div>
+          <div class="flex items-center gap-2 mb-3">
+            <span class="text-[12px] font-bold text-on-surface-variant">${p}</span>
+            ${pct != null ? `<span class="text-[11px] font-semibold text-secondary">⚡ ${pct}% 準確率</span>` : ''}
+          </div>
+          ${pct != null ? `<div class="h-1 bg-surface-container rounded-full mb-3"><div class="h-full rounded-full" style="width:${pct}%;background:${accBarColor};"></div></div>` : ''}
+          ${thesisHtml}
+        </div>
+      </div>`;
+  }
+
+  function renderCard(asset, data) {
+    const podcasters = Object.keys(data.podcasters);
+    const count = podcasters.length;
+    const isStrong = count >= 3;
+    const borderColor = isStrong ? '#286671' : '#d97f12';
+    const badgeClass = isStrong
+      ? 'bg-secondary-container/40 text-secondary font-bold'
+      : 'bg-[#fff3e0] text-[#854f0b] font-bold';
+    const badgeLabel = isStrong ? '強共識' : '弱共識';
+    const accs = podcasters.map(p => accMap[p]?.pct).filter(v => v != null);
+    const avgAcc = accs.length ? Math.round(accs.reduce((a, b) => a + b, 0) / accs.length) : null;
+    const accBarWidth = avgAcc != null ? avgAcc : 0;
+    const accBarColor = avgAcc >= 70 ? '#286671' : avgAcc >= 55 ? '#d97f12' : '#c1c8c9';
+    const assetKey = asset.replace(/'/g, "\\'");
+    const chips = podcasters.map(p => {
+      const pct = accMap[p]?.pct;
+      return `<button onclick="toggleSignalDetail(this,'${assetKey}','${latestWeek}','${p.replace(/'/g,"\\'")}',event)"
+        class="podcaster-chip text-left text-[11px] font-semibold px-2.5 py-1.5 rounded-xl border border-outline-variant/30 bg-surface-container-low text-on-surface-variant hover:bg-surface-container transition-colors" data-podcaster="${p}">
+        <span class="font-bold">${p}</span>${pct != null ? `<span class="ml-1 opacity-70">${pct}%</span>` : ''}
+      </button>`;
+    }).join('');
+    return `
+      <div class="bg-white rounded-2xl overflow-hidden" style="border-left:3px solid ${borderColor};border-top:0.5px solid #e5e3d9;border-right:0.5px solid #e5e3d9;border-bottom:0.5px solid #e5e3d9;border-radius:0 1rem 1rem 0;">
+        <div class="p-4">
+          <div class="flex justify-between items-start mb-2">
+            <div class="font-['Epilogue'] font-bold text-[17px] text-on-surface leading-tight">${asset}</div>
+            <span class="text-[11px] px-2.5 py-1 rounded-full ${badgeClass}">${badgeLabel}（${count}人）</span>
+          </div>
+          <div class="flex flex-wrap gap-1.5 mb-3">
+            <span class="bg-surface-container text-secondary text-[11px] font-semibold px-2.5 py-1 rounded-full">${count} 人看多</span>
+            ${avgAcc != null ? `<span class="bg-surface-container text-secondary text-[11px] font-semibold px-2.5 py-1 rounded-full">平均準確率 ${avgAcc}%</span>` : ''}
+          </div>
+          <div class="flex flex-wrap gap-1.5 mb-3">${chips}</div>
+          <div class="signal-detail hidden mt-2 space-y-2"></div>
+          ${avgAcc != null ? `
+          <div class="mt-3">
+            <div class="flex justify-between text-[10px] font-bold text-outline mb-1"><span>Podcaster 平均準確率</span><span>${avgAcc}%</span></div>
+            <div class="h-1 bg-surface-container rounded-full"><div class="h-full rounded-full" style="width:${accBarWidth}%;background:${accBarColor};"></div></div>
+          </div>` : ''}
+        </div>
+      </div>`;
+  }
+
+  let html = '';
+  if (strongItems.length) {
+    html += `<div class="text-[11px] font-bold text-outline uppercase tracking-widest mb-2 mt-1">強共識（3人以上）</div>`;
+    html += strongItems.map(([a, d]) => renderCard(a, d)).join('');
+  }
+  if (weakItems.length) {
+    html += `<div class="text-[11px] font-bold text-outline uppercase tracking-widest mb-2 mt-3">弱共識（2人）</div>`;
+    html += weakItems.map(([a, d]) => renderCard(a, d)).join('');
+  }
+  if (singleItems.length) {
+    const SHOW = 3;
+    const visibleHtml = singleItems.slice(0, SHOW).map(([a, d]) => renderSingleCard(a, d)).join('');
+    const restHtml    = singleItems.slice(SHOW).map(([a, d]) => renderSingleCard(a, d)).join('');
+    const hasMore = singleItems.length > SHOW;
+    const sectionLabel = `<div class="text-[11px] font-bold text-outline uppercase tracking-widest mb-2 ${strongItems.length || weakItems.length ? 'mt-3' : 'mt-1'}">單一來源</div>`;
+    html += `
+      <div class="mt-1">
+        ${sectionLabel}
+        <div class="space-y-3">${visibleHtml}</div>
+        ${hasMore ? `
+        <div class="single-source-rest hidden space-y-3 mt-3">${restHtml}</div>
+        <button onclick="toggleSingleSource(this)" class="mt-3 w-full flex items-center justify-center gap-1.5 py-2.5 rounded-xl border border-outline-variant/30 text-xs font-bold text-outline hover:bg-surface-container transition-colors">
+          <span class="single-more-label">顯示更多（+${singleItems.length - SHOW}）</span>
+          <span class="material-symbols-outlined text-sm single-chevron" style="transition:transform 0.2s">expand_more</span>
+        </button>` : ''}
+      </div>`;
+  }
+  if (!html) html = `<p class="text-outline text-sm">本週暫無${dirFilter === 'bullish' ? '看多' : '看空'}訊號</p>`;
+  grid.innerHTML = html;
+}
+
+async function loadWeeklySignals() {
   const grid = document.getElementById('insights-grid');
   try {
-    const res = await fetch('/api/summaries/backtesting/?limit=4');
+    const beforeDate = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
+    const res = await fetch(`/api/summaries/backtesting/?limit=600&before=${beforeDate}`);
     if (!res.ok) throw new Error('network');
     const records = await res.json();
-    if (!records.length) { grid.innerHTML = '<p class="text-outline text-sm">尚無回測資料</p>'; return; }
-
-    const accMap = await _ensureAccuracyCache();
-    const dirLabel  = { bullish: '看多', bearish: '看空', neutral: '觀察' };
-    const resultCfg = {
-      pass:    { label: '✓ 正確',   border: 'border-green-500',        badge: 'bg-green-100 text-green-700' },
-      fail:    { label: '✗ 錯誤',   border: 'border-error',            badge: 'bg-red-100 text-red-700' },
-      pending: { label: '⏳ 待驗證', border: 'border-outline-variant', badge: 'bg-surface-container text-outline' },
-    };
-
-    // 後端已依「最新 + 待驗證優先」排序並每節目取一筆，直接使用
-    grid.innerHTML = records.map(r => {
-      const cfg = resultCfg[r.result] || resultCfg.pending;
-      const episodeName = (r.source_filename || '').replace(/\.srt$/i, '') || '未知集數';
-      const dir = dirLabel[r.direction || 'neutral'] || '觀察';
-      const acc = accMap[r.podcaster];
-      const accBadge = (acc && acc.total > 0)
-        ? `<span class="text-[10px] font-bold text-secondary ml-3 flex-shrink-0 whitespace-nowrap">⚡ ${acc.pct}% 準確率</span>`
-        : `<span class="text-[10px] font-bold text-outline ml-3 flex-shrink-0 whitespace-nowrap">尚無歷史紀錄</span>`;
-      return `
-        <div class="bg-surface-container-low p-6 rounded-lg border-l-4 ${cfg.border}">
-          <div class="flex justify-between items-start mb-3">
-            <div class="px-3 py-1 bg-surface-container-lowest rounded-full text-[10px] font-bold text-tertiary-container uppercase tracking-widest">${r.asset || ''}</div>
-            <div class="flex gap-1.5 items-center">
-              <span class="text-xs font-bold px-2 py-0.5 rounded-full bg-surface-container text-outline">${dir}</span>
-              <span class="text-[10px] font-bold px-2 py-0.5 rounded-full ${cfg.badge}">${cfg.label}</span>
-            </div>
-          </div>
-          <h3 class="text-base font-bold text-tertiary-container mb-3 font-['Epilogue'] leading-snug">${r.thesis || ''}</h3>
-          <div class="flex items-center justify-between mb-4">
-            <div class="min-w-0">
-              <p class="text-[11px] text-outline truncate">${episodeName}</p>
-              <p class="text-sm text-on-surface-variant font-body mt-1.5">來自 <span class="font-semibold">${r.podcaster || '未知節目'}</span></p>
-            </div>
-            ${accBadge}
-          </div>
-          <button onclick="openDeepDive(${r.summary_id})" class="w-full py-2 bg-on-primary-container text-white rounded-full font-label text-xs font-bold uppercase tracking-widest">Read Thesis</button>
-        </div>`;
-    }).join('');
+    await _ensureAccuracyCache();
+    _signalData = records;
+    renderSignalCards(records);
   } catch (e) {
-    console.error('loadVerifiedInsights failed', e);
+    console.error('loadWeeklySignals failed', e);
     grid.innerHTML = '<p class="text-outline text-sm">載入失敗</p>';
   }
 }
