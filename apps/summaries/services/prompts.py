@@ -226,7 +226,9 @@ def json_schema_description(mode: str = "pro", forced_topics: list = None) -> st
       "evidence_timestamps": []
     }}
   ],
-  "outlook_calls": []
+  "outlook_calls": [],
+  "episode_macro": {{"level": "大幅樂觀|樂觀|中性|悲觀|大幅悲觀", "reason": "..."}},
+  "episode_risk": {{"level": "中|高", "reason": "..."}}
 }}
 
 規則：
@@ -260,5 +262,15 @@ def json_schema_description(mode: str = "pro", forced_topics: list = None) -> st
 - classification 各欄位只能從固定白名單中選，不得自創
 - tags 欄位固定輸出 [] 即可，系統後處理會自動根據 classification 生成
 - outlook_calls 欄位先固定輸出 []，後續會由另一個步驟單獨補上
+- episode_macro：根據「總體經濟環境」這個 argument 的內容，判斷 podcaster 對總體經濟的樂觀/悲觀傾向
+  五選一：大幅樂觀 / 樂觀 / 中性 / 悲觀 / 大幅悲觀
+  reason 必須引用內容中至少一個具體關鍵字或事件，不可只是複述等級定義本身
+  若逐字稿沒有「總體經濟環境」這段內容，仍給 {{"level": "中性", "reason": "本集無總體經濟環境段落"}}
+- episode_risk：根據「風險提示」這個 argument 的內容，判斷這一集反映出的市場氛圍短期內可能造成的股價波動程度
+  只能二選一：中 / 高（不要選低，沒有風險提示內容的情況由系統另外處理，不需要你判斷）
+    中：有一些不確定性或分歧看法，但沒有立即衝擊性事件
+    高：明確提到升息/降息轉向、地緣政治衝突、經濟衰退疑慮、資金緊縮、系統性風險等字眼
+  reason 必須引用內容中至少一個具體關鍵字或事件，不可只是複述等級定義本身
+  若逐字稿沒有「風險提示」這段內容，仍給 {{"level": "中", "reason": "本集無風險提示段落"}}（系統會自動覆寫成低，這裡不用糾結）
 
 """

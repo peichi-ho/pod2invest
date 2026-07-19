@@ -52,6 +52,26 @@ def _normalize_timeframe(tf: Any) -> Optional[str]:
     return tf
 
 
+_CALL_RISK_LEVELS = {"低", "中", "高"}
+
+
+def _normalize_call_risk(value: Any) -> dict:
+    """
+    call_risk 只反映『這一筆看法自己』的風險/不確定性，跟整集的 episode_risk
+    是分開的兩件事，見試算頁總經指標設計。缺值或格式錯誤一律回退成低風險。
+    """
+    if not isinstance(value, dict):
+        return {"level": "低", "reason": ""}
+    level = _normalize_text(value.get("level"))
+    if level not in _CALL_RISK_LEVELS:
+        level = "低"
+    return {"level": level, "reason": _normalize_text(value.get("reason"))}
+
+
+def _risk_rank(level: str) -> int:
+    return {"低": 0, "中": 1, "高": 2}.get(level, 0)
+
+
 def _clean_one_call_light(call: dict) -> Optional[dict]:
     """
     第一階段只做格式整理，不做 precision filter。
@@ -82,6 +102,7 @@ def _clean_one_call_light(call: dict) -> Optional[dict]:
         "timeframe": timeframe,
         "evidence_timestamps": evidence_timestamps,
         "evidence_quote": evidence_quote,
+        "call_risk": _normalize_call_risk(call.get("call_risk")),
     }
 
 
@@ -241,6 +262,11 @@ def _merge_two_calls(a: dict, b: dict) -> dict:
         merged["timeframe"] = _normalize_text(other.get("timeframe"))
     if not _normalize_text(merged.get("evidence_quote")):
         merged["evidence_quote"] = _normalize_text(other.get("evidence_quote"))
+
+    # 合併時保守取高風險：兩筆講的是同一個概念，risk 較高的那筆比較不該被蓋掉
+    a_risk = _normalize_call_risk(a.get("call_risk"))
+    b_risk = _normalize_call_risk(b.get("call_risk"))
+    merged["call_risk"] = a_risk if _risk_rank(a_risk["level"]) >= _risk_rank(b_risk["level"]) else b_risk
 
     return merged
 
@@ -415,10 +441,18 @@ def extract_outlook_payload(
         '      "summary_label": "一句讓使用者第一眼看懂的預測摘要，含標的+方向+理由/時間，例如：台積電2026年前看漲，受惠AI伺服器需求擴張",\n'
         '      "timeframe": "例如 2026 / 明年 / 短中期 / 長期，或 null",\n'
         '      "evidence_timestamps": ["5:53"],\n'
-        '      "evidence_quote": "說話者原話，最多 60 字，保留完整句意"\n'
+        '      "evidence_quote": "說話者原話，最多 60 字，保留完整句意",\n'
+        '      "call_risk": {"level": "低|中|高", "reason": "一句話，需引用這筆看法自己的具體內容"}\n'
         "    }\n"
         "  ]\n"
         "}\n\n"
+
+        "【call_risk 判斷規則】\n"
+        "只根據『這一筆 outlook_call 自己的 thesis / evidence_quote』判斷風險/不確定性高低，\n"
+        "不要用逐字稿裡其他地方提到的總體經濟、大盤局勢去評估這筆看法——那是另一個獨立的整集評分，不是這裡要做的事。\n"
+        "低：這筆看法本身語氣篤定，沒有明顯附帶但書或不確定性\n"
+        "中：這筆看法本身有附帶條件、但書，或說話者語氣保留（例如「如果...才會」「短期內仍有壓力」）\n"
+        "高：這筆看法本身明確提到針對這檔標的的具體風險（例如法律訴訟、競爭加劇、財務壓力、股權稀釋）\n\n"
 
         "【抽取流程（務必遵守）】\n"
         "Step1：完整掃描全文，列出所有出現的股票名稱或股票代號到 mentioned_assets。\n"

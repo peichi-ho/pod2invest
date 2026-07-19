@@ -159,7 +159,7 @@ async function loadDeepDive(summaryId) {
           const ticker  = r.ticker || r.asset || '';
           const endDate = r.end_time || '';
           const calcBtn = (ticker && r.result === 'pending')
-            ? `<button onclick="goToCalculatorWithStock('${ticker.replace(/'/g, "\\'")}', '${endDate}')"
+            ? `<button onclick="goToCalculatorWithStock('${ticker.replace(/'/g, "\\'")}', '${endDate}', ${r.id})"
                  class="flex items-center gap-1 px-3 py-1 rounded-full bg-tertiary-container/20 border border-tertiary-container/40 text-tertiary-container text-xs font-bold hover:bg-tertiary-container/30 transition-colors">
                  <span class="material-symbols-outlined text-xs" style="font-variation-settings:'FILL' 1">calculate</span>試算
                </button>`

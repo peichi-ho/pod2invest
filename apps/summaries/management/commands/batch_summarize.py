@@ -119,6 +119,7 @@ class Command(BaseCommand):
                     .values(
                         "arguments", "investment_takeaways",
                         "one_sentence_summary", "tags", "entities", "outlook_calls",
+                        "episode_macro", "episode_risk",
                     )
                     .first()
                 )
@@ -130,6 +131,8 @@ class Command(BaseCommand):
                         "tags": existing_pro["tags"],
                         "entities": existing_pro["entities"],
                         "outlook_calls": existing_pro["outlook_calls"],
+                        "episode_macro": existing_pro["episode_macro"],
+                        "episode_risk": existing_pro["episode_risk"],
                     }
                 success += 1
             else:
