@@ -6,6 +6,7 @@ from typing import Optional, Any
 from google import genai
 
 from .gemini import gemini_generate_with_retry, sanitize_json_text, repair_to_valid_json
+from .outlook import _normalize_call_risk
 
 
 def _append_raw(raw_save_path: Optional[Path], title: str, content: str) -> None:
@@ -103,6 +104,7 @@ def _clean_reviewed_call(call: dict) -> Optional[dict]:
         "summary_label": summary_label,
         "evidence_timestamps": evidence_timestamps,
         "evidence_quote": evidence_quote,
+        "call_risk": _normalize_call_risk(call.get("call_risk")),
     }
 
 
@@ -180,7 +182,9 @@ def consolidate_outlook_payload(
         "1. thesis 要保留完整投資判斷\n"
         "2. evidence_quote 要保留最能代表該 thesis 的句子\n"
         "3. evidence_timestamps 保留 1–4 個代表時間點即可\n"
-        "4. 不要輸出 rejected_calls\n\n"
+        "4. 不要輸出 rejected_calls\n"
+        "5. call_risk：若某筆是單獨保留（沒有跟別筆合併），原封不動照抄該筆原本的 call_risk；\n"
+        "   若合併了多筆，call_risk 選其中風險等級較高的那筆（高>中>低），reason 也用該筆的原因，不要自己重新判斷\n\n"
 
         "【輸出格式】\n"
         "只能輸出合法 JSON：\n"
@@ -193,7 +197,8 @@ def consolidate_outlook_payload(
         '      "thesis": "精煉後的一句完整投資判斷",\n'
         '      "summary_label": "一句讓使用者第一眼看懂的預測摘要，含標的+方向+理由/時間，若 reviewed_calls 已有則直接沿用，否則自行生成",\n'
         '      "evidence_timestamps": ["m:ss"],\n'
-        '      "evidence_quote": "最能代表該 thesis 的說話者原話，最多 60 字"\n'
+        '      "evidence_quote": "最能代表該 thesis 的說話者原話，最多 60 字",\n'
+        '      "call_risk": {"level": "低/中/高，見下方規則", "reason": "見下方規則"}\n'
         "    }\n"
         "  ]\n"
         "}\n\n"

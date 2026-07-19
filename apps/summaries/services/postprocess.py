@@ -50,6 +50,40 @@ def _normalize_evidence_timestamps(values):
     return out
 
 
+_MACRO_LEVELS = {"大幅樂觀", "樂觀", "中性", "悲觀", "大幅悲觀"}
+_RISK_LEVELS = {"低", "中", "高"}
+
+
+def _normalize_episode_macro(value) -> dict:
+    if not isinstance(value, dict):
+        return {"level": "中性", "reason": ""}
+    level = value.get("level") if value.get("level") in _MACRO_LEVELS else "中性"
+    return {"level": level, "reason": (value.get("reason") or "").strip()}
+
+
+def _has_risk_section(arguments: list) -> bool:
+    return any(
+        isinstance(a, dict)
+        and a.get("topic") == "風險提示"
+        and (a.get("summary") or "").strip()
+        for a in arguments
+    )
+
+
+def _normalize_episode_risk(value: dict, arguments: list) -> dict:
+    """
+    沒有「風險提示」段落時，不管 LLM 輸出什麼，一律覆寫成低風險——
+    避免在完全沒有風險相關內容的情況下，還讓 LLM 憑空給出中/高的判斷。
+    """
+    if not _has_risk_section(arguments):
+        return {"level": "低", "reason": "本集無風險提示段落"}
+
+    if not isinstance(value, dict):
+        return {"level": "中", "reason": ""}
+    level = value.get("level") if value.get("level") in ("中", "高") else "中"
+    return {"level": level, "reason": (value.get("reason") or "").strip()}
+
+
 def normalize_schema(summary: dict) -> dict:
     if not isinstance(summary, dict):
         return {}
@@ -262,6 +296,11 @@ def normalize_schema(summary: dict) -> dict:
             return (5, topic)
 
         summary["arguments"] = sorted(merged_args, key=_arg_sort_key)
+
+    summary["episode_macro"] = _normalize_episode_macro(summary.get("episode_macro"))
+    summary["episode_risk"] = _normalize_episode_risk(
+        summary.get("episode_risk"), summary.get("arguments") or []
+    )
 
     oc = summary.get("outlook_calls") or []
     if isinstance(oc, dict):

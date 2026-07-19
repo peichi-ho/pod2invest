@@ -6,6 +6,7 @@ from typing import Optional, Any
 from google import genai
 
 from .gemini import gemini_generate_with_retry, sanitize_json_text, repair_to_valid_json
+from .outlook import _normalize_call_risk
 
 
 def _append_raw(raw_save_path: Optional[Path], title: str, content: str) -> None:
@@ -96,6 +97,7 @@ def _clean_candidate_call(call: dict) -> Optional[dict]:
         "timeframe": timeframe,
         "evidence_timestamps": evidence_timestamps,
         "evidence_quote": evidence_quote,
+        "call_risk": _normalize_call_risk(call.get("call_risk")),
     }
 
 
@@ -266,6 +268,10 @@ def review_outlook_payload(
         "【thesis 欄位】\n"
         "若 valid，請用一句中文概括核心投資判斷，不要只是重複 quote。\n\n"
 
+        "【call_risk 欄位】\n"
+        "候選項目裡已經有 call_risk（{level, reason}），你的工作只是原封不動照抄過去，不要自己重新判斷或修改，\n"
+        "這不是你這階段要審核的東西。\n\n"
+
         "【rejected_calls 的 reason 只能用以下值】\n"
         "- fact_not_outlook\n"
         "- background_not_outlook\n"
@@ -287,7 +293,8 @@ def review_outlook_payload(
         '      "evidence_timestamps": ["m:ss"],\n'
         '      "evidence_quote": "說話者原話，可單獨成立的完整句意，最多 60 字",\n'
         '      "sentence_role": "conclusion / prediction / conditional",\n'
-        '      "verdict": "valid"\n'
+        '      "verdict": "valid",\n'
+        '      "call_risk": {"level": "低/中/高，照抄候選項目原值", "reason": "照抄候選項目原值"}\n'
         "    }\n"
         "  ],\n"
         '  "rejected_calls": [\n'

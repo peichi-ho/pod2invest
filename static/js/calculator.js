@@ -2,6 +2,7 @@
 let riskMultiplier  = 1.0;
 let stockPeriod     = '1y';
 let stockCurrentPrice = 0;
+let stockHistVolatility = 0.25; // annualized σ，查詢個股後由歷史股價重新計算
 let simUnit         = 'year';
 let _chartDebounce  = null;
 let _hostYield      = null;
@@ -9,6 +10,20 @@ let _hostCalcData   = null;
 let _newsCache      = [];
 let _bullUserEdited = false;
 let _bearUserEdited = false;
+let _scenarioContext   = null; // /api/calculator/scenario-context/ 回傳的內容，見 _fetchScenarioContext
+let _anchorBacktestingId = null; // 從深度解析頁點某一集的看法進來時，用來鎖定那一集當依據
+
+// ── Macro/risk 分數 → 情境公式（跟 apps/calculator/services.py 的常數與公式保持一致）──
+const _K_SPREAD = 0.5, _R_MAX = 1.0, _L_MAX = 0.6;
+
+function _computeScenarioRates(base, macroScore, riskScore) {
+  const spread = _K_SPREAD * (1 + _R_MAX * riskScore) * Math.abs(base);
+  const lean = _L_MAX * macroScore;
+  return {
+    bull: +(base + spread * (1 + lean)).toFixed(1),
+    bear: +(base - spread * (1 - lean)).toFixed(1),
+  };
+}
 
 function _initSimDates() {
   const today      = new Date();
@@ -41,6 +56,10 @@ function resetToHostYield() {
 // ── Scenario derive helpers ───────────────────────────────────
 function _deriveScenarios(base) {
   if (base === 0) return { bull: 5, bear: -5 };
+  if (_scenarioContext && _scenarioContext.matched) {
+    const s = _scenarioContext.source;
+    return _computeScenarioRates(base, s.macro_score, s.risk_score);
+  }
   if (base > 0)   return { bull: +(base * 1.5).toFixed(1), bear: +(base * 0.5).toFixed(1) };
   return           { bull: +(base * 0.5).toFixed(1), bear: +(base * 1.5).toFixed(1) };
 }
@@ -203,6 +222,56 @@ function _fmtVal(v) {
   return Math.round(v).toLocaleString();
 }
 
+// ── Volatility helpers ─────────────────────────────────────────
+// 情境波動度倍率：基準情境用歷史波動率原值，樂觀情境波動較收斂、保守情境波動較放大。
+// Phase 2-4 會把 BASE/BEAR 倍率換成從 podcast 總經/風險摘要算出的動態值。
+const SIGMA_MULT_BULL = 0.8;
+const SIGMA_MULT_BASE = 1.0;
+const SIGMA_MULT_BEAR = 1.3;
+
+function _computeAnnualizedVolatility(prices) {
+  if (!prices || prices.length < 3) return 0.25;
+  const rets = [];
+  for (let i = 1; i < prices.length; i++) {
+    const p0 = prices[i - 1].close, p1 = prices[i].close;
+    if (p0 > 0 && p1 > 0) rets.push(Math.log(p1 / p0));
+  }
+  if (rets.length < 2) return 0.25;
+  const mean = rets.reduce((a, b) => a + b, 0) / rets.length;
+  const variance = rets.reduce((a, b) => a + (b - mean) ** 2, 0) / (rets.length - 1);
+  return Math.sqrt(variance) * Math.sqrt(252);
+}
+
+function _hashSeed(str) {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) h = (Math.imul(31, h) + str.charCodeAt(i)) | 0;
+  return h;
+}
+
+// Mulberry32：輕量種子化 PRNG，同樣輸入永遠得到同一組亂數，避免每次重繪圖表亂跳。
+function _mulberry32(seed) {
+  let s = seed | 0;
+  return function () {
+    s = (s + 0x6D2B79F5) | 0;
+    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// Box-Muller：把 [0,1) 均勻亂數轉成標準常態分佈亂數
+function _makeGaussian(rng) {
+  let spare = null;
+  return function () {
+    if (spare != null) { const v = spare; spare = null; return v; }
+    let u, v, s;
+    do { u = rng() * 2 - 1; v = rng() * 2 - 1; s = u * u + v * v; } while (s >= 1 || s === 0);
+    const mul = Math.sqrt(-2 * Math.log(s) / s);
+    spare = v * mul;
+    return u * mul;
+  };
+}
+
 function renderScenarioChart(invested, months, bullRate, baseRate, bearRate) {
   const svg = document.getElementById('scenario-svg');
   svg.innerHTML = '';
@@ -211,23 +280,47 @@ function renderScenarioChart(invested, months, bullRate, baseRate, bearRate) {
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
   const ns = 'http://www.w3.org/2000/svg';
 
-  // Data points: monthly
-  function genPoints(annualRate) {
+  // 三情境共用同一組隨機衝擊（同一檔股票、同一段時間的市場波動），
+  // 差異只在於各情境的年化報酬率（drift）與波動度倍率（sigma）。
+  const ticker = document.getElementById('sim-ticker').value.trim();
+  const startD = document.getElementById('sim-start-date').value;
+  const endD   = document.getElementById('sim-end-date').value;
+  const seed   = _hashSeed(`${ticker}|${startD}|${endD}`);
+  const gaussian = _makeGaussian(_mulberry32(seed));
+  const shocks   = Array.from({ length: months }, () => gaussian());
+
+  // risk_score 越高，這集聽起來越不穩，三情境的波動幅度跟著放大；
+  // 沒有比對到集數時 amplifier 預設 1（Phase 1 原本的固定倍率，行為不變）。
+  const sigmaAmp = (_scenarioContext && _scenarioContext.matched)
+    ? (_scenarioContext.source.sigma_amplifier || 1) : 1;
+
+  // 幾何布朗運動（GBM）月步階模擬：drift 用年化報酬率換算成連續複利率，
+  // 讓多次模擬的期望值仍收斂到輸入的年化報酬率，但單一路徑會有真實股價般的漲跌波動。
+  function genPoints(annualRate, sigmaMult) {
     if (annualRate == null || isNaN(annualRate)) return null;
-    const mr = Math.pow(1 + annualRate / 100, 1 / 12) - 1;
-    return Array.from({ length: months + 1 }, (_, n) => invested * Math.pow(1 + mr, n));
+    const annualSigma  = stockHistVolatility * sigmaMult * sigmaAmp;
+    const monthlySigma = annualSigma / Math.sqrt(12);
+    const monthlyMu    = Math.log(1 + annualRate / 100) / 12;
+    const pts = [invested];
+    let val = invested;
+    for (let n = 0; n < months; n++) {
+      const stepReturn = (monthlyMu - 0.5 * monthlySigma * monthlySigma) + monthlySigma * shocks[n];
+      val *= Math.exp(stepReturn);
+      pts.push(val);
+    }
+    return pts;
   }
 
-  const bullPts = genPoints(bullRate);
-  const basePts = genPoints(baseRate);
-  const bearPts = genPoints(bearRate);
+  const bullPts = genPoints(bullRate, SIGMA_MULT_BULL);
+  const basePts = genPoints(baseRate, SIGMA_MULT_BASE);
+  const bearPts = genPoints(bearRate, SIGMA_MULT_BEAR);
 
   const allVals = [...(bullPts || []), ...basePts, ...(bearPts || [])];
   const dataMin = Math.min(...allVals);
   const dataMax = Math.max(...allVals);
 
-  // Y-axis: 上限 = 樂觀情境最終值 +10%，下限 = 保守情境最終值 -10%
-  // 複利曲線單調遞增/遞減，最終值即整條線的極值；若情境值為負則改用加法緩衝避免方向反轉
+  // Y-axis: 以樂觀/保守情境最終值抓大致範圍（±10%），
+  // 再用下方 dataMax/dataMin 的 clamp 確保 GBM 路徑中間的波動峰谷也完整顯示
   const bullFinal = bullPts ? bullPts[months] : dataMax;
   const bearFinal = bearPts ? bearPts[months] : dataMin;
   const margin = (Math.abs(bullFinal) + Math.abs(bearFinal)) * 0.05 || invested * 0.1;
@@ -476,7 +569,8 @@ async function fetchStockInfo() {
     const last         = prices[prices.length - 1].close;
     const periodReturn = (last / prices[0].close - 1) * 100;
 
-    stockCurrentPrice = last;
+    stockCurrentPrice   = last;
+    stockHistVolatility = _computeAnnualizedVolatility(prices);
     document.getElementById('sim-current-price-display').textContent = 'NT$' + last.toFixed(1);
     document.getElementById('sim-stock-name').textContent = data.name;
     document.getElementById('sim-price-row').classList.remove('hidden');
@@ -489,6 +583,7 @@ async function fetchStockInfo() {
     renderStockChart(data);
     _fetchAndRenderChart(ticker, bestPeriod);
     fetchStockNews(ticker);
+    _fetchScenarioContext(ticker);
   } catch(e) {
     status.textContent = '查詢失敗，請稍後再試';
     status.classList.remove('hidden');
@@ -496,6 +591,73 @@ async function fetchStockInfo() {
     document.getElementById('stock-chart-placeholder').classList.remove('hidden');
     document.getElementById('stock-svg').classList.add('hidden');
   }
+}
+
+// ── 總經/風險情境依據（Phase 2/3） ──────────────────────────────
+async function _fetchScenarioContext(ticker) {
+  _scenarioContext = null;
+  try {
+    let url = `/api/calculator/scenario-context/?ticker=${encodeURIComponent(ticker)}`;
+    if (_anchorBacktestingId) url += `&backtesting_id=${encodeURIComponent(_anchorBacktestingId)}`;
+    const res  = await fetch(url);
+    const data = await res.json();
+    if (res.ok) _scenarioContext = data;
+  } catch (e) {}
+  _renderScenarioContextUI();
+  // 分數會影響樂觀/保守報酬率跟波動度，抓到之後重新算一次目前輸入的基準報酬率
+  onBaseYieldChange();
+}
+
+function _renderScenarioContextUI() {
+  const note      = document.getElementById('scenario-context-note');
+  const textEl    = document.getElementById('scenario-context-text');
+  const anchorEl  = document.getElementById('scenario-anchor-label');
+  const banner    = document.getElementById('scenario-nudge-banner');
+
+  if (!_scenarioContext || !_scenarioContext.matched) {
+    note.classList.add('hidden');
+    banner.classList.add('hidden');
+    return;
+  }
+
+  const s = _scenarioContext.source;
+  const parts = [];
+  if (s.episode_macro && s.episode_macro.reason) parts.push(`總體經濟氛圍：${s.episode_macro.level}（${s.episode_macro.reason}）`);
+  if (s.episode_risk && s.episode_risk.reason) parts.push(`本集風險強度：${s.episode_risk.level}（${s.episode_risk.reason}）`);
+  if (s.call_risk && s.call_risk.reason) parts.push(`「${s.asset}」專屬風險：${s.call_risk.level}（${s.call_risk.reason}）`);
+
+  if (!parts.length) {
+    note.classList.add('hidden');
+  } else {
+    textEl.textContent = parts.join('　');
+    note.classList.remove('hidden');
+  }
+
+  if (s.episode_title) {
+    anchorEl.textContent = `依據：${s.episode_title}`;
+    anchorEl.classList.remove('hidden');
+  } else {
+    anchorEl.classList.add('hidden');
+  }
+
+  const nudge = _scenarioContext.nudge;
+  if (nudge) {
+    document.getElementById('scenario-nudge-text').textContent = nudge.message;
+    banner.classList.remove('hidden');
+  } else {
+    banner.classList.add('hidden');
+  }
+}
+
+function dismissScenarioNudge() {
+  document.getElementById('scenario-nudge-banner').classList.add('hidden');
+}
+
+function viewLatestScenarioContext() {
+  if (!_scenarioContext || !_scenarioContext.nudge) return;
+  _anchorBacktestingId = _scenarioContext.nudge.latest_backtesting_id;
+  const ticker = document.getElementById('sim-ticker').value.trim();
+  if (ticker) _fetchScenarioContext(ticker);
 }
 
 function setStockPeriod(period) {
@@ -733,19 +895,25 @@ function resetCalculator() {
   _bullUserEdited = false;
   _bearUserEdited = false;
   stockCurrentPrice = 0;
+  stockHistVolatility = 0.25;
   _hostYield = null;
   _hostCalcData = null;
+  _scenarioContext = null;
+  _anchorBacktestingId = null;
   document.getElementById('host-yield-reset').classList.add('hidden');
   document.getElementById('host-calc-badge').style.display = 'none';
+  document.getElementById('scenario-context-note').classList.add('hidden');
+  document.getElementById('scenario-nudge-banner').classList.add('hidden');
   _initSimDates();
 }
 
-function goToCalculatorWithStock(stockName, endDate) {
+function goToCalculatorWithStock(stockName, endDate, backtestingId) {
   document.getElementById('sim-yield-base').value = '';
   document.getElementById('sim-yield-bull').value = '';
   document.getElementById('sim-yield-bear').value = '';
   _bullUserEdited = false;
   _bearUserEdited = false;
+  _anchorBacktestingId = backtestingId || null;
   document.getElementById('sim-capital').value  = '';
   document.getElementById('slider-capital').value = '0';
   document.getElementById('results-section').classList.add('hidden');

@@ -8,8 +8,11 @@ from datetime import datetime, timedelta, timezone
 import yfinance as yf
 import requests
 from bs4 import BeautifulSoup
+from django.db.models import Case, When
 from rest_framework.views import APIView
 from rest_framework.response import Response
+
+from .services import compute_macro_risk_scores, sigma_amplifier
 
 try:
     from deep_translator import GoogleTranslator
@@ -901,6 +904,138 @@ class StockChartAPIView(APIView):
 
         except Exception as e:
             return Response({'error': str(e)}, status=500)
+
+
+def _find_best_backtesting_record(ticker: str, asset: str = ""):
+    """
+    Phase 3：幫股票找「最相關一集」。優先選還沒被驗證過的（比較「當下」），
+    其次選最新的。找不到 ticker 完全相符的，退而求其次比對 asset 名稱。
+    """
+    from apps.summaries.models import BacktestingRecord
+
+    qs = BacktestingRecord.objects.using("summariesdb").select_related("summary")
+
+    record = None
+    if ticker:
+        record = (
+            qs.filter(ticker=ticker)
+            .order_by(Case(When(result="pending", then=0), default=1), "-start_time")
+            .first()
+        )
+    if not record and asset:
+        record = (
+            qs.filter(asset=asset)
+            .order_by(Case(When(result="pending", then=0), default=1), "-start_time")
+            .first()
+        )
+    return record
+
+
+def _scores_diverge(anchor_scores: dict, latest_scores: dict, anchor_direction: str, latest_direction: str) -> bool:
+    if (anchor_direction or "").strip().lower() != (latest_direction or "").strip().lower():
+        return True
+    if abs(latest_scores["macro_score"] - anchor_scores["macro_score"]) >= 1.0:
+        return True
+    if abs(latest_scores["risk_score"] - anchor_scores["risk_score"]) >= 0.5:
+        return True
+    return False
+
+
+def _record_to_context(record) -> dict:
+    """把一筆 BacktestingRecord（含其 summary）轉成前端要用的分數/報酬率資訊。"""
+    summary = record.summary
+    episode_macro = (summary.episode_macro if summary else {}) or {}
+    episode_risk = (summary.episode_risk if summary else {}) or {}
+    call_risk = record.call_risk or {}
+
+    scores = compute_macro_risk_scores(
+        episode_macro=episode_macro,
+        episode_risk=episode_risk,
+        direction=record.direction,
+        call_risk=call_risk,
+    )
+
+    episode_title = ""
+    if summary and summary.source_filename:
+        episode_title = re.sub(r"\.srt$", "", summary.source_filename, flags=re.IGNORECASE)
+
+    return {
+        "backtesting_id": record.id,
+        "summary_id": summary.id if summary else None,
+        "episode_title": episode_title,
+        "asset": record.asset,
+        "direction": record.direction,
+        "start_time": record.start_time.isoformat() if record.start_time else None,
+        "result": record.result,
+        "episode_macro": episode_macro,
+        "episode_risk": episode_risk,
+        "call_risk": call_risk,
+        "macro_score": scores["macro_score"],
+        "risk_score": scores["risk_score"],
+    }
+
+
+class ScenarioContextAPIView(APIView):
+    """
+    試算頁總經指標：依股票（或指定的某一筆看法）算出 macro_score/risk_score
+    跟波動度放大倍率。回傳的是分數本身，不是算好的報酬率——樂觀/保守報酬率要
+    依賴使用者當下輸入的基準報酬率，那個數字可能隨時被改動，所以留給前端
+    即時算（同一套 spread/lean 公式），不用每次改基準報酬率都重打一次 API。
+    找不到相關集數時 matched=False，前端應 fallback 回現行固定公式（1.5x/0.5x）
+    跟 Phase 1 預設波動倍率。
+    """
+
+    def get(self, request):
+        query = request.query_params.get("ticker", "").strip()
+        anchor_id = request.query_params.get("backtesting_id", "").strip()
+
+        if not query:
+            return Response({"error": "請輸入股票代號"}, status=400)
+
+        result = _resolve_ticker(query)
+        if isinstance(result, dict):
+            return Response(result, status=400)
+        ticker = result
+
+        from apps.summaries.models import BacktestingRecord
+
+        anchor_record = None
+        if anchor_id:
+            anchor_record = (
+                BacktestingRecord.objects.using("summariesdb")
+                .select_related("summary")
+                .filter(id=anchor_id)
+                .first()
+            )
+
+        if not anchor_record:
+            anchor_record = _find_best_backtesting_record(ticker)
+
+        if not anchor_record:
+            return Response({"matched": False})
+
+        anchor_ctx = _record_to_context(anchor_record)
+        anchor_ctx["sigma_amplifier"] = round(sigma_amplifier(anchor_ctx["risk_score"]), 4)
+
+        # 時間一致性檢查：找這支股票「現在」最新的一筆，跟 anchor 比對
+        latest_record = _find_best_backtesting_record(ticker, asset=anchor_record.asset)
+        nudge = None
+        if latest_record and latest_record.id != anchor_record.id:
+            latest_ctx = _record_to_context(latest_record)
+            if _scores_diverge(anchor_ctx, latest_ctx, anchor_record.direction, latest_record.direction):
+                nudge = {
+                    "message": "這支股票近期還有幾集討論過，看法可能已經改變，要不要看看最新綜合看法？",
+                    "latest_summary_id": latest_ctx["summary_id"],
+                    "latest_backtesting_id": latest_ctx["backtesting_id"],
+                    "latest_episode_title": latest_ctx["episode_title"],
+                }
+
+        return Response({
+            "matched": True,
+            "ticker": ticker,
+            "source": anchor_ctx,
+            "nudge": nudge,
+        })
 
 
 class StockNewsAPIView(APIView):

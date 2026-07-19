@@ -558,6 +558,7 @@ def create_backtesting_rows(
             start_time=start,
             end_time=end_time,
             result=result,
+            call_risk=call.get("call_risk") or {},
         ))
 
     if rows:

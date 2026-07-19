@@ -242,7 +242,7 @@
           <div class="flex items-start justify-between gap-3 mb-4">
             <div>
               <h3 class="font-['Epilogue'] text-xl font-bold text-tertiary-container">情境資產成長模擬</h3>
-              <p class="text-outline text-xs mt-1">以年化報酬率複利計算未來持有市值，不代表實際股價走勢</p>
+              <p class="text-outline text-xs mt-1">依報酬率假設模擬隨機股價波動路徑，短期若波動幅度蓋過報酬率差異，情境順序可能反轉——這正反映真實股票短期報酬的不確定性</p>
             </div>
             <div class="flex flex-col gap-2 items-end shrink-0">
               <div class="flex items-center gap-2">
@@ -265,6 +265,26 @@
           <div id="scenario-range-note" class="hidden mt-3 flex items-center justify-end gap-1 text-xs text-outline/70">
             <span class="material-symbols-outlined" style="font-size:13px">swap_vert</span>
             三情境區間差距：<span id="scenario-range-val" class="font-semibold text-tertiary-container"></span>
+          </div>
+
+          <div id="scenario-context-note" class="hidden mt-3 bg-surface-container-low rounded-lg px-4 py-3 space-y-1.5">
+            <div class="flex items-center gap-2">
+              <span class="material-symbols-outlined text-secondary" style="font-size:15px">auto_awesome</span>
+              <span class="text-xs font-bold text-tertiary-container">情境依據</span>
+              <span id="scenario-anchor-label" class="hidden text-[10px] text-outline/60 font-normal"></span>
+            </div>
+            <p id="scenario-context-text" class="text-xs text-on-surface-variant leading-relaxed"></p>
+          </div>
+
+          <div id="scenario-nudge-banner" class="hidden mt-3 flex items-start gap-2 bg-secondary/10 border border-secondary/30 rounded-lg px-3 py-2.5">
+            <span class="material-symbols-outlined text-sm text-secondary mt-0.5">update</span>
+            <div class="flex-1 text-xs text-on-surface leading-relaxed">
+              <span id="scenario-nudge-text"></span>
+              <button onclick="viewLatestScenarioContext()" class="ml-1 font-bold text-secondary underline hover:no-underline whitespace-nowrap">查看最新看法</button>
+            </div>
+            <button onclick="dismissScenarioNudge()" class="text-outline/50 hover:text-outline shrink-0">
+              <span class="material-symbols-outlined text-sm">close</span>
+            </button>
           </div>
 
         </div>

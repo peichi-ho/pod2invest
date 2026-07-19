@@ -26,6 +26,10 @@ class SummaryRecord(models.Model):
     mind_map = models.JSONField(default=dict, blank=True)
     outlook_calls = models.JSONField(default=list, blank=True)
 
+    # 總經/風險評分：{"level": "...", "reason": "..."}，見試算頁總經指標設計
+    episode_macro = models.JSONField(default=dict, blank=True)
+    episode_risk = models.JSONField(default=dict, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -70,6 +74,9 @@ class BacktestingRecord(models.Model):
     thesis         = models.TextField(blank=True, default="")
     evidence_quote = models.TextField(blank=True, default="")
     target_price   = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+
+    # 這筆看法專屬的風險評分：{"level": "低/中/高", "reason": "..."}，只依據這筆自己的 thesis/evidence_quote 判斷
+    call_risk = models.JSONField(default=dict, blank=True)
 
     # 時間
     start_time = models.DateField(null=True, blank=True)

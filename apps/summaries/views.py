@@ -63,6 +63,8 @@ def _create_single_record(data: dict, *, mode: str,
     entities = data.get("entities", {})
     arguments = data.get("arguments", [])
     outlook_calls = data.get("outlook_calls", [])
+    episode_macro = data.get("episode_macro", {})
+    episode_risk = data.get("episode_risk", {})
     glossary_matches, mind_map = _build_enrichments(data, api_key=api_key)
     record = SummaryRecord.objects.using("summariesdb").create(
         mode=mode,
@@ -78,6 +80,8 @@ def _create_single_record(data: dict, *, mode: str,
         glossary_matches=glossary_matches,
         mind_map=mind_map,
         outlook_calls=outlook_calls,
+        episode_macro=episode_macro,
+        episode_risk=episode_risk,
     )
     create_backtesting_rows(
         summary_record=record,

@@ -14,4 +14,10 @@ class Migration(migrations.Migration):
             field=models.CharField(blank=True, default="", max_length=50),
             preserve_default=False,
         ),
+        migrations.AddField(
+            model_name="tickermap",
+            name="sector",
+            field=models.CharField(blank=True, default="", max_length=30),
+            preserve_default=False,
+        ),
     ]
