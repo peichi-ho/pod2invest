@@ -5,6 +5,8 @@ from django.utils import timezone
 class SummaryRecord(models.Model):
     mode = models.CharField(max_length=20)
     source_filename = models.CharField(max_length=255, blank=True)
+    # 目前沒有程式碼在讀寫這個欄位，保留不動（決定先不清除，之後有需要再處理）
+    model = models.CharField(max_length=100)
     episode = models.ForeignKey(
         "podcasts.PodcastEpisode",
         null=True,
@@ -25,6 +27,12 @@ class SummaryRecord(models.Model):
     glossary_matches = models.JSONField(default=list, blank=True)
     mind_map = models.JSONField(default=dict, blank=True)
     outlook_calls = models.JSONField(default=list, blank=True)
+
+    # 整集籠統的氣氛/風險評估（非個股專屬），格式 {"level": "樂觀"/"中性"/"悲觀", "reason": "..."}
+    # 及 {"level": "低"/"中"/"高", "reason": "..."}。目前計算機功能不會直接拿這兩欄當最終分數，
+    # 只當作個股專屬分類器的背景參考信號。
+    episode_macro = models.JSONField(default=dict, blank=True)
+    episode_risk = models.JSONField(default=dict, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -83,6 +91,9 @@ class BacktestingRecord(models.Model):
     result       = models.CharField(max_length=10, choices=RESULT_CHOICES, default=RESULT_PENDING)
     evaluated_at = models.DateTimeField(null=True, blank=True)
     created_at   = models.DateTimeField(auto_now_add=True)
+
+    # 這筆個股看法（call）專屬的風險評估，格式 {"level": "低"/"中"/"高", "reason": "..."}
+    call_risk = models.JSONField(default=dict, blank=True)
 
     class Meta:
         db_table  = "backtesting"
