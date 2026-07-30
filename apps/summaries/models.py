@@ -130,6 +130,49 @@ class SpeakerAccuracy(models.Model):
         return f"{self.podcaster} [{label}] {acc}"
 
 
+class StockSentimentScore(models.Model):
+    """
+    某一集節目，對某一支股票的 risk_score / macro_score 判斷（試算計算機用）。
+    base / annual_vol 是該股票在這集發布當時的歷史報酬率/波動率，跟分類同時算好存起來，
+    避免每次讀取試算頁面都要重新呼叫 yfinance。
+    樂觀/基準/悲觀情境不存在這裡，由前端/view 用當下的公式參數即時算出。
+    """
+    summary = models.ForeignKey(
+        SummaryRecord,
+        on_delete=models.CASCADE,
+        related_name="stock_sentiment_scores",
+    )
+    episode = models.ForeignKey(
+        "podcasts.PodcastEpisode",
+        null=True, blank=True,
+        on_delete=models.SET_NULL,
+        db_constraint=False,
+        related_name="stock_sentiment_scores",
+    )
+
+    asset_name = models.CharField(max_length=100)
+    ticker     = models.CharField(max_length=20)
+
+    # 該股票在這集發布當時的歷史數字（分類當下算好存起來，不即時查）
+    base       = models.FloatField(null=True, blank=True)
+    annual_vol = models.FloatField(null=True, blank=True)
+
+    # AI 判斷結果
+    macro_score = models.FloatField()
+    risk_score  = models.FloatField()
+    rationale   = models.TextField(blank=True, default="")
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table  = "stock_sentiment_score"
+        app_label = "summaries"
+        unique_together = ("summary", "asset_name")
+
+    def __str__(self):
+        return f"{self.asset_name}({self.ticker}) macro={self.macro_score} risk={self.risk_score}"
+
+
 class TickerMap(models.Model):
     """股票名稱 → Yahoo Finance ticker 對應表"""
     asset_name = models.CharField(max_length=50, unique=True)   # 台積電 / NVDA
