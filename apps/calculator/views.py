@@ -1042,3 +1042,111 @@ class NewsContentAPIView(APIView):
             return Response({'title': title, 'content': content, 'real_url': r.url})
         except Exception:
             return Response({'title': '', 'content': '', 'real_url': url})
+# ── 情境資產成長模擬（試算計算機新功能）───────────────────────────────────────
+# 對應 apps/calculator/services/scenario.py 的已驗證公式 + GBM 模擬。
+# ※ 目前仍是「初步校準版本」：參數已用真實資料校準過，但資料庫只涵蓋約15個月的
+#   AI供應鏈特殊多頭期，尚未涵蓋空頭/盤整市況，之後資料庫累積更長時間需要重新校準。
+
+class StockTimelineAPIView(APIView):
+    """給定 ticker，列出所有已分類過的集數節點（給前端畫時間軸節點用）。"""
+    def get(self, request):
+        ticker = request.query_params.get('ticker', '').strip()
+        if not ticker:
+            return Response({'error': '請提供 ticker'}, status=400)
+
+        from apps.summaries.models import StockSentimentScore
+
+        rows = (
+            StockSentimentScore.objects
+            .using('summariesdb')
+            .filter(ticker=ticker)
+            .select_related('summary')
+            .order_by('summary__published_at')
+        )
+        nodes = [
+            {
+                'score_id': r.id,
+                'summary_id': r.summary_id,
+                'asset_name': r.asset_name,
+                'published_at': r.summary.published_at.date().isoformat() if r.summary.published_at else None,
+                'macro_score': r.macro_score,
+                'risk_score': r.risk_score,
+            }
+            for r in rows
+        ]
+        return Response({'ticker': ticker, 'nodes': nodes})
+
+
+class ScenarioAPIView(APIView):
+    """
+    給定某一筆 StockSentimentScore（score_id），算出樂觀/基準/悲觀情境 + GBM 區間帶資料。
+    只做「當集原始預測」模式；「最新綜合預測」(時間加權) 是獨立的另一個 endpoint。
+    """
+    def get(self, request):
+        score_id = request.query_params.get('score_id', '').strip()
+        if not score_id:
+            return Response({'error': '請提供 score_id'}, status=400)
+
+        from apps.summaries.models import StockSentimentScore
+        from apps.calculator.services.scenario import build_scenario_chart
+
+        try:
+            score = (
+                StockSentimentScore.objects.using('summariesdb')
+                .select_related('summary')
+                .get(id=score_id)
+            )
+        except StockSentimentScore.DoesNotExist:
+            return Response({'error': '找不到這筆分數紀錄'}, status=404)
+
+        if score.base is None or score.annual_vol is None:
+            return Response({'error': '這筆紀錄還沒有歷史股價資料'}, status=422)
+
+        asof_date = score.summary.published_at
+        try:
+            start_price = _fetch_price_asof(score.ticker, asof_date)
+        except Exception as e:
+            return Response({'error': f'抓不到 {score.ticker} 當時的股價: {e}'}, status=502)
+
+        chart = build_scenario_chart(
+            base=score.base,
+            annual_vol=score.annual_vol,
+            risk_score=score.risk_score,
+            macro_score=score.macro_score,
+            start_price=start_price,
+            seed=score.id,  # 同一筆分數每次呼叫畫出來的示範線一致，不會每次刷新都亂跳
+        )
+
+        return Response({
+            'asset_name': score.asset_name,
+            'ticker': score.ticker,
+            'published_at': asof_date.date().isoformat() if asof_date else None,
+            'base': score.base,
+            'annual_vol': score.annual_vol,
+            'macro_score': score.macro_score,
+            'risk_score': score.risk_score,
+            'rationale': score.rationale,
+            'start_price': start_price,
+            'scenario_returns': {
+                'bull': chart.returns.bull,
+                'base': chart.returns.base,
+                'bear': chart.returns.bear,
+            },
+            'months': chart.months,
+            'bull_line': chart.bull_line,
+            'base_line': chart.base_line,
+            'bear_line': chart.bear_line,
+            'base_band_low': chart.base_band_low,
+            'base_band_high': chart.base_band_high,
+            'is_preliminary_calibration': True,  # 前端要用這個標示「初步校準版本」
+        })
+
+
+def _fetch_price_asof(ticker: str, asof_date) -> float:
+    """抓某支股票在指定日期當天（或最近的前一個交易日）的收盤價。"""
+    start = (asof_date - timedelta(days=7)).date().isoformat()
+    end = (asof_date + timedelta(days=1)).date().isoformat()
+    hist = yf.Ticker(ticker).history(start=start, end=end, auto_adjust=True)
+    if hist.empty:
+        raise ValueError('查無股價資料')
+    return float(hist['Close'].iloc[-1])
