@@ -1142,6 +1142,78 @@ class ScenarioAPIView(APIView):
         })
 
 
+class WeightedScenarioAPIView(APIView):
+    """
+    「最新綜合預測」模式：base/annual_vol/start_price 維持選定那一集的真實數字，
+    macro_score/risk_score 改用「這一集到最新一集之間，所有討論過這支股票的集數」
+    時間加權算出來的綜合值，代入跟 ScenarioAPIView 完全相同的公式 + GBM 邏輯。
+    """
+    def get(self, request):
+        score_id = request.query_params.get('score_id', '').strip()
+        if not score_id:
+            return Response({'error': '請提供 score_id'}, status=400)
+
+        from apps.summaries.models import StockSentimentScore
+        from apps.calculator.services.scenario import build_scenario_chart, compute_time_weighted_scores
+
+        try:
+            score = (
+                StockSentimentScore.objects.using('summariesdb')
+                .select_related('summary')
+                .get(id=score_id)
+            )
+        except StockSentimentScore.DoesNotExist:
+            return Response({'error': '找不到這筆分數紀錄'}, status=404)
+
+        if score.base is None or score.annual_vol is None:
+            return Response({'error': '這筆紀錄還沒有歷史股價資料'}, status=422)
+
+        selected_date = score.summary.published_at.date()
+        weighted = compute_time_weighted_scores(score.ticker, selected_date)
+        if not weighted:
+            return Response({'error': '找不到可加權的集數'}, status=422)
+
+        try:
+            start_price = _fetch_price_asof(score.ticker, score.summary.published_at)
+        except Exception as e:
+            return Response({'error': f'抓不到 {score.ticker} 當時的股價: {e}'}, status=502)
+
+        chart = build_scenario_chart(
+            base=score.base,
+            annual_vol=score.annual_vol,
+            risk_score=weighted['risk_score'],
+            macro_score=weighted['macro_score'],
+            start_price=start_price,
+            seed=score.id,
+        )
+
+        return Response({
+            'asset_name': score.asset_name,
+            'ticker': score.ticker,
+            'published_at': selected_date.isoformat(),
+            'base': score.base,
+            'annual_vol': score.annual_vol,
+            'macro_score': weighted['macro_score'],
+            'risk_score': weighted['risk_score'],
+            'n_episodes': weighted['n_episodes'],
+            'latest_date': weighted['latest_date'],
+            'top_contributors': weighted['top_contributors'],
+            'start_price': start_price,
+            'scenario_returns': {
+                'bull': chart.returns.bull,
+                'base': chart.returns.base,
+                'bear': chart.returns.bear,
+            },
+            'months': chart.months,
+            'bull_line': chart.bull_line,
+            'base_line': chart.base_line,
+            'bear_line': chart.bear_line,
+            'base_band_low': chart.base_band_low,
+            'base_band_high': chart.base_band_high,
+            'is_preliminary_calibration': True,
+        })
+
+
 def _fetch_price_asof(ticker: str, asof_date) -> float:
     """抓某支股票在指定日期當天（或最近的前一個交易日）的收盤價。"""
     start = (asof_date - timedelta(days=7)).date().isoformat()

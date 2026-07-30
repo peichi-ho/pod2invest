@@ -72,6 +72,62 @@ def _percentile(values: list[float], pct: float) -> float:
     return values[lo] * (1 - frac) + values[hi] * frac
 
 
+HALF_LIFE_DAYS = 90  # 時間加權半衰期，已用真實資料驗證過（見Step D），對結果不算敏感
+
+
+def compute_time_weighted_scores(ticker: str, selected_date, latest_date=None, half_life_days: float = HALF_LIFE_DAYS):
+    """
+    「最新綜合預測」模式：從 selected_date 這一集到 latest_date(預設=資料庫裡這支股票最新一集)
+    之間，所有討論過這支股票的集數，依照『距離 latest_date 多久』做半衰期加權平均。
+
+    只回傳 macro_score / risk_score 的加權結果；base/annual_vol/start_price 不在這裡處理，
+    維持使用者選定那一集自己的真實數字（呼叫端負責帶入，不要被這個函式的結果覆蓋）。
+    """
+    from apps.summaries.models import StockSentimentScore
+
+    rows = list(
+        StockSentimentScore.objects.using("summariesdb")
+        .filter(ticker=ticker)
+        .select_related("summary")
+        .order_by("summary__published_at")
+    )
+    eligible = [r for r in rows if r.summary.published_at and r.summary.published_at.date() >= selected_date]
+    if not eligible:
+        return None
+
+    if latest_date is None:
+        latest_date = max(r.summary.published_at.date() for r in eligible)
+
+    weighted_items = []
+    total_w = 0.0
+    weighted_macro = 0.0
+    weighted_risk = 0.0
+    for r in eligible:
+        pub_date = r.summary.published_at.date()
+        days_ago = (latest_date - pub_date).days
+        w = 0.5 ** (days_ago / half_life_days)
+        total_w += w
+        weighted_macro += w * r.macro_score
+        weighted_risk += w * r.risk_score
+        weighted_items.append({
+            "summary_id": r.summary_id,
+            "published_at": pub_date.isoformat(),
+            "weight": w,
+            "macro_score": r.macro_score,
+            "risk_score": r.risk_score,
+        })
+
+    weighted_items.sort(key=lambda x: -x["weight"])
+
+    return {
+        "macro_score": weighted_macro / total_w,
+        "risk_score": weighted_risk / total_w,
+        "n_episodes": len(eligible),
+        "latest_date": latest_date.isoformat(),
+        "top_contributors": weighted_items[:3],  # 給前端「主要影響節目」用
+    }
+
+
 @dataclass
 class ScenarioChartData:
     months: list[int]
