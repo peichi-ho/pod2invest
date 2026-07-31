@@ -614,6 +614,7 @@ function renderStockChart(data) {
   histEl.textContent = (annualizedReturn >= 0 ? '+' : '') + annualizedReturn + '%';
   histEl.className   = `font-['Epilogue'] font-bold text-lg ${annualizedReturn >= 0 ? 'text-[#286671]' : 'text-[#ba1a1a]'}`;
   document.getElementById('stock-info').classList.remove('hidden');
+  document.getElementById('stock-data-asof').textContent = '資料更新至 ' + prices[n - 1].date;
 }
 
 // ── Stock news ────────────────────────────────────────────────

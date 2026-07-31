@@ -894,7 +894,11 @@ class StockChartAPIView(APIView):
             data = [
                 {'date': date.strftime('%Y-%m-%d'), 'close': round(float(row['Close']), 2)}
                 for date, row in hist.iterrows()
+                if row['Close'] == row['Close']  # 排除 NaN（NaN != NaN），yfinance 最新一日資料常尚未補齊
             ]
+
+            if not data:
+                return Response({'error': f'「{query}」目前無有效股價資料，請稍後再試'}, status=404)
 
             name = _get_display_name(ticker)
             return Response({'ticker': ticker, 'name': name, 'data': data})
@@ -1042,6 +1046,8 @@ class NewsContentAPIView(APIView):
             return Response({'title': title, 'content': content, 'real_url': r.url})
         except Exception:
             return Response({'title': '', 'content': '', 'real_url': url})
+
+
 # ── 情境資產成長模擬（試算計算機新功能）───────────────────────────────────────
 # 對應 apps/calculator/services/scenario.py 的已驗證公式 + GBM 模擬。
 # ※ 目前仍是「初步校準版本」：參數已用真實資料校準過，但資料庫只涵蓋約15個月的
