@@ -298,6 +298,7 @@ class AllBacktestingAPIView(APIView):
     def get(self, request):
         limit = int(request.query_params.get("limit", 300))
         podcaster = request.query_params.get("podcaster", "").strip()
+        before = request.query_params.get("before", "").strip()
 
         qs = BacktestingRecord.objects.using("summariesdb").exclude(
             result="skip"
@@ -329,35 +330,50 @@ class AllBacktestingAPIView(APIView):
                 d["end_time"]   = d["end_time"].isoformat()   if d["end_time"]   else None
             return Response(data)
 
-        # 不指定 podcaster：每個節目各取 1 筆最新記錄，優先選還未驗證的（pending）
+        # 不指定 podcaster
         from django.db import connections
         with connections["summariesdb"].cursor() as c:
-            c.execute("""
-                WITH ranked AS (
+            if before:
+                # Weekly Signals：回傳指定日期前的完整紀錄（同一節目可有多筆），供跨節目共識計算使用
+                c.execute("""
                     SELECT b.id, b.summary_id, b.ticker, b.asset, b.direction,
                            b.thesis, b.timeframe_raw,
                            b.start_time, b.end_time, b.result,
-                           s.podcaster, s.source_filename,
-                           ROW_NUMBER() OVER (
-                               PARTITION BY s.podcaster
-                               ORDER BY
-                                   CASE b.result WHEN 'pending' THEN 0 ELSE 1 END,
-                                   b.id DESC
-                           ) AS rn
+                           s.podcaster, s.source_filename
                     FROM backtesting b
                     JOIN summaries_summaryrecord s ON b.summary_id = s.id
-                    WHERE b.result != 'skip'
-                      AND s.podcaster IS NOT NULL AND s.podcaster != ''
-                )
-                SELECT id, summary_id, ticker, asset, direction,
-                       thesis, timeframe_raw,
-                       start_time, end_time, result,
-                       podcaster, source_filename
-                FROM ranked
-                WHERE rn = 1
-                ORDER BY id DESC
-                LIMIT %s
-            """, [limit])
+                    WHERE b.result != 'skip' AND b.start_time < %s
+                    ORDER BY b.start_time DESC, b.id DESC
+                    LIMIT %s
+                """, [before, limit])
+            else:
+                # 每個節目各取 1 筆最新記錄，優先選還未驗證的（pending）
+                c.execute("""
+                    WITH ranked AS (
+                        SELECT b.id, b.summary_id, b.ticker, b.asset, b.direction,
+                               b.thesis, b.timeframe_raw,
+                               b.start_time, b.end_time, b.result,
+                               s.podcaster, s.source_filename,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY s.podcaster
+                                   ORDER BY
+                                       CASE b.result WHEN 'pending' THEN 0 ELSE 1 END,
+                                       b.id DESC
+                               ) AS rn
+                        FROM backtesting b
+                        JOIN summaries_summaryrecord s ON b.summary_id = s.id
+                        WHERE b.result != 'skip'
+                          AND s.podcaster IS NOT NULL AND s.podcaster != ''
+                    )
+                    SELECT id, summary_id, ticker, asset, direction,
+                           thesis, timeframe_raw,
+                           start_time, end_time, result,
+                           podcaster, source_filename
+                    FROM ranked
+                    WHERE rn = 1
+                    ORDER BY id DESC
+                    LIMIT %s
+                """, [limit])
             rows = c.fetchall()
         cols = ["id","summary_id","ticker","asset","direction","thesis",
                 "timeframe_raw","start_time","end_time","result",

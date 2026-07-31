@@ -15,7 +15,7 @@ sys.path.append(str(BASE_DIR / "apps"))
 
 # 改寫 SECRET_KEY 與 DEBUG
 SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'django-insecure-預設字串請在.env中覆蓋')
-DEBUG = os.getenv('DJANGO_DEBUG', 'True') == 'True'
+DEBUG = os.getenv('DJANGO_DEBUG', 'True').strip().lower() in ('1', 'true')
 ALLOWED_HOSTS = os.getenv("DJANGO_ALLOWED_HOSTS", "127.0.0.1,localhost").split(",")
 
 # Gemini / AI Assistant settings
