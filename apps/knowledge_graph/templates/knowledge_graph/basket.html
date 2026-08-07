@@ -1,0 +1,475 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>投資探索</title>
+<link href="https://fonts.googleapis.com/css2?family=Epilogue:wght@400;500;700;800&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          "on-error-container": "#93000a","on-error": "#ffffff","surface-tint": "#8d4f00",
+          "tertiary-fixed-dim": "#abccd1","on-primary-fixed": "#2d1600","on-tertiary-fixed-variant": "#2c4c50",
+          "on-primary-fixed-variant": "#6b3b00","on-secondary": "#ffffff","secondary": "#286671",
+          "on-tertiary-container": "#7a9b9f","on-primary-container": "#d97f12","error": "#ba1a1a",
+          "surface-dim": "#dcdad1","surface-container-highest": "#e5e3d9","surface-container-high": "#eae8df",
+          "inverse-surface": "#31312b","on-tertiary-fixed": "#001f23","on-surface-variant": "#414849",
+          "surface-container": "#f0eee5","inverse-primary": "#ffb875","tertiary-fixed": "#c7e9ed",
+          "secondary-fixed": "#b0ecf9","on-surface": "#1c1c16","surface-variant": "#e5e3d9",
+          "outline": "#717879","tertiary-container": "#113236","inverse-on-surface": "#f3f1e7",
+          "surface-container-lowest": "#ffffff","on-secondary-container": "#2f6d78","on-primary": "#ffffff",
+          "secondary-container": "#b0ecf9","error-container": "#ffdad6","on-secondary-fixed": "#001f25",
+          "on-secondary-fixed-variant": "#024e59","background": "#fcf9f0","on-tertiary": "#ffffff",
+          "primary": "#291300","primary-fixed": "#ffdcc0","surface-container-low": "#f6f4ea",
+          "surface-bright": "#fcf9f0","primary-fixed-dim": "#ffb875","surface": "#fcf9f0",
+          "tertiary": "#001d20","on-background": "#1c1c16","primary-container": "#472500",
+          "outline-variant": "#c1c8c9","secondary-fixed-dim": "#95d0dc"
+        },
+        fontFamily: { "headline": ["Epilogue"], "body": ["Manrope"], "label": ["Manrope"] },
+        borderRadius: {"DEFAULT": "1rem", "lg": "2rem", "xl": "3rem", "full": "9999px"},
+      },
+    },
+  }
+</script>
+<style>
+  .material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+  body { font-family: 'Manrope', sans-serif; }
+  .dot { width: 6px; height: 6px; border-radius: 9999px; }
+  #detail-overlay { transition: opacity .25s ease; }
+  #detail-panel { transition: transform .3s ease; }
+  .purpose-card.active, .tier-card.active {
+    border-color: #113236; background: #eef4f4;
+  }
+  .purpose-card.active .card-icon, .tier-card.active .card-icon { color: #113236; }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-thumb { background: #c1c8c9; border-radius: 9999px; }
+</style>
+</head>
+<body class="bg-background text-on-background min-h-screen pb-24">
+<div class="max-w-6xl mx-auto px-6 py-10">
+
+  <!-- 標題 -->
+  <div class="flex items-start justify-between gap-4 mb-8">
+    <div>
+      <h1 id="page-title" class="font-headline font-extrabold text-3xl text-tertiary-container tracking-tight">探索投資機會</h1>
+      <p class="text-on-surface-variant text-sm mt-1">從 Podcast 討論與財務數據中，發掘值得關注的標的</p>
+    </div>
+    <button class="flex-shrink-0 flex items-center gap-1.5 px-4 py-2 rounded-full border border-outline-variant text-tertiary-container text-sm font-semibold hover:bg-surface-container transition-colors">
+      <span class="material-symbols-outlined text-base">help</span>使用教學
+    </button>
+  </div>
+
+  <!-- 查詢表單 -->
+  <div class="bg-surface-container-low border border-outline-variant/40 rounded-xl p-6 mb-8">
+
+    <label class="block text-sm font-semibold text-on-surface mb-2" for="seed-input">查詢標的</label>
+    <div class="relative mb-6">
+      <input id="seed-input" type="text" placeholder="例如：台積電、NVIDIA"
+        class="w-full bg-surface-container-lowest border border-outline-variant rounded-lg pl-4 pr-10 py-3 text-on-surface text-sm outline-none focus:border-tertiary-container transition-colors">
+      <button onclick="clearSeed()" class="absolute right-3 top-1/2 -translate-y-1/2 text-outline hover:text-on-surface">
+        <span class="material-symbols-outlined text-lg">close</span>
+      </button>
+    </div>
+
+    <div class="flex items-center gap-1.5 mb-3">
+      <span class="text-sm font-semibold text-on-surface">選擇關係類型</span>
+      <span class="material-symbols-outlined text-outline text-base" title="決定要從哪個角度找相關標的">info</span>
+    </div>
+    <div id="purpose-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-6"></div>
+
+    <div class="flex items-center gap-1.5 mb-3">
+      <span class="text-sm font-semibold text-on-surface">選擇投資類型</span>
+      <span class="material-symbols-outlined text-outline text-base" title="決定財務體質篩選的嚴格程度">info</span>
+    </div>
+    <div id="tier-grid" class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6"></div>
+
+    <div class="flex flex-wrap items-center gap-4 text-xs text-on-surface-variant mb-6 pt-2 border-t border-outline-variant/30">
+      <div class="flex items-center gap-2 pt-3">
+        <span>時間窗口</span>
+        <select id="window-days" class="bg-surface-container-lowest border border-outline-variant rounded-md text-xs px-2 py-1 outline-none">
+          <option value="14">14 天</option>
+          <option value="30" selected>30 天</option>
+          <option value="60">60 天</option>
+        </select>
+      </div>
+      <div class="flex items-center gap-2 pt-3">
+        <span>截止日</span>
+        <input type="date" id="end-date" class="bg-surface-container-lowest border border-outline-variant rounded-md text-xs px-2 py-1 outline-none">
+      </div>
+    </div>
+
+    <button id="run-btn" onclick="run()"
+      class="w-full py-3 rounded-lg bg-tertiary-container text-on-tertiary font-headline font-bold text-sm hover:opacity-90 active:scale-[.99] transition-all disabled:opacity-40">
+      查詢相關標的
+    </button>
+    <div id="status" class="hidden text-xs text-secondary mt-3"></div>
+    <div id="error" class="hidden text-xs text-error mt-3"></div>
+  </div>
+
+  <!-- 結果 -->
+  <div id="results" class="hidden">
+    <div class="flex items-center justify-between mb-3">
+      <h2 id="result-title" class="font-headline font-bold text-lg text-on-surface"></h2>
+      <span class="text-xs text-on-surface-variant">排序方式：綜合相關度</span>
+    </div>
+
+    <div class="mb-4 overflow-x-auto">
+      <div id="funnel" class="flex items-center gap-0 w-max pb-1"></div>
+    </div>
+
+    <div class="flex flex-wrap gap-x-5 gap-y-1 text-[11px] text-on-surface-variant mb-5 bg-surface-container-low border border-outline-variant/30 rounded-lg px-4 py-2.5">
+      <span><b class="text-on-surface">提及次數</b>：在所選時間窗口內被提及的總次數</span>
+      <span><b class="text-on-surface">Podcast 數</b>：提及該標的的不同 Podcast 數量</span>
+      <span><b class="text-on-surface">財務驗證</b>：F-score 檢查表通過的項目數</span>
+    </div>
+
+    <div id="basket-grid" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
+  </div>
+</div>
+
+<!-- 詳情面板 -->
+<div id="detail-overlay" class="hidden fixed inset-0 bg-black/30 z-40" onclick="closeDetail()"></div>
+<div id="detail-panel" class="fixed top-0 right-0 h-full w-full max-w-md bg-surface z-50 shadow-2xl translate-x-full overflow-y-auto">
+  <div id="detail-body" class="p-6"></div>
+</div>
+
+<script>
+let selectedPurpose = null;
+let selectedTier = "均衡";
+let lastData = null;
+
+const TIER_OPTIONS = [
+  { key: "積極", label: "積極型", desc: "成長導向，高風險高報酬" },
+  { key: "均衡", label: "穩健型", desc: "平衡風險與報酬" },
+  { key: "保守", label: "保守型", desc: "防禦導向，穩定現金流" },
+];
+
+const PURPOSE_ICONS = {
+  supply_beneficiary: "upload",
+  supply_customer: "download",
+  diversify_exposure: "swords",
+  same_theme: "hub",
+};
+
+(async () => {
+  try {
+    const d = await (await fetch("/api/knowledge-graph/basket-purposes/")).json();
+    const grid = document.getElementById("purpose-grid");
+    (d.purposes || []).forEach((p, i) => {
+      const el = document.createElement("div");
+      el.className = "purpose-card cursor-pointer rounded-lg border-2 border-outline-variant/50 bg-surface-container-lowest p-4 hover:border-outline transition-colors";
+      el.dataset.key = p.key;
+      el.innerHTML = `
+        <span class="card-icon material-symbols-outlined text-2xl text-on-surface-variant">${PURPOSE_ICONS[p.key] || "category"}</span>
+        <div class="font-semibold text-sm text-on-surface mt-2">${esc(p.label)}</div>
+        <div class="text-[11px] text-on-surface-variant mt-0.5 leading-snug">${esc(p.description)}</div>
+      `;
+      el.onclick = () => selectPurpose(p.key);
+      grid.appendChild(el);
+      if (i === 0) selectPurpose(p.key);
+    });
+  } catch (e) {
+    showError("投資目的載入失敗：" + e.message);
+  }
+
+  const tierGrid = document.getElementById("tier-grid");
+  TIER_OPTIONS.forEach(t => {
+    const el = document.createElement("div");
+    el.className = "tier-card cursor-pointer rounded-lg border-2 border-outline-variant/50 bg-surface-container-lowest p-4 text-center hover:border-outline transition-colors";
+    el.dataset.key = t.key;
+    el.innerHTML = `
+      <div class="font-semibold text-sm text-on-surface">${t.label}</div>
+      <div class="text-[11px] text-on-surface-variant mt-0.5">${t.desc}</div>
+    `;
+    el.onclick = () => selectTier(t.key);
+    tierGrid.appendChild(el);
+  });
+  selectTier("均衡");
+
+  document.getElementById("end-date").value = new Date().toISOString().split("T")[0];
+})();
+
+function selectPurpose(key) {
+  selectedPurpose = key;
+  document.querySelectorAll(".purpose-card").forEach(el => el.classList.toggle("active", el.dataset.key === key));
+}
+
+function selectTier(key) {
+  selectedTier = key;
+  document.querySelectorAll(".tier-card").forEach(el => el.classList.toggle("active", el.dataset.key === key));
+}
+
+function clearSeed() {
+  document.getElementById("seed-input").value = "";
+}
+
+async function run() {
+  const seed = document.getElementById("seed-input").value.trim();
+  hideError();
+  if (!seed) { showError("請輸入標的名稱"); return; }
+  if (!selectedPurpose) { showError("請選擇關係類型"); return; }
+
+  const windowDays = document.getElementById("window-days").value;
+  const params = new URLSearchParams({
+    seed, purpose: selectedPurpose, window_days: windowDays,
+    end_date: document.getElementById("end-date").value,
+    risk_tier: selectedTier,
+  });
+
+  setLoading(true, selectedPurpose.startsWith("supply") ?
+    "分析中（供應鏈方向需要 AI 判斷，可能需要 30 秒以上）…" : "分析中…");
+  document.getElementById("results").classList.add("hidden");
+
+  try {
+    const res = await fetch("/api/knowledge-graph/basket-data/?" + params);
+    const data = await res.json();
+    if (data.error) { showError(data.error); return; }
+    lastData = data;
+    render(data);
+  } catch (e) {
+    showError(e.message);
+  } finally {
+    setLoading(false);
+  }
+}
+
+function render(data) {
+  document.getElementById("page-title").textContent = `探索與 ${data.seed} 相關的投資機會`;
+  document.getElementById("result-title").textContent = `找到 ${data.basket.length} 個相關標的`;
+  document.getElementById("funnel").innerHTML = funnelHtml(data.funnel || []);
+
+  const grid = document.getElementById("basket-grid");
+  if (!data.basket.length) {
+    const suggestions = data.seed_suggestions || [];
+    grid.className = "";
+    grid.innerHTML = suggestions.length ? `
+      <div class="text-center py-14 text-on-surface-variant text-sm">
+        圖譜裡找不到「${esc(data.seed)}」，你是不是要找：
+        <div class="flex gap-2 justify-center flex-wrap mt-4">
+          ${suggestions.map(s => `<span class="px-4 py-1.5 rounded-full border border-outline-variant text-sm cursor-pointer hover:border-tertiary-container hover:text-tertiary-container transition-colors" onclick="pickSuggestion('${esc(s).replace(/'/g, "\\'")}')">${esc(s)}</span>`).join("")}
+        </div>
+      </div>` : `<div class="text-center py-14 text-on-surface-variant text-sm">沒有找到符合條件的標的，試試看調整窗口長度或換一個標的。</div>`;
+  } else {
+    grid.className = "grid grid-cols-1 md:grid-cols-2 gap-4";
+    grid.innerHTML = data.basket.map((c, i) => cardHtml(c, i)).join("");
+  }
+  document.getElementById("results").classList.remove("hidden");
+}
+
+function pickSuggestion(name) {
+  document.getElementById("seed-input").value = name;
+  run();
+}
+
+function funnelHtml(steps) {
+  return steps.map((s, i) => `
+    ${i > 0 ? '<span class="text-outline-variant text-xs px-1.5 flex-shrink-0">→</span>' : ""}
+    <div class="flex flex-col items-center flex-shrink-0 min-w-[76px]">
+      <div class="text-sm font-bold text-on-surface">${s.count}</div>
+      <div class="text-[9px] text-on-surface-variant text-center leading-tight mt-0.5 max-w-[80px]">${esc(s.stage)}</div>
+    </div>
+  `).join("");
+}
+
+function relationLabel(strategy) {
+  return { supply_upstream: "供應鏈上游", supply_downstream: "供應鏈下游", substitute: "競爭對手", co_impact: "共同主題" }[strategy] || "";
+}
+
+function fVerifyDots(layer2) {
+  if (!layer2 || layer2.status === "unavailable" || !layer2.f_score_max) return "";
+  const total = layer2.f_score_max, pass = layer2.f_score;
+  let dots = "";
+  for (let i = 0; i < total; i++) {
+    dots += `<span class="dot ${i < pass ? "bg-[#2e7d32]" : "bg-outline-variant"}"></span>`;
+  }
+  return dots;
+}
+
+function cardHtml(c, idx) {
+  const layer2 = c.layer2;
+  const ticker = layer2 && layer2.ticker ? layer2.ticker : "-";
+  const fLabel = (!layer2 || layer2.status === "unavailable" || !layer2.f_score_max)
+    ? "無法評估" : `${layer2.f_score} / ${layer2.f_score_max} 通過`;
+
+  const rawReasons = (c.path_reasons || []).flatMap(seg => seg.reasons || []);
+  const bulletReasons = rawReasons.slice(0, 2);
+
+  return `
+  <div class="bg-surface-container-lowest border border-outline-variant/40 rounded-xl p-5 hover:border-tertiary-container/50 transition-colors cursor-pointer" onclick="openDetail(${idx})">
+    <div class="flex items-center justify-between mb-2">
+      <div class="flex items-center gap-2">
+        <span class="w-6 h-6 flex items-center justify-center rounded-full bg-tertiary-container text-on-tertiary text-xs font-bold flex-shrink-0">${idx + 1}</span>
+        <span class="text-xs text-on-surface-variant font-medium">${esc(ticker)}</span>
+      </div>
+    </div>
+    <div class="font-headline font-bold text-base text-on-surface mb-1.5">${esc(c.node)}</div>
+    <span class="inline-block text-[11px] px-2.5 py-0.5 rounded-full bg-secondary-container text-on-secondary-container font-medium mb-3">${relationLabel(lastData.strategy)}</span>
+
+    <div class="grid grid-cols-3 gap-2 text-center border-t border-b border-outline-variant/30 py-3 mb-3">
+      <div>
+        <div class="text-[10px] text-on-surface-variant">提及次數</div>
+        <div class="text-sm font-bold text-on-surface mt-0.5">${c.mention_count ?? 0} 次</div>
+      </div>
+      <div>
+        <div class="text-[10px] text-on-surface-variant">Podcast 數</div>
+        <div class="text-sm font-bold text-on-surface mt-0.5">${c.source_diversity ?? 0} 個</div>
+      </div>
+      <div>
+        <div class="text-[10px] text-on-surface-variant">財務驗證</div>
+        <div class="text-sm font-bold text-on-surface mt-0.5">${esc(fLabel)}</div>
+        <div class="flex gap-1 justify-center mt-1">${fVerifyDots(layer2)}</div>
+      </div>
+    </div>
+
+    ${bulletReasons.length ? `
+      <div class="text-[11px] text-on-surface-variant font-medium mb-1">被提及的主要理由</div>
+      <ul class="text-xs text-on-surface space-y-1 mb-3 list-disc list-inside">
+        ${bulletReasons.map(r => `<li class="leading-snug">${esc(r)}</li>`).join("")}
+      </ul>
+    ` : ""}
+
+    <div class="text-xs text-secondary font-semibold flex items-center gap-1">
+      查看財務驗證與更多理由（${layer2 && layer2.f_score_max ? layer2.f_score_max : 0} 項）
+      <span class="material-symbols-outlined text-sm">arrow_forward</span>
+    </div>
+  </div>`;
+}
+
+function openDetail(idx) {
+  const c = lastData.basket[idx];
+  const layer2 = c.layer2;
+  const ticker = layer2 && layer2.ticker ? layer2.ticker : "-";
+  const path = c.path && c.path.length ? c.path : [lastData.seed, c.node];
+
+  const pathHtml = path.map((n, i) => {
+    const cls = i === 0 ? "bg-secondary-container text-on-secondary-container"
+      : (i === path.length - 1 ? "bg-primary-container/20 text-on-primary-container font-semibold" : "bg-surface-container text-on-surface-variant");
+    return (i > 0 ? '<span class="text-outline-variant text-xs">→</span>' : "") +
+      `<span class="text-[11px] px-2 py-0.5 rounded-md ${cls}">${esc(n)}</span>`;
+  }).join(" ");
+
+  const segments = (c.path_reasons || []).filter(seg => (seg.reasons || []).length);
+  const totalRaw = segments.reduce((sum, seg) => sum + seg.reasons.length, 0);
+
+  let financeSection = "";
+  if (!layer2 || layer2.status === "unavailable") {
+    financeSection = `<div class="text-sm text-on-surface-variant bg-surface-container-low rounded-lg p-4">財務資料無法評估，可能是海外標的資料源未涵蓋，或找不到對應股票代號。</div>`;
+  } else {
+    const rows = (layer2.f_score_details || []).map(row => `
+      <tr class="border-t border-outline-variant/30">
+        <td class="py-2 px-2 flex items-center gap-1.5">
+          <span class="material-symbols-outlined text-sm ${row.pass ? "text-[#2e7d32]" : "text-error"}">${row.pass ? "check_circle" : "cancel"}</span>
+          <span class="text-xs text-on-surface">${esc(row.name)}</span>
+        </td>
+        <td class="py-2 px-2 text-xs text-right text-on-surface">${esc(row.actual ?? "-")}</td>
+        <td class="py-2 px-2 text-xs text-right text-on-surface-variant">${esc(row.threshold)}</td>
+        <td class="py-2 px-2 text-right">
+          <span class="text-[10px] px-2 py-0.5 rounded-full ${row.pass ? "bg-[#e3f2e3] text-[#2e7d32]" : "bg-error-container text-on-error-container"}">${row.pass ? "通過" : "未通過"}</span>
+        </td>
+      </tr>`).join("");
+
+    financeSection = `
+      <div class="font-headline font-bold text-sm text-on-surface mb-2">財務驗證（${(layer2.f_score_details || []).length} 項）</div>
+      <div class="overflow-x-auto">
+        <table class="w-full">
+          <thead><tr class="text-[10px] text-on-surface-variant text-left"><th class="py-1.5 px-2 font-medium">指標</th><th class="py-1.5 px-2 font-medium text-right">實際值</th><th class="py-1.5 px-2 font-medium text-right">判斷標準</th><th class="py-1.5 px-2 font-medium text-right">結果</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+      <div class="text-[10px] text-on-surface-variant mt-3 space-y-0.5">
+        <div>資料期間：${esc(layer2.fiscal_period_end || "-")}</div>
+        <div>財務資料來源：${layer2.data_source === "yfinance" ? "Yahoo Finance" : (layer2.data_source === "finmind" ? "公司財報（FinMind）" : "-")}</div>
+      </div>
+    `;
+  }
+
+  const body = document.getElementById("detail-body");
+  body.innerHTML = `
+    <div class="flex items-start justify-between mb-5">
+      <div class="flex items-center gap-2">
+        <span class="w-7 h-7 flex items-center justify-center rounded-full bg-tertiary-container text-on-tertiary text-sm font-bold">${idx + 1}</span>
+        <span class="text-sm text-on-surface-variant font-medium">${esc(ticker)}</span>
+      </div>
+      <button onclick="closeDetail()" class="w-8 h-8 flex items-center justify-center rounded-full hover:bg-surface-container transition-colors">
+        <span class="material-symbols-outlined text-outline">close</span>
+      </button>
+    </div>
+
+    <div class="font-headline font-extrabold text-xl text-on-surface mb-2">${esc(c.node)}</div>
+    <span class="inline-block text-[11px] px-2.5 py-0.5 rounded-full bg-secondary-container text-on-secondary-container font-medium mb-4">${relationLabel(lastData.strategy)}</span>
+
+    <div class="grid grid-cols-3 gap-2 text-center border-y border-outline-variant/30 py-3 mb-4">
+      <div>
+        <div class="text-[10px] text-on-surface-variant">提及次數</div>
+        <div class="text-base font-bold text-on-surface mt-0.5">${c.mention_count ?? 0} 次</div>
+      </div>
+      <div>
+        <div class="text-[10px] text-on-surface-variant">Podcast 數</div>
+        <div class="text-base font-bold text-on-surface mt-0.5">${c.source_diversity ?? 0} 個</div>
+      </div>
+      <div>
+        <div class="text-[10px] text-on-surface-variant">財務驗證</div>
+        <div class="text-base font-bold text-on-surface mt-0.5">${layer2 && layer2.f_score_max ? `${layer2.f_score}/${layer2.f_score_max}` : "無法評估"}</div>
+        <div class="flex gap-1 justify-center mt-1">${fVerifyDots(layer2)}</div>
+      </div>
+    </div>
+
+    <div class="text-xs font-semibold text-on-surface-variant mb-1.5">路徑</div>
+    <div class="flex items-center flex-wrap gap-1 mb-4">${pathHtml}</div>
+
+    <div class="text-xs font-semibold text-on-surface-variant mb-1.5">被提及的主要理由</div>
+    <div class="text-sm text-on-surface leading-relaxed mb-2">${esc(c.synthesized_reason || "查無具體描述，僅圖譜路徑相連")}</div>
+    ${totalRaw ? `
+      <div class="text-xs text-secondary font-semibold cursor-pointer mb-4" onclick="toggleRawReasons()">查看更多理由（${totalRaw} 項） <span class="material-symbols-outlined text-sm align-middle">expand_more</span></div>
+      <div id="raw-reasons" class="hidden text-xs text-on-surface-variant leading-relaxed mb-4 bg-surface-container-low rounded-lg p-3 space-y-2">
+        ${segments.map(seg => `
+          <div>
+            <div class="font-medium text-on-surface-variant mb-0.5">${esc(seg.from)} → ${esc(seg.to)}</div>
+            ${seg.reasons.map(r => `<div>・${esc(r)}</div>`).join("")}
+          </div>
+        `).join("")}
+      </div>
+    ` : `<div class="mb-4"></div>`}
+
+    ${financeSection}
+
+    <button class="w-full mt-6 py-3 rounded-lg border border-outline-variant text-on-surface text-sm font-semibold flex items-center justify-center gap-2 hover:bg-surface-container transition-colors">
+      <span class="material-symbols-outlined text-lg">bookmark_border</span>加入觀察清單
+    </button>
+  `;
+
+  document.getElementById("detail-overlay").classList.remove("hidden");
+  const panel = document.getElementById("detail-panel");
+  panel.classList.remove("translate-x-full");
+}
+
+function toggleRawReasons() {
+  document.getElementById("raw-reasons").classList.toggle("hidden");
+}
+
+function closeDetail() {
+  document.getElementById("detail-overlay").classList.add("hidden");
+  document.getElementById("detail-panel").classList.add("translate-x-full");
+}
+
+function setLoading(on, msg) {
+  document.getElementById("run-btn").disabled = on;
+  const st = document.getElementById("status");
+  if (on) { st.textContent = msg; st.classList.remove("hidden"); }
+  else { st.classList.add("hidden"); }
+}
+function showError(msg) {
+  const el = document.getElementById("error");
+  el.textContent = msg; el.classList.remove("hidden");
+}
+function hideError() {
+  document.getElementById("error").classList.add("hidden");
+}
+function esc(s) { return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;"); }
+</script>
+</body>
+</html>

@@ -505,3 +505,104 @@ def generate_graph_from_summaries(request):
         return JsonResponse({"message": "批次知識圖譜生成完成"})
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)
+
+
+# ==========================================
+# Basket（投資組合探索）
+# ==========================================
+
+def basket_page(request):
+    """渲染 Basket 探索頁面。"""
+    return render(request, "knowledge_graph/basket.html")
+
+
+def basket_purposes_api(request):
+    """回傳可選的投資目的清單，供前端下拉選單使用。"""
+    from .services.basket_purpose import PURPOSE_CHOICES
+    return JsonResponse({"purposes": PURPOSE_CHOICES}, json_dumps_params={"ensure_ascii": False})
+
+
+@csrf_exempt
+def basket_api(request):
+    """
+    輸入 seed（標的名稱）+ purpose（投資目的 key），回傳對應策略算出的 basket。
+
+    Query params:
+      - seed        : 必填，標的名稱（需與知識圖譜節點名稱一致）
+      - purpose     : 必填，見 basket_purpose.PURPOSE_CHOICES 的 key
+      - end_date    : 選填，YYYY-MM-DD，預設今天
+      - window_days : 選填，預設 30
+    """
+    import datetime as _dt
+    from .services.basket_purpose import get_strategy_for_purpose
+    from .services.strategy_supply import supply_candidates
+    from .services.strategy_substitute import substitute_candidates
+    from .services.strategy_coimpact import co_impact_candidates
+    from .services.basket_selection import select_basket, seed_exists, suggest_similar_seeds
+
+    seed = request.GET.get("seed", "").strip()
+    purpose = request.GET.get("purpose", "").strip()
+    end_date_str = request.GET.get("end_date", "").strip()
+    window_days = int(request.GET.get("window_days", "30"))
+    risk_tier = request.GET.get("risk_tier", "").strip() or None
+
+    if not seed or not purpose:
+        return JsonResponse({"error": "需提供 seed 與 purpose"}, status=400)
+
+    if risk_tier and risk_tier not in ("保守", "均衡", "積極"):
+        return JsonResponse({"error": "risk_tier 須為 保守/均衡/積極 其中之一"}, status=400)
+
+    strategy = get_strategy_for_purpose(purpose)
+    if not strategy:
+        return JsonResponse({"error": f"未知的 purpose: {purpose}"}, status=400)
+
+    try:
+        end_date = (
+            _dt.datetime.strptime(end_date_str, "%Y-%m-%d").date()
+            if end_date_str else _dt.date.today()
+        )
+    except ValueError:
+        return JsonResponse({"error": "end_date 格式須為 YYYY-MM-DD"}, status=400)
+
+    try:
+        if strategy in ("supply_upstream", "supply_downstream"):
+            result = supply_candidates(seed, end_date, window_days)
+            direction = "upstream" if strategy == "supply_upstream" else "downstream"
+            candidates = result[direction]
+            selection = select_basket(
+                candidates, strategy=strategy, seed=seed, window_days=window_days,
+                risk_tier=risk_tier, as_of_date=end_date,
+            )
+        elif strategy == "substitute":
+            candidates = substitute_candidates(seed, end_date, window_days)
+            selection = select_basket(
+                candidates, strategy=strategy, seed=seed, window_days=window_days,
+                risk_tier=risk_tier, as_of_date=end_date,
+            )
+        elif strategy == "co_impact":
+            candidates = co_impact_candidates(seed, end_date, window_days)
+            selection = select_basket(
+                candidates, strategy=strategy, seed=seed, window_days=window_days,
+                risk_tier=risk_tier, as_of_date=end_date,
+            )
+        else:
+            candidates, selection = [], {"basket": [], "funnel": []}
+
+        seed_suggestions = []
+        if not candidates and not seed_exists(seed):
+            seed_suggestions = suggest_similar_seeds(seed)
+
+        return JsonResponse({
+            "seed": seed,
+            "purpose": purpose,
+            "strategy": strategy,
+            "window_days": window_days,
+            "end_date": end_date.isoformat(),
+            "risk_tier": risk_tier,
+            "candidate_count": len(candidates),
+            "basket": selection["basket"],
+            "funnel": selection["funnel"],
+            "seed_suggestions": seed_suggestions,
+        }, json_dumps_params={"ensure_ascii": False})
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
