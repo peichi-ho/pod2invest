@@ -10,6 +10,24 @@ let _newsCache      = [];
 let _bullUserEdited = false;
 let _bearUserEdited = false;
 
+// ── Podcast-driven scenario (apps/calculator/services/scenario.py) ─────
+// 有比對到這支股票的 podcast 分析時，樂觀/保守情境改用真實校準過的公式算，
+// 圖表也改用後端算好的 GBM 模擬（基準區間帶 + 樂觀/保守示範線），
+// 而不是單純的複利曲線。使用者手動改動任一個報酬率輸入框時，會自動退回複利曲線
+// （因為後端模擬線是針對原始那組報酬率跑的，改動後線型跟數字就對不上了）。
+let _scenarioNodes      = null;  // /stock-timeline/ 回傳的這支股票所有已分類集數
+let _scenarioAnchorId   = null;  // 目前選定的集數 score_id
+let _scenarioMode       = 'episode'; // 'episode'（當集原始預測）｜ 'weighted'（最新綜合預測）
+let _scenarioSource     = null;  // /scenario/ 或 /scenario-weighted/ 的完整回應
+let _scenarioChart      = null;  // 其中的 GBM 模擬資料（months/bull_line/base_line/bear_line/band/start_price）
+let _scenarioDeltas     = null;  // { bullDelta, bearDelta }，讓使用者改動基準時仍套用同一組 spread/lean
+let _scenarioAutoRates  = null;  // 自動帶入時的 {base, bull, bear}，用來判斷輸入框是否還跟後端模擬一致
+let _scenarioFetchSeq   = 0;     // 每次抓 timeline/scenario 都遞增，讓過期的非同步回應可以被忽略（避免race condition）
+
+function _currentSimMonths() {
+  return Math.max(Math.round(getSimYears() * 12), 1);
+}
+
 function _initSimDates() {
   const today      = new Date();
   const oneYearLater = new Date(today);
@@ -40,9 +58,168 @@ function resetToHostYield() {
 
 // ── Scenario derive helpers ───────────────────────────────────
 function _deriveScenarios(base) {
+  // 有比對到 podcast 分析：套用同一組 spread/lean（k/R_MAX/L_MAX/add 已用真實資料校準過），
+  // 用 delta 而不是重新算 spread，是因為 spread 本身由 annual_vol/risk_score 決定、跟 base 無關，
+  // 使用者改動 base 時，樂觀/保守應該跟著平移同樣的寬度，不是重新套 1.5x/0.5x。
+  if (_scenarioDeltas) {
+    return {
+      bull: +(base + _scenarioDeltas.bullDelta).toFixed(1),
+      bear: +Math.max(base - _scenarioDeltas.bearDelta, -90).toFixed(1),
+    };
+  }
   if (base === 0) return { bull: 5, bear: -5 };
   if (base > 0)   return { bull: +(base * 1.5).toFixed(1), bear: +(base * 0.5).toFixed(1) };
   return           { bull: +(base * 0.5).toFixed(1), bear: +(base * 1.5).toFixed(1) };
+}
+
+// ── Podcast scenario source (StockSentimentScore → scenario.py) ────────
+// _scenarioFetchSeq：所有跟這個區塊有關的非同步請求（換股票/換集數/換模式/投資期間改變重抓GBM）
+// 都共用同一個遞增序號。發出請求時記下當時的序號，回應回來時比對序號還是不是最新的，
+// 不是的話直接丟棄——避免慢的舊請求晚回來蓋掉快的新請求（例如使用者連續切換股票或投資期間）。
+async function _fetchScenarioSource(ticker) {
+  const seq = ++_scenarioFetchSeq;
+  _scenarioNodes = null;
+  _scenarioAnchorId = null;
+  _scenarioMode = 'episode';
+  _scenarioSource = null;
+  _scenarioChart = null;
+  _scenarioDeltas = null;
+  _scenarioAutoRates = null;
+  _renderScenarioSourceUI();
+
+  try {
+    const res  = await fetch(`/api/calculator/stock-timeline/?ticker=${encodeURIComponent(ticker)}`);
+    const data = await res.json();
+    if (seq !== _scenarioFetchSeq) return; // 已經有更新的請求發出，這筆回應過期了
+    if (!res.ok || !data.nodes || !data.nodes.length) { _renderScenarioSourceUI(); return; }
+    _scenarioNodes = data.nodes.slice().sort((a, b) => (a.published_at < b.published_at ? 1 : -1));
+    await _loadScenarioForScoreId(_scenarioNodes[0].score_id, 'episode', seq);
+  } catch (e) {
+    if (seq !== _scenarioFetchSeq) return;
+    _renderScenarioSourceUI();
+  }
+}
+
+async function _loadScenarioForScoreId(scoreId, mode, seq, baseOverridePct) {
+  if (seq === undefined) seq = ++_scenarioFetchSeq;
+  _scenarioAnchorId = scoreId;
+  _scenarioMode = mode;
+  const endpoint = mode === 'weighted' ? 'scenario-weighted' : 'scenario';
+  const months = _currentSimMonths();
+  // baseOverridePct 只有在「使用者自己改了基準情境、但沒有直接手動改樂觀/保守」時才會傳進來，
+  // 讓後端用這個新base重新算一次GBM模擬（spread/lean不變），而不是整個放棄GBM退回複利曲線。
+  const baseParam = baseOverridePct != null ? `&base=${encodeURIComponent(baseOverridePct)}` : '';
+  try {
+    const res  = await fetch(`/api/calculator/${endpoint}/?score_id=${encodeURIComponent(scoreId)}&months=${months}${baseParam}`);
+    const data = await res.json();
+    if (seq !== _scenarioFetchSeq) return; // 過期回應，忽略
+    if (!res.ok) {
+      _scenarioSource = null; _scenarioChart = null; _scenarioDeltas = null; _scenarioAutoRates = null;
+      _renderScenarioSourceUI();
+      return;
+    }
+    _scenarioSource = data;
+    _scenarioChart = {
+      months: data.months,
+      bull_line: data.bull_line,
+      base_line: data.base_line,
+      bear_line: data.bear_line,
+      base_band_low: data.base_band_low,
+      base_band_high: data.base_band_high,
+      actual_line: data.actual_line, // 這段期間實際發生的股價；還沒到的月份是 null
+      start_price: data.start_price,
+    };
+    _applyScenarioSourceToInputs();
+    _renderScenarioSourceUI();
+  } catch (e) {
+    if (seq !== _scenarioFetchSeq) return;
+    _scenarioSource = null; _scenarioChart = null; _scenarioDeltas = null; _scenarioAutoRates = null;
+    _renderScenarioSourceUI();
+  }
+}
+
+function _applyScenarioSourceToInputs() {
+  if (!_scenarioSource) return;
+  const r = _scenarioSource.scenario_returns;
+  const base = +(r.base * 100).toFixed(1);
+  const bull = +(r.bull * 100).toFixed(1);
+  const bear = +(r.bear * 100).toFixed(1);
+  _scenarioDeltas = { bullDelta: bull - base, bearDelta: base - bear };
+  _scenarioAutoRates = { base, bull, bear };
+  _bullUserEdited = false;
+  _bearUserEdited = false;
+  document.getElementById('sim-yield-base').value = base;
+  document.getElementById('sim-yield-bull').value = bull;
+  document.getElementById('sim-yield-bear').value = bear;
+  _refreshIfActive();
+}
+
+function setScenarioMode(mode) {
+  if (!_scenarioAnchorId || mode === _scenarioMode) return;
+  _loadScenarioForScoreId(_scenarioAnchorId, mode);
+}
+
+function onScenarioEpisodeChange() {
+  const select = document.getElementById('scenario-episode-select');
+  if (select && select.value) _loadScenarioForScoreId(select.value, _scenarioMode);
+}
+
+function _renderScenarioSourceUI() {
+  const panel = document.getElementById('scenario-source-panel');
+  const empty = document.getElementById('scenario-source-empty');
+  const hintDefault = document.getElementById('scenario-hint-default');
+  const hintPodcast = document.getElementById('scenario-hint-podcast');
+  const hintLabel   = document.getElementById('scenario-hint-label');
+  if (!panel || !empty) return;
+
+  if (!_scenarioNodes || !_scenarioNodes.length) {
+    panel.classList.add('hidden');
+    empty.classList.remove('hidden');
+    if (hintDefault) hintDefault.classList.remove('hidden');
+    if (hintPodcast) hintPodcast.classList.add('hidden');
+    if (hintLabel) hintLabel.textContent = '依基準情境自動推算，可自行修改';
+    return;
+  }
+  empty.classList.add('hidden');
+  panel.classList.remove('hidden');
+  if (hintDefault) hintDefault.classList.add('hidden');
+  if (hintPodcast) hintPodcast.classList.remove('hidden');
+  if (hintLabel) hintLabel.textContent = '依 Podcast 分析自動推算，可自行修改';
+
+  const select = document.getElementById('scenario-episode-select');
+  if (select) {
+    select.innerHTML = _scenarioNodes.map(n =>
+      `<option value="${n.score_id}">${n.published_at || '未知日期'}</option>`
+    ).join('');
+    if (_scenarioAnchorId) select.value = _scenarioAnchorId;
+  }
+
+  const activeCls   = 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-tertiary-container text-white transition-colors';
+  const inactiveCls = 'text-[10px] font-bold px-2 py-0.5 rounded-full text-outline hover:bg-surface-container transition-colors';
+  const epBtn = document.getElementById('scenario-mode-episode');
+  const wtBtn = document.getElementById('scenario-mode-weighted');
+  if (epBtn) epBtn.className = _scenarioMode === 'episode'  ? activeCls : inactiveCls;
+  if (wtBtn) wtBtn.className = _scenarioMode === 'weighted' ? activeCls : inactiveCls;
+
+  const detail = document.getElementById('scenario-source-detail');
+  if (detail && _scenarioSource) {
+    const riskLabel  = _scenarioSource.risk_score >= 1 ? '高' : _scenarioSource.risk_score >= 0.5 ? '中' : '低';
+    const macroLabel = _scenarioSource.macro_score > 0 ? '樂觀' : _scenarioSource.macro_score < 0 ? '悲觀' : '中性';
+    let html;
+    if (_scenarioMode === 'weighted' && _scenarioSource.n_episodes != null) {
+      html = `綜合 <b>${_scenarioSource.n_episodes}</b> 集節目看法（半衰期90天加權，越新集數影響越大）：風險<b>${riskLabel}</b>・展望<b>${macroLabel}</b>`;
+      if (_scenarioSource.top_contributors && _scenarioSource.top_contributors.length) {
+        html += `<div class="mt-1 text-outline/70">主要依據：${_scenarioSource.top_contributors.map(c => c.published_at).join('、')}</div>`;
+      }
+    } else {
+      html = `${_scenarioSource.published_at || ''} 節目判斷：風險<b>${riskLabel}</b>・展望<b>${macroLabel}</b>`;
+      if (_scenarioSource.rationale) {
+        const snippet = _scenarioSource.rationale.length > 80 ? _scenarioSource.rationale.slice(0, 80) + '…' : _scenarioSource.rationale;
+        html += `<div class="mt-1 italic text-outline/70">「${snippet}」</div>`;
+      }
+    }
+    detail.innerHTML = html;
+  }
 }
 
 function onBaseYieldChange() {
@@ -192,7 +369,28 @@ function calcWealth() {
   const dispEl = document.getElementById('sim-period-display');
   if (dispEl) dispEl.textContent = period ? `投資期間：${period}` : '';
 
-  renderScenarioChart(invested, months, bullRate, baseRate, bearRate);
+  // 樂觀/保守只要是「使用者自己直接打字改的」（不是改基準帶出來的），GBM圖表就永遠沒有意義：
+  // 使用者這時候要的數字已經不對應任何一組(base, spread, lean)組合，沒有辦法跟後端要到對得上的
+  // 模擬資料，硬要重抓也不會收斂，所以這種情況直接放棄GBM、永遠用複利曲線，不嘗試重抓。
+  const bullBearAutoDerived = !_bullUserEdited && !_bearUserEdited && !!_scenarioDeltas;
+
+  // 基準有沒有跟目前這份GBM資料算的時候用的base一樣（用_scenarioAutoRates.base對照，
+  // 那個值每次成功抓到新資料都會同步更新，見 _applyScenarioSourceToInputs）。
+  const baseMatch = _scenarioAutoRates && Math.abs(baseRate - _scenarioAutoRates.base) < 0.05;
+
+  // GBM模擬的月數要跟這裡算出來的投資期間一致，不一致就重抓（後端會照現在的investment period重新跑）。
+  const monthsMatch = _scenarioChart && (_scenarioChart.months.length - 1) === months;
+
+  // base或月數對不上，但樂觀/保守還是自動算出來的狀態 → 帶著目前的base重抓一次
+  // （即使base沒變也一起傳，避免月數觸發的重抓不小心把之前套用的base覆蓋洗掉）。
+  // 這次先用複利曲線顯示，等重抓回來後 _applyScenarioSourceToInputs → _refreshIfActive 會自動重繪一次。
+  if (bullBearAutoDerived && _scenarioChart && _scenarioAnchorId && (!baseMatch || !monthsMatch)) {
+    _loadScenarioForScoreId(_scenarioAnchorId, _scenarioMode, undefined, baseRate);
+  }
+
+  const gbmChart = (_scenarioChart && bullBearAutoDerived && baseMatch && monthsMatch) ? _scenarioChart : null;
+
+  renderScenarioChart(invested, months, bullRate, baseRate, bearRate, gbmChart);
 }
 
 function _fmtVal(v) {
@@ -203,7 +401,7 @@ function _fmtVal(v) {
   return Math.round(v).toLocaleString();
 }
 
-function renderScenarioChart(invested, months, bullRate, baseRate, bearRate) {
+function renderScenarioChart(invested, months, bullRate, baseRate, bearRate, gbmChart) {
   const svg = document.getElementById('scenario-svg');
   svg.innerHTML = '';
 
@@ -211,45 +409,81 @@ function renderScenarioChart(invested, months, bullRate, baseRate, bearRate) {
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
   const ns = 'http://www.w3.org/2000/svg';
 
-  // Data points: monthly
-  function genPoints(annualRate) {
-    if (annualRate == null || isNaN(annualRate)) return null;
-    const mr = Math.pow(1 + annualRate / 100, 1 / 12) - 1;
-    return Array.from({ length: months + 1 }, (_, n) => invested * Math.pow(1 + mr, n));
+  let plotMonths, bullPts, basePts, bearPts, bandLow, bandHigh, actualPts;
+
+  if (gbmChart) {
+    // 後端已經用真實校準過的公式 + GBM 模擬跑好整條路徑（見 apps/calculator/services/scenario.py），
+    // 這裡只需要把「股價路徑」換算成「持倉市值路徑」（乘上 invested/start_price 的縮放比例）。
+    plotMonths = gbmChart.months.length - 1;
+    const scale = gbmChart.start_price > 0 ? invested / gbmChart.start_price : 0;
+    bullPts  = gbmChart.bull_line.map(p => p * scale);
+    basePts  = gbmChart.base_line.map(p => p * scale);
+    bearPts  = gbmChart.bear_line.map(p => p * scale);
+    bandLow  = gbmChart.base_band_low.map(p => p * scale);
+    bandHigh = gbmChart.base_band_high.map(p => p * scale);
+    // 還沒到的月份後端回 null，這裡保留 null（不是0），畫線時會自動在那裡斷開，不會硬畫到0。
+    actualPts = gbmChart.actual_line ? gbmChart.actual_line.map(p => (p == null ? null : p * scale)) : null;
+  } else {
+    plotMonths = months;
+    function genPoints(annualRate) {
+      if (annualRate == null || isNaN(annualRate)) return null;
+      const mr = Math.pow(1 + annualRate / 100, 1 / 12) - 1;
+      return Array.from({ length: months + 1 }, (_, n) => invested * Math.pow(1 + mr, n));
+    }
+    bullPts = genPoints(bullRate);
+    basePts = genPoints(baseRate);
+    bearPts = genPoints(bearRate);
+    bandLow = bandHigh = actualPts = null;
   }
 
-  const bullPts = genPoints(bullRate);
-  const basePts = genPoints(baseRate);
-  const bearPts = genPoints(bearRate);
+  const gbmNote = document.getElementById('scenario-gbm-note');
+  if (gbmNote) gbmNote.classList.toggle('hidden', !gbmChart);
+  const actualNote = document.getElementById('scenario-actual-note');
+  const hasActual = !!(actualPts && actualPts.some(v => v != null));
+  if (actualNote) actualNote.classList.toggle('hidden', !hasActual);
+  const legendActualRow = document.getElementById('legend-actual-row');
+  if (legendActualRow) {
+    legendActualRow.classList.toggle('hidden', !hasActual);
+    legendActualRow.style.display = hasActual ? 'flex' : 'none';
+  }
 
-  const allVals = [...(bullPts || []), ...basePts, ...(bearPts || [])];
+  const allVals = [...(bullPts || []), ...basePts, ...(bearPts || []), ...(bandLow || []), ...(bandHigh || []),
+    ...((actualPts || []).filter(v => v != null))];
   const dataMin = Math.min(...allVals);
   const dataMax = Math.max(...allVals);
 
-  // Y-axis: 上限 = 樂觀情境最終值 +10%，下限 = 保守情境最終值 -10%
-  // 複利曲線單調遞增/遞減，最終值即整條線的極值；若情境值為負則改用加法緩衝避免方向反轉
-  const bullFinal = bullPts ? bullPts[months] : dataMax;
-  const bearFinal = bearPts ? bearPts[months] : dataMin;
-  const margin = (Math.abs(bullFinal) + Math.abs(bearFinal)) * 0.05 || invested * 0.1;
-  let hi = bullFinal >= 0 ? bullFinal * 1.1 : bullFinal - margin;
-  let lo = bearFinal >= 0 ? bearFinal * 0.9 : bearFinal + margin;
-  // 保險：若資料範圍超出上述邊界（極端情況），擴張包住全部資料
-  hi = Math.max(hi, dataMax);
-  lo = Math.min(lo, dataMin);
+  let hi, lo;
+  if (gbmChart) {
+    // GBM 路徑本身有震盪，不是單調曲線，最終值不等於極值，直接包住全部資料點加緩衝即可
+    const pad = (dataMax - dataMin) * 0.08 || invested * 0.1;
+    hi = dataMax + pad;
+    lo = dataMin - pad;
+  } else {
+    // Y-axis: 上限 = 樂觀情境最終值 +10%，下限 = 保守情境最終值 -10%
+    // 複利曲線單調遞增/遞減，最終值即整條線的極值；若情境值為負則改用加法緩衝避免方向反轉
+    const bullFinal = bullPts ? bullPts[plotMonths] : dataMax;
+    const bearFinal = bearPts ? bearPts[plotMonths] : dataMin;
+    const margin = (Math.abs(bullFinal) + Math.abs(bearFinal)) * 0.05 || invested * 0.1;
+    hi = bullFinal >= 0 ? bullFinal * 1.1 : bullFinal - margin;
+    lo = bearFinal >= 0 ? bearFinal * 0.9 : bearFinal + margin;
+    // 保險：若資料範圍超出上述邊界（極端情況），擴張包住全部資料
+    hi = Math.max(hi, dataMax);
+    lo = Math.min(lo, dataMin);
+  }
 
-  const toX = n => padL + (n / months) * (W - padL - padR);
+  const toX = n => padL + (n / plotMonths) * (W - padL - padR);
   const toY = v => padT + (1 - (v - lo) / (hi - lo)) * (H - padT - padB);
 
   // Adaptive X-axis labels
   function getXLabels() {
     let interval, fmt;
-    if (months < 3) {
+    if (plotMonths < 3) {
       interval = 1;
       fmt = n => n === 0 ? '現在' : `第${n}月`;
-    } else if (months <= 12) {
-      interval = Math.ceil(months / 6);
+    } else if (plotMonths <= 12) {
+      interval = Math.ceil(plotMonths / 6);
       fmt = n => n === 0 ? '現在' : `第${n}月`;
-    } else if (months <= 36) {
+    } else if (plotMonths <= 36) {
       interval = 3;
       fmt = n => n === 0 ? '現在' : `第${Math.round(n / 3)}季`;
     } else {
@@ -257,9 +491,23 @@ function renderScenarioChart(invested, months, bullRate, baseRate, bearRate) {
       fmt = n => n === 0 ? '現在' : `第${Math.round(n / 12)}年`;
     }
     const pts = [];
-    for (let n = 0; n <= months; n += interval) pts.push({ n, label: fmt(n) });
-    if (pts[pts.length - 1].n !== months) pts.push({ n: months, label: fmt(months) });
+    for (let n = 0; n <= plotMonths; n += interval) pts.push({ n, label: fmt(n) });
+    if (pts[pts.length - 1].n !== plotMonths) pts.push({ n: plotMonths, label: fmt(plotMonths) });
     return pts;
+  }
+
+  // Statistical band (基準情境 1000 次模擬的 10~90 百分位區間)，只有走 GBM 分支時才有
+  if (bandLow && bandHigh) {
+    let d = `M${toX(0).toFixed(1)},${toY(bandLow[0]).toFixed(1)}`;
+    for (let i = 1; i < bandLow.length; i++) d += ` L${toX(i).toFixed(1)},${toY(bandLow[i]).toFixed(1)}`;
+    for (let i = bandHigh.length - 1; i >= 0; i--) d += ` L${toX(i).toFixed(1)},${toY(bandHigh[i]).toFixed(1)}`;
+    d += ' Z';
+    const band = document.createElementNS(ns, 'path');
+    band.setAttribute('d', d);
+    band.setAttribute('fill', '#113236');
+    band.setAttribute('fill-opacity', '0.10');
+    band.setAttribute('stroke', 'none');
+    svg.appendChild(band);
   }
 
   // Grid lines — nice ticks
@@ -293,11 +541,17 @@ function renderScenarioChart(invested, months, bullRate, baseRate, bearRate) {
     svg.appendChild(gt);
   });
 
-  // Draw lines
+  // Draw lines — null 值會斷開成新的一段，不會硬連過去（給實際股價線用，還沒到的月份是null）
   function drawLine(pts, color, dash) {
     if (!pts) return;
     let d = '';
-    pts.forEach((v, i) => { d += (i === 0 ? 'M' : 'L') + `${toX(i).toFixed(1)},${toY(v).toFixed(1)}`; });
+    let started = false;
+    pts.forEach((v, i) => {
+      if (v == null) { started = false; return; }
+      d += (started ? 'L' : 'M') + `${toX(i).toFixed(1)},${toY(v).toFixed(1)}`;
+      started = true;
+    });
+    if (!d) return;
     const path = document.createElementNS(ns, 'path');
     path.setAttribute('d', d); path.setAttribute('fill', 'none');
     path.setAttribute('stroke', color); path.setAttribute('stroke-width', '2.5');
@@ -309,6 +563,7 @@ function renderScenarioChart(invested, months, bullRate, baseRate, bearRate) {
   drawLine(bearPts, '#ba1a1a', '6,3');
   drawLine(basePts, '#113236');
   drawLine(bullPts, '#286671', '6,3');
+  drawLine(actualPts, '#4a4a4a'); // 實際股價，畫在最上層最顯眼
 
   // X-axis labels
   getXLabels().forEach(({ n, label }) => {
@@ -334,7 +589,7 @@ function renderScenarioChart(invested, months, bullRate, baseRate, bearRate) {
   const rangeNote = document.getElementById('scenario-range-note');
   const rangeVal  = document.getElementById('scenario-range-val');
   if (rangeNote && rangeVal && bullPts && bearPts) {
-    const diff = Math.abs(bullPts[months] - bearPts[months]);
+    const diff = Math.abs(bullPts[plotMonths] - bearPts[plotMonths]);
     rangeVal.textContent = 'NT$' + Math.round(diff).toLocaleString();
     rangeNote.classList.remove('hidden');
   } else if (rangeNote) {
@@ -381,12 +636,13 @@ function renderScenarioChart(invested, months, bullRate, baseRate, bearRate) {
   const bullDot = bullPts ? makeDot('#286671') : null;
   const baseDot = makeDot('#113236');
   const bearDot = bearPts ? makeDot('#ba1a1a') : null;
+  const actualDot = actualPts ? makeDot('#4a4a4a') : null;
 
   svg.appendChild(overlay);
 
   function getXLabel(n) {
     if (n === 0) return '現在';
-    if (months <= 36) return `第 ${n} 月`;
+    if (plotMonths <= 36) return `第 ${n} 月`;
     return `第 ${Math.round(n / 12)} 年`;
   }
 
@@ -394,8 +650,8 @@ function renderScenarioChart(invested, months, bullRate, baseRate, bearRate) {
     const rect = svg.getBoundingClientRect();
     const scaleX = W / rect.width;
     const mx = (e.clientX - rect.left) * scaleX;
-    const rawN = Math.round((mx - padL) / (W - padL - padR) * months);
-    const n = Math.max(0, Math.min(months, rawN));
+    const rawN = Math.round((mx - padL) / (W - padL - padR) * plotMonths);
+    const n = Math.max(0, Math.min(plotMonths, rawN));
     const x = toX(n);
 
     vLine.setAttribute('x1', x); vLine.setAttribute('x2', x);
@@ -404,10 +660,15 @@ function renderScenarioChart(invested, months, bullRate, baseRate, bearRate) {
     const bv  = basePts[n];
     const buv = bullPts ? bullPts[n] : null;
     const bev = bearPts ? bearPts[n] : null;
+    const av  = actualPts ? actualPts[n] : null;
 
     if (baseDot) { baseDot.setAttribute('cx', x); baseDot.setAttribute('cy', toY(bv)); baseDot.setAttribute('visibility', 'visible'); }
     if (bullDot && buv != null) { bullDot.setAttribute('cx', x); bullDot.setAttribute('cy', toY(buv)); bullDot.setAttribute('visibility', 'visible'); }
     if (bearDot && bev != null) { bearDot.setAttribute('cx', x); bearDot.setAttribute('cy', toY(bev)); bearDot.setAttribute('visibility', 'visible'); }
+    if (actualDot) {
+      if (av != null) { actualDot.setAttribute('cx', x); actualDot.setAttribute('cy', toY(av)); actualDot.setAttribute('visibility', 'visible'); }
+      else actualDot.setAttribute('visibility', 'hidden');
+    }
 
     const sign = v => v >= invested ? '+' : '';
     const fv = v => 'NT$' + Math.round(v).toLocaleString();
@@ -415,10 +676,11 @@ function renderScenarioChart(invested, months, bullRate, baseRate, bearRate) {
     if (buv != null) html += `<div><span style="color:#4fb3c1">▲ 樂觀</span>　${fv(buv)}</div>`;
     html += `<div><span style="color:#8ba9ae">● 基準</span>　${fv(bv)}</div>`;
     if (bev != null) html += `<div><span style="color:#e57373">▼ 保守</span>　${fv(bev)}</div>`;
+    if (av != null) html += `<div><span style="color:#bcbcbc">■ 實際</span>　${fv(av)}</div>`;
     foDiv.innerHTML = html;
 
     // Position tooltip: left or right of crosshair
-    const foW = 165, foH = 110;
+    const foW = 165, foH = av != null ? 130 : 110;
     const txOffset = 10;
     let tx = x + txOffset;
     if (tx + foW > W - padR) tx = x - foW - txOffset;
@@ -433,6 +695,7 @@ function renderScenarioChart(invested, months, bullRate, baseRate, bearRate) {
     if (bullDot) bullDot.setAttribute('visibility', 'hidden');
     if (baseDot) baseDot.setAttribute('visibility', 'hidden');
     if (bearDot) bearDot.setAttribute('visibility', 'hidden');
+    if (actualDot) actualDot.setAttribute('visibility', 'hidden');
   });
 }
 
@@ -445,6 +708,9 @@ async function fetchStockInfo() {
   document.getElementById('sim-yield-bear').value = '';
   _bullUserEdited = false;
   _bearUserEdited = false;
+  _scenarioNodes = null; _scenarioAnchorId = null; _scenarioSource = null;
+  _scenarioChart = null; _scenarioDeltas = null; _scenarioAutoRates = null;
+  _renderScenarioSourceUI();
   document.getElementById('results-section').classList.add('hidden');
   // (scenario chart now lives inside results-section)
   const status = document.getElementById('stock-query-status');
@@ -489,6 +755,11 @@ async function fetchStockInfo() {
     renderStockChart(data);
     _fetchAndRenderChart(ticker, bestPeriod);
     fetchStockNews(ticker);
+    // 這裡要 await：openCalculatorWithTicker() 靠 fetchStockInfo().then(...) 去套用主持人推薦的
+    // expected_return，如果不等這個做完，「查podcast分析」跟「套用主持人數字」兩件事的完成順序
+    // 不固定，有時會讓主持人指定的報酬率被之後才回來的podcast分數蓋掉。
+    // 股價圖/新聞這些可見的畫面已經在上面同步渲染完了，這裡加await不會讓使用者多等待。
+    await _fetchScenarioSource(data.ticker);
   } catch(e) {
     status.textContent = '查詢失敗，請稍後再試';
     status.classList.remove('hidden');
@@ -736,6 +1007,9 @@ function resetCalculator() {
   stockCurrentPrice = 0;
   _hostYield = null;
   _hostCalcData = null;
+  _scenarioNodes = null; _scenarioAnchorId = null; _scenarioSource = null;
+  _scenarioChart = null; _scenarioDeltas = null; _scenarioAutoRates = null;
+  _renderScenarioSourceUI();
   document.getElementById('host-yield-reset').classList.add('hidden');
   document.getElementById('host-calc-badge').style.display = 'none';
   _initSimDates();
