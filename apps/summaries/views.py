@@ -270,6 +270,46 @@ class SummaryDetailAPIView(APIView):
         })
 
 
+def _normalize_asset_display_names(data: list) -> list:
+    """
+    把驗證句要顯示的股票名稱，統一成 TickerMap.zh_name。
+
+    問題：BacktestingRecord.asset 是每一集AI從逐字稿裡直接抓出來的原始字串，
+    同一支股票不同集可能寫成「輝達」「NVIDIA」「Nvidia」，沒有統一過。
+
+    原本只拿 ticker 去查 TickerMap.zh_name，但發現部分舊資料的 ticker 欄位本身就存錯了：
+    resolve_ticker() 裡有一條規則「1~6個大寫字母就當作已經是合法ticker，直接採用」
+    （見 apps/summaries/services/backtesting.py 的 _rule_based_ticker），
+    "NVIDIA" 剛好符合（6個大寫字母），從沒機會查到 TickerMap 裡「NVIDIA→NVDA」這筆對照，
+    導致這幾筆的 ticker 直接被存成 "NVIDIA" 而不是 "NVDA"，光靠 ticker 查不出正確中文名。
+
+    修正：改成兩條路都查——先用原始 asset 字串直接查 TickerMap.asset_name（這張表本來就收錄了
+    "NVIDIA"→輝達 這種別名對照，不受ticker欄位錯誤影響），查不到才退回用ticker查，
+    兩條都查不到就維持原本asset字串，不會顯示空白。
+    """
+    raw_names = {d.get("asset") for d in data if d.get("asset")}
+    tickers = {d.get("ticker") for d in data if d.get("ticker")}
+    if not raw_names and not tickers:
+        return data
+    by_asset_name = dict(
+        TickerMap.objects.using("summariesdb")
+        .filter(asset_name__in=raw_names)
+        .exclude(zh_name="")
+        .values_list("asset_name", "zh_name")
+    ) if raw_names else {}
+    by_ticker = dict(
+        TickerMap.objects.using("summariesdb")
+        .filter(ticker__in=tickers)
+        .exclude(zh_name="")
+        .values_list("ticker", "zh_name")
+    ) if tickers else {}
+    for d in data:
+        zh_name = by_asset_name.get(d.get("asset")) or by_ticker.get(d.get("ticker"))
+        if zh_name:
+            d["asset"] = zh_name
+    return data
+
+
 class BacktestingBySummaryAPIView(APIView):
     """回傳某集摘要的所有 backtesting 紀錄（排除 skip）"""
     def get(self, request, pk):
@@ -290,7 +330,7 @@ class BacktestingBySummaryAPIView(APIView):
             }
             for r in records
         ]
-        return Response(data)
+        return Response(_normalize_asset_display_names(data))
 
 
 class AllBacktestingAPIView(APIView):
@@ -298,6 +338,7 @@ class AllBacktestingAPIView(APIView):
     def get(self, request):
         limit = int(request.query_params.get("limit", 300))
         podcaster = request.query_params.get("podcaster", "").strip()
+        before = request.query_params.get("before", "").strip()
 
         qs = BacktestingRecord.objects.using("summariesdb").exclude(
             result="skip"
@@ -327,37 +368,52 @@ class AllBacktestingAPIView(APIView):
             for d in data:
                 d["start_time"] = d["start_time"].isoformat() if d["start_time"] else None
                 d["end_time"]   = d["end_time"].isoformat()   if d["end_time"]   else None
-            return Response(data)
+            return Response(_normalize_asset_display_names(data))
 
-        # 不指定 podcaster：每個節目各取 1 筆最新記錄，優先選還未驗證的（pending）
+        # 不指定 podcaster
         from django.db import connections
         with connections["summariesdb"].cursor() as c:
-            c.execute("""
-                WITH ranked AS (
+            if before:
+                # Weekly Signals：回傳指定日期前的完整紀錄（同一節目可有多筆），供跨節目共識計算使用
+                c.execute("""
                     SELECT b.id, b.summary_id, b.ticker, b.asset, b.direction,
                            b.thesis, b.timeframe_raw,
                            b.start_time, b.end_time, b.result,
-                           s.podcaster, s.source_filename,
-                           ROW_NUMBER() OVER (
-                               PARTITION BY s.podcaster
-                               ORDER BY
-                                   CASE b.result WHEN 'pending' THEN 0 ELSE 1 END,
-                                   b.id DESC
-                           ) AS rn
+                           s.podcaster, s.source_filename
                     FROM backtesting b
                     JOIN summaries_summaryrecord s ON b.summary_id = s.id
-                    WHERE b.result != 'skip'
-                      AND s.podcaster IS NOT NULL AND s.podcaster != ''
-                )
-                SELECT id, summary_id, ticker, asset, direction,
-                       thesis, timeframe_raw,
-                       start_time, end_time, result,
-                       podcaster, source_filename
-                FROM ranked
-                WHERE rn = 1
-                ORDER BY id DESC
-                LIMIT %s
-            """, [limit])
+                    WHERE b.result != 'skip' AND b.start_time < %s
+                    ORDER BY b.start_time DESC, b.id DESC
+                    LIMIT %s
+                """, [before, limit])
+            else:
+                # 每個節目各取 1 筆最新記錄，優先選還未驗證的（pending）
+                c.execute("""
+                    WITH ranked AS (
+                        SELECT b.id, b.summary_id, b.ticker, b.asset, b.direction,
+                               b.thesis, b.timeframe_raw,
+                               b.start_time, b.end_time, b.result,
+                               s.podcaster, s.source_filename,
+                               ROW_NUMBER() OVER (
+                                   PARTITION BY s.podcaster
+                                   ORDER BY
+                                       CASE b.result WHEN 'pending' THEN 0 ELSE 1 END,
+                                       b.id DESC
+                               ) AS rn
+                        FROM backtesting b
+                        JOIN summaries_summaryrecord s ON b.summary_id = s.id
+                        WHERE b.result != 'skip'
+                          AND s.podcaster IS NOT NULL AND s.podcaster != ''
+                    )
+                    SELECT id, summary_id, ticker, asset, direction,
+                           thesis, timeframe_raw,
+                           start_time, end_time, result,
+                           podcaster, source_filename
+                    FROM ranked
+                    WHERE rn = 1
+                    ORDER BY id DESC
+                    LIMIT %s
+                """, [limit])
             rows = c.fetchall()
         cols = ["id","summary_id","ticker","asset","direction","thesis",
                 "timeframe_raw","start_time","end_time","result",
@@ -366,7 +422,7 @@ class AllBacktestingAPIView(APIView):
         for d in data:
             d["start_time"] = d["start_time"].isoformat() if d["start_time"] else None
             d["end_time"]   = d["end_time"].isoformat()   if d["end_time"]   else None
-        return Response(data)
+        return Response(_normalize_asset_display_names(data))
 
 
 class SearchAPIView(APIView):

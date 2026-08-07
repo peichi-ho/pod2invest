@@ -33,6 +33,22 @@
           <p id="stock-query-status" class="text-xs text-error font-semibold hidden"></p>
         </div>
 
+        <!-- 有比對到 podcast 分析時顯示；沒有則顯示 scenario-source-empty -->
+        <div id="scenario-source-panel" class="hidden bg-tertiary-container/5 border border-tertiary-container/20 rounded-lg px-4 py-3 space-y-2">
+          <div class="flex items-center justify-between gap-2">
+            <span class="text-[11px] font-bold text-tertiary-container uppercase tracking-widest">根據 Podcast 分析</span>
+            <div class="flex gap-1 shrink-0">
+              <button type="button" onclick="setScenarioMode('episode')" id="scenario-mode-episode">當集</button>
+              <button type="button" onclick="setScenarioMode('weighted')" id="scenario-mode-weighted">最新綜合</button>
+            </div>
+          </div>
+          <select id="scenario-episode-select" onchange="onScenarioEpisodeChange()"
+            class="w-full text-xs px-2 py-1.5 bg-surface-container-lowest border-none rounded-DEFAULT text-on-surface-variant focus:ring-2 focus:ring-secondary"></select>
+          <div id="scenario-source-detail" class="text-[11px] text-on-surface-variant leading-relaxed"></div>
+          <p class="text-[10px] text-outline/60 pt-1 border-t border-outline-variant/10">⚠️ 初步校準版本：參數已用真實資料校準，但資料庫僅涵蓋約15個月AI供應鏈多頭期，尚未涵蓋空頭市況</p>
+        </div>
+        <p id="scenario-source-empty" class="hidden text-[11px] text-outline/60 px-1">此股票尚無 Podcast 分析紀錄，樂觀/保守情境採用預設公式（基準×1.5 / ×0.5）推算。</p>
+
         <div id="sim-price-row" class="hidden bg-surface-container-lowest rounded-lg px-5 py-4 space-y-1">
           <div class="text-xs text-outline font-bold uppercase tracking-widest">股票名稱</div>
           <div id="sim-stock-name" class="font-body text-sm font-semibold text-on-surface-variant"></div>
@@ -105,15 +121,26 @@
               <button type="button" onclick="toggleScenarioHint()"
                 class="flex items-center gap-1 text-[10px] text-outline/70 hover:text-outline transition-colors">
                 <span class="material-symbols-outlined" style="font-size:13px">info</span>
-                依基準情境自動推算，可自行修改
+                <span id="scenario-hint-label">依基準情境自動推算，可自行修改</span>
               </button>
               <div id="scenario-hint-box" class="hidden absolute left-0 bottom-full mb-1 z-20 w-64 bg-surface-container-highest text-on-surface rounded-lg shadow-lg p-3 text-[11px] leading-relaxed border border-outline-variant/30">
-                <div class="font-bold mb-1.5 text-tertiary-container">自動推算公式</div>
-                <div class="space-y-1 text-on-surface-variant">
-                  <div>基準 ≥ 0 時：</div>
-                  <div class="pl-2 font-mono text-[10px]">樂觀 = 基準 × 1.5　保守 = 基準 × 0.5</div>
-                  <div class="mt-1">基準 &lt; 0 時：</div>
-                  <div class="pl-2 font-mono text-[10px]">樂觀 = 基準 × 0.5　保守 = 基準 × 1.5</div>
+                <div id="scenario-hint-default" class="hidden">
+                  <div class="font-bold mb-1.5 text-tertiary-container">自動推算公式</div>
+                  <div class="space-y-1 text-on-surface-variant">
+                    <div>基準 ≥ 0 時：</div>
+                    <div class="pl-2 font-mono text-[10px]">樂觀 = 基準 × 1.5　保守 = 基準 × 0.5</div>
+                    <div class="mt-1">基準 &lt; 0 時：</div>
+                    <div class="pl-2 font-mono text-[10px]">樂觀 = 基準 × 0.5　保守 = 基準 × 1.5</div>
+                  </div>
+                </div>
+                <div id="scenario-hint-podcast" class="hidden">
+                  <div class="font-bold mb-1.5 text-tertiary-container">自動推算公式（Podcast分析版）</div>
+                  <div class="space-y-1 text-on-surface-variant">
+                    <div>依這支股票的歷史波動率、AI判讀的風險/展望分數，</div>
+                    <div>算出情境寬度（spread）跟偏向（lean），</div>
+                    <div class="pl-2 font-mono text-[10px]">樂觀 = 基準 + spread×(1+lean)</div>
+                    <div class="pl-2 font-mono text-[10px]">保守 = 基準 − spread×(1−lean)</div>
+                  </div>
                 </div>
                 <div class="mt-2 pt-2 border-t border-outline-variant/20 text-outline/70">三個數值均可自行修改</div>
               </div>
@@ -153,6 +180,7 @@
           <div><div class="text-xs text-outline font-bold uppercase tracking-widest mb-1">區間漲跌</div><div id="stock-change" class="font-['Epilogue'] font-bold text-lg"></div></div>
           <div><div class="text-xs text-outline font-bold uppercase tracking-widest mb-1">歷史年化報酬</div><div id="stock-hist-return" class="font-['Epilogue'] font-bold text-lg"></div></div>
         </div>
+        <p id="stock-data-asof" class="mt-2 text-xs text-outline"></p>
         <div id="stock-news-section" class="hidden mt-5 pt-4 border-t border-outline-variant/20">
           <div class="text-xs text-outline font-bold uppercase tracking-widest mb-3">相關新聞</div>
           <div id="stock-news-list" class="space-y-2"></div>
@@ -257,6 +285,10 @@
                 <svg width="22" height="4"><line x1="0" y1="2" x2="22" y2="2" stroke="#ba1a1a" stroke-width="2.5" stroke-dasharray="5,3"/></svg>
                 <span class="text-xs font-bold text-[#ba1a1a]">保守 <span id="legend-bear-rate" class="font-['Epilogue'] opacity-80"></span></span>
               </div>
+              <div id="legend-actual-row" class="hidden" style="display:flex;align-items:center;gap:8px">
+                <svg width="22" height="4"><line x1="0" y1="2" x2="22" y2="2" stroke="#4a4a4a" stroke-width="2.5"/></svg>
+                <span class="text-xs font-bold text-[#4a4a4a]">實際股價</span>
+              </div>
             </div>
           </div>
 
@@ -266,6 +298,14 @@
             <span class="material-symbols-outlined" style="font-size:13px">swap_vert</span>
             三情境區間差距：<span id="scenario-range-val" class="font-semibold text-tertiary-container"></span>
           </div>
+          <p id="scenario-gbm-note" class="hidden mt-2 text-[10px] text-outline/60 leading-relaxed">
+            灰色區域為基準情境跑1000次GBM模擬後的10~90百分位區間（誠實呈現不確定性）；樂觀/保守為單一示範路徑。
+            模擬會跟著左側「投資期間」跑對應的月數。
+          </p>
+          <p id="scenario-actual-note" class="hidden mt-1 text-[10px] text-outline/60 leading-relaxed">
+            深灰色實線是這支股票從節目發布當天開始，實際發生的股價走勢（換算成同樣的持倉市值），只會畫到目前為止；
+            超出樂觀或低於保守情境都是有可能發生的，這代表當時的假設跟實際市況有落差，不是模擬「失誤」。
+          </p>
 
         </div>
       </div>
