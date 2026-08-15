@@ -253,10 +253,6 @@ def _rule_based_ticker(asset: str) -> Optional[str]:
     if re.match(r"^\d{4,6}$", a):
         return f"{a}.TW"
 
-    # 已是英文 ticker（純大寫字母，最多 6 碼）
-    if re.match(r"^[A-Z]{1,6}$", a):
-        return a
-
     # ── 指數關鍵字 ────────────────────────────────────────────────────────────
     INDEX_MAP = {
         ("台股加權", "加權指數", "大盤", "台北股市"): "^TWII",
@@ -470,10 +466,20 @@ def _rule_based_ticker(asset: str) -> Optional[str]:
     }
     if a in ALIAS_MAP:
         return ALIAS_MAP[a]
+    a_lower = a.lower()
+    for k, v in ALIAS_MAP.items():
+        if k.lower() == a_lower:
+            return v
 
     # ── ETF 代號（含 B 結尾債券 ETF）────────────────────────────────────────
     if re.match(r"^\d{5}[BbRr]$", a):
         return f"{a}.TW"
+
+    # 已是英文 ticker（純大寫字母，最多 6 碼）。
+    # 放在別名對照表之後才判斷，避免像 NVIDIA 這種剛好全大寫又<=6碼的
+    # 公司名被誤判成合法ticker而跳過別名/TickerMap查詢。
+    if re.match(r"^[A-Z]{1,6}$", a):
+        return a
 
     return None
 
