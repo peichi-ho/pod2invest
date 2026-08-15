@@ -9,13 +9,16 @@ management command：對已有「個股」段落但還沒有 StockSentimentScore
   python manage.py backfill_stock_sentiment --dry-run       # 只印不寫入、不呼叫Gemini
 """
 import os
+import time
 
 from django.core.management.base import BaseCommand
+from django.db import connections
+from django.db.utils import OperationalError
 
 from apps.summaries.models import SummaryRecord, StockSentimentScore
 from apps.summaries.services.gemini import make_client
 from apps.summaries.services.sentiment_score import (
-    find_grounded_stock_topics,
+    find_stock_topics_with_fallback,
     get_base_vol_asof,
     classify_stock_sentiment,
 )
@@ -45,20 +48,20 @@ class Command(BaseCommand):
             """
             if target_id:
                 qs = (SummaryRecord.objects.using("summariesdb")
-                      .only("id", "arguments", "published_at", "episode_id")
+                      .only("id", "arguments", "outlook_calls", "published_at", "episode_id")
                       .filter(id=target_id))
-                yield list(qs)
+                yield fetch_with_retry(lambda: list(qs))
                 return
 
             last_id = 0
             fetched_total = 0
             while True:
-                batch = list(
+                batch = fetch_with_retry(lambda: list(
                     SummaryRecord.objects.using("summariesdb")
-                    .only("id", "arguments", "published_at", "episode_id")
+                    .only("id", "arguments", "outlook_calls", "published_at", "episode_id")
                     .filter(id__gt=last_id)
                     .order_by("id")[:BATCH_SIZE]
-                )
+                ))
                 if not batch:
                     return
                 last_id = batch[-1].id
@@ -66,6 +69,24 @@ class Command(BaseCommand):
                 fetched_total += len(batch)
                 if limit and fetched_total >= limit:
                     return
+
+        def fetch_with_retry(query_fn, max_tries: int = 5):
+            """
+            批次撈取這步如果因為網路/DNS/連線瞬斷失敗（例如「無法解析主機名稱」），
+            重試幾次再放棄，避免長時間任務因為短暫的網路問題整個中斷、要人工重啟。
+            """
+            for attempt in range(1, max_tries + 1):
+                try:
+                    return query_fn()
+                except OperationalError as e:
+                    if attempt == max_tries:
+                        raise
+                    wait = min(5 * attempt, 30)
+                    self.stdout.write(self.style.WARNING(
+                        f"  [連線錯誤，{wait}秒後重試 {attempt}/{max_tries}] {e}"
+                    ))
+                    connections["summariesdb"].close_if_unusable_or_obsolete()
+                    time.sleep(wait)
 
         client = None
         model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
@@ -83,13 +104,13 @@ class Command(BaseCommand):
         processed_this_run = 0
         for batch in fetch_batches():
           for record in batch:
-            if not record.arguments or not record.published_at:
+            if not record.published_at:
                 continue
             if limit and processed_this_run >= limit:
                 break
             processed_this_run += 1
             total_records += 1
-            topics = find_grounded_stock_topics(record)
+            topics = find_stock_topics_with_fallback(record)
             if not topics:
                 skipped_no_topic += 1
                 continue
@@ -142,7 +163,6 @@ class Command(BaseCommand):
                         f"    [錯誤，跳過此筆] {asset_name}({ticker}): {e}"
                     ))
                     errored += 1
-                    from django.db import connections
                     connections["summariesdb"].close_if_unusable_or_obsolete()
                     continue
 

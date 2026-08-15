@@ -9,6 +9,17 @@ let _hostCalcData   = null;
 let _newsCache      = [];
 let _bullUserEdited = false;
 let _bearUserEdited = false;
+let _episodeNodes    = [];
+let _selectedScoreId = null;
+let _scenarioMode    = 'single';   // 'single' | 'weighted'
+let _scenarioMeta    = null;       // 最近一次 /scenario/ or /scenario-weighted/ 回傳，含 annual_vol 供 GBM 用
+let _pendingOriginEpisodeId = null; // 從單集摘要頁「試算」按鈕過來時，記住是哪一集，選集清單要預選同一集
+                                     // 用 episode_id 不是 summary_id：同一集的 pro/novice 是兩筆不同 summary_id，
+                                     // 但 stock-timeline 只列 pro，用 episode_id 才能不管使用者當下看的是哪個 mode 都能配對到
+let _currentTicker = '';            // 目前已查詢解析出的 ticker（給「查看走勢圖與新聞」按鈕跳轉用）
+let _lastResolvedInputText = null;  // 股票代號輸入框最後一次成功查詢時的原始文字，判斷試算時要不要先補查
+let _stockInfoInFlight = null;      // { forInput, promise }：目前正在跑的查詢，避免 blur/Enter/試算同時觸發重複打 API
+let _pendingCandidates = [];        // 輸入模糊時（例如「電子」）後端回傳的候選股票清單，等使用者選一個
 
 function _initSimDates() {
   const today      = new Date();
@@ -57,6 +68,218 @@ function onBaseYieldChange() {
 function _refreshIfActive() {
   if (!document.getElementById('results-section').classList.contains('hidden')) {
     calcWealth();
+  }
+}
+
+// ── Episode scenario (podcast-based GBM) ──────────────────────
+function _macroLabel(v) {
+  if (v > 0.33)  return '🟢樂觀';
+  if (v < -0.33) return '🔴悲觀';
+  return '⚪中性';
+}
+function _riskLabel(v) {
+  if (v >= 0.75) return '高風險';
+  if (v >= 0.25) return '中風險';
+  return '低風險';
+}
+
+// 加權模式下，選單只顯示「真的會被加權到」的集數：日期 ≥ 目前選中這集（跟後端
+// compute_time_weighted_scores 的 eligible 篩選邏輯一致，純前端算，不用多打API）。
+function _eligibleWeightedNodes(anchorScoreId) {
+  const anchor = _episodeNodes.find(n => String(n.score_id) === String(anchorScoreId));
+  if (!anchor) return [];
+  return _episodeNodes.filter(n => n.published_at >= anchor.published_at);
+}
+
+function _populateEpisodeSelect() {
+  const sel = document.getElementById('episode-select');
+  const nodes = _scenarioMode === 'weighted'
+    ? _eligibleWeightedNodes(_selectedScoreId)
+    : _episodeNodes;
+  sel.innerHTML = nodes.map(n => {
+    const podcaster = n.podcaster ? `・${n.podcaster}` : '';
+    return `<option value="${n.score_id}">${n.published_at}${podcaster}　${_macroLabel(n.macro_score)}／${_riskLabel(n.risk_score)}</option>`;
+  }).join('');
+  sel.value = _selectedScoreId;
+}
+
+// 「綜合觀點」按鈕本身的啟用/停用＋樣式，跟目前選中集數是否還有其他更新集數可加權有關。
+function _refreshScenarioModeButtons() {
+  const weightedDisabled = _eligibleWeightedNodes(_selectedScoreId).length <= 1;
+  document.querySelectorAll('.scenario-mode-btn').forEach(btn => {
+    const mode = btn.dataset.scenarioMode;
+    const isDisabled = mode === 'weighted' && weightedDisabled;
+    btn.disabled = isDisabled;
+    btn.title = isDisabled ? '這已經是最新一集，沒有其他集數可以加權' : '';
+    btn.className = isDisabled
+      ? 'scenario-mode-btn px-3 py-1 rounded-full font-label text-[11px] font-bold transition-all text-secondary/30 cursor-not-allowed'
+      : (mode === _scenarioMode
+          ? 'scenario-mode-btn px-3 py-1 rounded-full font-label text-[11px] font-bold transition-all bg-tertiary-container text-white'
+          : 'scenario-mode-btn px-3 py-1 rounded-full font-label text-[11px] font-bold transition-all text-secondary');
+  });
+}
+
+function _sortEpisodeNodes(nodes) {
+  return nodes.sort((a, b) => b.published_at.localeCompare(a.published_at) || b.score_id - a.score_id);
+}
+
+async function fetchEpisodeTimeline(ticker, preferredEpisodeId) {
+  const wrap = document.getElementById('episode-scenario-wrap');
+  _episodeNodes = [];
+  _selectedScoreId = null;
+  _scenarioMeta = null;
+  wrap.classList.add('hidden');
+  try {
+    const res  = await fetch(`/api/calculator/stock-timeline/?ticker=${encodeURIComponent(ticker)}`);
+    const data = await res.json();
+    _episodeNodes = _sortEpisodeNodes((res.ok && data.nodes) ? data.nodes.slice() : []);
+
+    let preferredNode = preferredEpisodeId != null
+      ? _episodeNodes.find(n => n.episode_id != null && String(n.episode_id) === String(preferredEpisodeId))
+      : null;
+    let usedOnDemand = false;
+
+    // 從單集摘要頁「試算」過來，但那一集還沒被排進 timeline（可能還沒跑過批次分類）：
+    // 當場算一次、存進資料庫，補進清單，而不是默默改用最新一集資料。
+    if (preferredEpisodeId != null && !preferredNode) {
+      try {
+        const ensureRes  = await fetch(`/api/calculator/ensure-episode-score/?episode_id=${encodeURIComponent(preferredEpisodeId)}&ticker=${encodeURIComponent(ticker)}`);
+        const ensureData = await ensureRes.json();
+        if (ensureRes.ok) {
+          preferredNode = ensureData;
+          usedOnDemand = true;
+          if (!_episodeNodes.some(n => n.score_id === ensureData.score_id)) {
+            _episodeNodes = _sortEpisodeNodes([..._episodeNodes, ensureData]);
+          }
+        }
+      } catch (e) {
+        // 算不出來就照舊退回最新一集，下面的邏輯會處理
+      }
+    }
+
+    if (!_episodeNodes.length) { wrap.classList.add('hidden'); return; }
+
+    wrap.classList.remove('hidden');
+    _scenarioMode = 'single';
+    _selectedScoreId = (preferredNode || _episodeNodes[0]).score_id;
+    _populateEpisodeSelect();
+    _refreshScenarioModeButtons();
+    await applyScenarioFromEpisode();
+
+    if (preferredEpisodeId != null && !preferredNode) {
+      const badge = document.getElementById('scenario-source-badge');
+      const fallback = _episodeNodes[0];
+      badge.innerHTML = `<div class="mb-1.5 px-2 py-1.5 rounded-lg border border-error/30 bg-error/5 text-[11px] text-error font-semibold">`
+        + `⚠️ 你點的那一集沒有明確可歸因的個股討論，改顯示《${fallback.podcaster || '其他節目'}》${fallback.published_at} 的資料</div>`
+        + badge.innerHTML;
+    } else if (usedOnDemand) {
+      const badge = document.getElementById('scenario-source-badge');
+      badge.innerHTML = `✨ 這一集剛剛才即時算出分數（已存起來，之後查會直接秒開）<br>` + badge.innerHTML;
+    }
+  } catch (e) {
+    wrap.classList.add('hidden');
+  }
+}
+
+function setScenarioMode(mode) {
+  if (mode === 'weighted' && _eligibleWeightedNodes(_selectedScoreId).length <= 1) return; // 按鈕本身會被 disable 擋掉，這裡多一層保險
+  _scenarioMode = mode;
+  _populateEpisodeSelect();
+  _refreshScenarioModeButtons();
+  applyScenarioFromEpisode();
+}
+
+function onEpisodeSelectChange() {
+  _selectedScoreId = document.getElementById('episode-select').value;
+  // 換到的這集在加權模式下已經沒有其他集數可加權（例如換到最新一集）：自動退回單集模式
+  if (_scenarioMode === 'weighted' && _eligibleWeightedNodes(_selectedScoreId).length <= 1) {
+    _scenarioMode = 'single';
+  }
+  _populateEpisodeSelect();
+  _refreshScenarioModeButtons();
+  applyScenarioFromEpisode();
+}
+
+// 個股專屬段落原文，預設截斷、可展開，避免把側邊欄撐太長
+function _renderTopicExcerpt(text) {
+  if (!text) return '';
+  if (text.length <= 60) return `<div class="mt-1 text-outline/70">${text}</div>`;
+  const excerptId = '_topic_excerpt_' + Math.random().toString(36).slice(2, 8);
+  const short = text.slice(0, 60) + '…';
+  return `
+    <div class="mt-1">
+      <span id="${excerptId}-short" class="text-outline/70">${short}</span>
+      <span id="${excerptId}-full" class="hidden text-outline/70">${text}</span>
+      <button type="button" onclick="_toggleTopicExcerpt('${excerptId}', this)" class="text-secondary font-bold text-[10px] ml-1 align-baseline hover:underline">展開</button>
+    </div>`;
+}
+
+function _toggleTopicExcerpt(id, btn) {
+  const shortEl = document.getElementById(id + '-short');
+  const fullEl  = document.getElementById(id + '-full');
+  const wasShort = !shortEl.classList.contains('hidden');
+  shortEl.classList.toggle('hidden');
+  fullEl.classList.toggle('hidden');
+  btn.textContent = wasShort ? '收合' : '展開';
+}
+
+function _renderScenarioBadge(data) {
+  const el = document.getElementById('scenario-source-badge');
+  let html;
+  if (_scenarioMode === 'weighted') {
+    html = `綜合最近 ${data.n_episodes} 集觀點加權（半衰期90天，最新更新 ${data.latest_date}）<br>`
+         + `總體：${_macroLabel(data.macro_score)}／風險：${_riskLabel(data.risk_score)}`;
+    if (data.top_contributors && data.top_contributors.length) {
+      const rows = data.top_contributors.map(c => {
+        const pct = Math.round(c.weight * 100);
+        const podcaster = c.podcaster ? `・${c.podcaster}` : '';
+        return `<div class="pl-2">・${c.published_at}${podcaster}（權重 ${pct}%）</div>`;
+      }).join('');
+      html += `<br><span class="text-outline/70">主要依據集數：</span>${rows}`;
+    }
+  } else {
+    html = `《${data.asset_name}》${data.published_at} 該集內容<br>總體：${_macroLabel(data.macro_score)}／風險：${_riskLabel(data.risk_score)}`;
+    if (data.rationale) html += `<br><span class="text-outline/70">${data.rationale}</span>`;
+    html += _renderTopicExcerpt(data.topic_summary);
+    if (data.summary_id != null) {
+      html += `<div class="mt-1"><button type="button" onclick="_backOverride='calculator'; openDeepDive(${data.summary_id})" class="text-secondary font-bold text-[11px] hover:underline">查看完整摘要 →</button></div>`;
+    }
+  }
+  if (data.is_preliminary_calibration) {
+    html += `<br><span class="text-[10px] text-outline/60">⚠️ 初步校準版本，樣本涵蓋期間較短，參數尚未最終定案</span>`;
+  }
+  el.innerHTML = html;
+}
+
+let _scenarioRequestSeq = 0; // 快速切換集數時，用來判斷回應是不是過期的（避免舊回應晚到蓋掉新畫面）
+
+async function applyScenarioFromEpisode() {
+  if (!_selectedScoreId) return;
+  const seq = ++_scenarioRequestSeq;
+  const badge = document.getElementById('scenario-source-badge');
+  badge.textContent = '載入中...';
+  const path = _scenarioMode === 'weighted' ? 'scenario-weighted' : 'scenario';
+  try {
+    const res  = await fetch(`/api/calculator/${path}/?score_id=${_selectedScoreId}`);
+    const data = await res.json();
+    if (seq !== _scenarioRequestSeq) return; // 等待期間使用者已經換選別集，這筆過期了，不要蓋掉畫面
+    if (!res.ok) {
+      badge.textContent = data.error || '讀取失敗';
+      _scenarioMeta = null;
+      return;
+    }
+    _scenarioMeta = data;
+    _bullUserEdited = false;
+    _bearUserEdited = false;
+    document.getElementById('sim-yield-base').value = +(data.scenario_returns.base * 100).toFixed(1);
+    document.getElementById('sim-yield-bull').value = +(data.scenario_returns.bull * 100).toFixed(1);
+    document.getElementById('sim-yield-bear').value = +(data.scenario_returns.bear * 100).toFixed(1);
+    _renderScenarioBadge(data);
+    _refreshIfActive();
+  } catch (e) {
+    if (seq !== _scenarioRequestSeq) return;
+    badge.textContent = '讀取失敗，請稍後再試';
+    _scenarioMeta = null;
   }
 }
 
@@ -132,6 +355,62 @@ function toggleScenarioHint() {
   }
 }
 
+// ── 試算前欄位驗證 ──────────────────────────────────────────────
+function _validateSimInputs() {
+  const errors = [];
+  const capital = parseFloat(document.getElementById('sim-capital').value);
+  if (!capital || capital <= 0) {
+    errors.push({ fieldId: 'sim-capital', message: '請輸入投入金額' });
+  }
+  const startDate = document.getElementById('sim-start-date').value;
+  const endDate   = document.getElementById('sim-end-date').value;
+  if (!startDate) errors.push({ fieldId: 'sim-start-date', message: '請選擇起始日期' });
+  if (!endDate)   errors.push({ fieldId: 'sim-end-date', message: '請選擇結束日期' });
+  if (startDate && endDate && new Date(endDate) <= new Date(startDate)) {
+    errors.push({ fieldId: 'sim-end-date', message: '結束日期必須晚於起始日期' });
+  }
+  const baseRateVal = document.getElementById('sim-yield-base').value;
+  if (baseRateVal === '' || isNaN(parseFloat(baseRateVal))) {
+    errors.push({ fieldId: 'sim-yield-base', message: '請輸入基準情境年化報酬率（查詢一支有節目觀點資料的股票會自動帶入，也可以自己輸入）' });
+  }
+  return errors;
+}
+
+async function handleCalcClick() {
+  const errEl  = document.getElementById('sim-validation-error');
+
+  if (_pendingCandidates.length) {
+    errEl.textContent = '請先從上面的候選清單選擇正確的股票';
+    errEl.classList.remove('hidden');
+    return;
+  }
+
+  // 拿掉查詢按鈕後的保底：如果股票代號還沒查過（或查的是別的字），先查完再算，
+  // 使用者不需要知道背後有查詢這個步驟。
+  const rawTicker = document.getElementById('sim-ticker').value.trim();
+  if (rawTicker && rawTicker !== _lastResolvedInputText) {
+    errEl.classList.add('hidden');
+    await fetchStockInfo();
+    if (_pendingCandidates.length) {
+      errEl.textContent = '請先從上面的候選清單選擇正確的股票';
+      errEl.classList.remove('hidden');
+      return;
+    }
+  }
+
+  const errors = _validateSimInputs();
+  if (errors.length) {
+    errEl.textContent = errors[0].message;
+    errEl.classList.remove('hidden');
+    const field = document.getElementById(errors[0].fieldId);
+    if (field) field.focus();
+    return;
+  }
+  errEl.classList.add('hidden');
+  calcWealth();
+  document.getElementById('results-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
 function calcWealth() {
   const capital  = parseFloat(document.getElementById('sim-capital').value) || 0;
   const baseRate = parseFloat(document.getElementById('sim-yield-base').value);
@@ -158,6 +437,7 @@ function calcWealth() {
   const retColor   = baseRate >= 0 ? upColor : downColor;
 
   // Show results section
+  document.getElementById('calc-results-placeholder').classList.add('hidden');
   document.getElementById('results-section').classList.remove('hidden');
 
   // 輸入條件
@@ -192,7 +472,8 @@ function calcWealth() {
   const dispEl = document.getElementById('sim-period-display');
   if (dispEl) dispEl.textContent = period ? `投資期間：${period}` : '';
 
-  renderScenarioChart(invested, months, bullRate, baseRate, bearRate);
+  const annualVol = _scenarioMeta ? _scenarioMeta.annual_vol : null;
+  renderScenarioChart(invested, months, bullRate, baseRate, bearRate, annualVol);
 }
 
 function _fmtVal(v) {
@@ -203,7 +484,15 @@ function _fmtVal(v) {
   return Math.round(v).toLocaleString();
 }
 
-function renderScenarioChart(invested, months, bullRate, baseRate, bearRate) {
+// Box-Muller 標準常態亂數
+function _gaussRandom() {
+  let u = 0, v = 0;
+  while (u === 0) u = Math.random();
+  while (v === 0) v = Math.random();
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
+
+function renderScenarioChart(invested, months, bullRate, baseRate, bearRate, annualVol) {
   const svg = document.getElementById('scenario-svg');
   svg.innerHTML = '';
 
@@ -211,18 +500,67 @@ function renderScenarioChart(invested, months, bullRate, baseRate, bearRate) {
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
   const ns = 'http://www.w3.org/2000/svg';
 
-  // Data points: monthly
+  // 平滑複利曲線（沒有波動率資料時的預設 fallback）
   function genPoints(annualRate) {
     if (annualRate == null || isNaN(annualRate)) return null;
     const mr = Math.pow(1 + annualRate / 100, 1 / 12) - 1;
     return Array.from({ length: months + 1 }, (_, n) => invested * Math.pow(1 + mr, n));
   }
 
-  const bullPts = genPoints(bullRate);
-  const basePts = genPoints(baseRate);
-  const bearPts = genPoints(bearRate);
+  // GBM 模擬路徑：樂觀/基準/悲觀共用同一組隨機震盪，只有 drift 不同，避免運氣不好交錯
+  function genGBMPoints(annualRate, shocks) {
+    if (annualRate == null || isNaN(annualRate)) return null;
+    const monthlyDrift = Math.log(1 + annualRate / 100) / 12;
+    const monthlyVol   = annualVol / Math.sqrt(12);
+    let price = invested;
+    const row = [price];
+    shocks.forEach(z => {
+      price = price * Math.exp(monthlyDrift + monthlyVol * z - 0.5 * monthlyVol * monthlyVol);
+      row.push(price);
+    });
+    return row;
+  }
 
-  const allVals = [...(bullPts || []), ...basePts, ...(bearPts || [])];
+  // 基準情境獨立跑 N_PATHS 次算 10~90 百分位區間帶（誠實呈現不確定性），
+  // 跟 apps/calculator/services/scenario.py 的 build_scenario_chart 同一套邏輯，
+  // 只是這裡改用使用者自己選的投資期間（months），不是後端固定的12個月demo。
+  function genBaseBand(annualRate, vol, nPaths) {
+    if (annualRate == null || isNaN(annualRate)) return null;
+    const paths = [];
+    for (let i = 0; i < nPaths; i++) {
+      paths.push(genGBMPoints(annualRate, Array.from({ length: months }, _gaussRandom)));
+    }
+    const low = [], high = [];
+    for (let m = 0; m <= months; m++) {
+      const col = paths.map(p => p[m]).sort((a, b) => a - b);
+      const pct = p => {
+        const idx = (col.length - 1) * p / 100;
+        const lo2 = Math.floor(idx), hi2 = Math.ceil(idx);
+        if (lo2 === hi2) return col[lo2];
+        const frac = idx - lo2;
+        return col[lo2] * (1 - frac) + col[hi2] * frac;
+      };
+      low.push(pct(10));
+      high.push(pct(90));
+    }
+    return { low, high };
+  }
+
+  let bullPts, basePts, bearPts, band;
+  if (annualVol && annualVol > 0) {
+    const shocks = Array.from({ length: months }, _gaussRandom);
+    bullPts = genGBMPoints(bullRate, shocks);
+    basePts = genGBMPoints(baseRate, shocks);
+    bearPts = genGBMPoints(bearRate, shocks);
+    band = genBaseBand(baseRate, annualVol, 300);
+  } else {
+    bullPts = genPoints(bullRate);
+    basePts = genPoints(baseRate);
+    bearPts = genPoints(bearRate);
+    band = null;
+  }
+
+  const allVals = [...(bullPts || []), ...basePts, ...(bearPts || []), ...(band ? band.low : []), ...(band ? band.high : [])];
   const dataMin = Math.min(...allVals);
   const dataMax = Math.max(...allVals);
 
@@ -293,6 +631,20 @@ function renderScenarioChart(invested, months, bullRate, baseRate, bearRate) {
     svg.appendChild(gt);
   });
 
+  // 基準情境 10~90% 機率區間帶（灰底），畫在所有線的下面
+  if (band) {
+    let d = '';
+    band.low.forEach((v, i) => { d += (i === 0 ? 'M' : 'L') + `${toX(i).toFixed(1)},${toY(v).toFixed(1)}`; });
+    for (let i = band.high.length - 1; i >= 0; i--) { d += ` L${toX(i).toFixed(1)},${toY(band.high[i]).toFixed(1)}`; }
+    d += ' Z';
+    const bandPath = document.createElementNS(ns, 'path');
+    bandPath.setAttribute('d', d);
+    bandPath.setAttribute('fill', '#113236');
+    bandPath.setAttribute('fill-opacity', '0.08');
+    bandPath.setAttribute('stroke', 'none');
+    svg.appendChild(bandPath);
+  }
+
   // Draw lines
   function drawLine(pts, color, dash) {
     if (!pts) return;
@@ -329,6 +681,11 @@ function renderScenarioChart(invested, months, bullRate, baseRate, bearRate) {
   if (bullEl) bullEl.textContent = fmtRate(bullRate);
   if (baseEl) baseEl.textContent = fmtRate(baseRate);
   if (bearEl) bearEl.textContent = fmtRate(bearRate);
+
+  const bandRow = document.getElementById('legend-band-row');
+  if (bandRow) bandRow.className = band
+    ? 'flex items-center gap-2'
+    : 'hidden items-center gap-2';
 
   // Range note: difference between bull and bear at end
   const rangeNote = document.getElementById('scenario-range-note');
@@ -437,23 +794,64 @@ function renderScenarioChart(invested, months, bullRate, baseRate, bearRate) {
 }
 
 // ── Stock info & chart ────────────────────────────────────────
+// ── 股票候選清單（輸入模糊時，例如「電子」對到好幾家公司）──────────
+function _showStockCandidates(candidates, query) {
+  _pendingCandidates = candidates;
+  const wrap = document.getElementById('stock-candidates-wrap');
+  wrap.innerHTML = candidates.map(c => `
+    <button type="button" onmousedown="event.preventDefault()" onclick="selectStockCandidate('${c.ticker.replace(/'/g, "\\'")}')"
+      class="block w-full text-left px-3 py-2 rounded-lg bg-surface-container-lowest hover:bg-surface-container-high text-sm font-semibold text-on-surface-variant transition-colors">
+      ${c.name}　<span class="text-outline text-xs font-normal">${c.ticker}</span>
+    </button>`).join('');
+  wrap.classList.remove('hidden');
+}
+
+function _hideStockCandidates() {
+  _pendingCandidates = [];
+  const wrap = document.getElementById('stock-candidates-wrap');
+  if (wrap) { wrap.classList.add('hidden'); wrap.innerHTML = ''; }
+}
+
+function selectStockCandidate(ticker) {
+  document.getElementById('sim-ticker').value = ticker;
+  _hideStockCandidates();
+  fetchStockInfo();
+}
+
+// fetchStockInfo 可能被 blur / Enter / 試算按鈕的保底邏輯同時觸發，
+// 同一個輸入內容正在查詢中就沿用同一個 promise，避免重複打 API。
 async function fetchStockInfo() {
   const ticker = document.getElementById('sim-ticker').value.trim();
   if (!ticker) return;
+  if (_stockInfoInFlight && _stockInfoInFlight.forInput === ticker) {
+    return _stockInfoInFlight.promise;
+  }
+  const promise = _doFetchStockInfo(ticker);
+  _stockInfoInFlight = { forInput: ticker, promise };
+  try {
+    await promise;
+  } finally {
+    if (_stockInfoInFlight && _stockInfoInFlight.forInput === ticker) _stockInfoInFlight = null;
+  }
+}
+
+async function _doFetchStockInfo(ticker) {
   document.getElementById('sim-yield-base').value = '';
   document.getElementById('sim-yield-bull').value = '';
   document.getElementById('sim-yield-bear').value = '';
   _bullUserEdited = false;
   _bearUserEdited = false;
+  _episodeNodes = [];
+  _selectedScoreId = null;
+  _scenarioMeta = null;
+  _currentTicker = '';
+  _hideStockCandidates();
+  document.getElementById('episode-scenario-wrap').classList.add('hidden');
   document.getElementById('results-section').classList.add('hidden');
-  // (scenario chart now lives inside results-section)
+  document.getElementById('calc-results-placeholder').classList.remove('hidden');
   const status = document.getElementById('stock-query-status');
   status.textContent = '查詢中...';
   status.classList.remove('hidden');
-  document.getElementById('stock-svg').classList.add('hidden');
-  document.getElementById('stock-chart-placeholder').classList.remove('hidden');
-  document.getElementById('stock-chart-placeholder').textContent = '載入中...';
-  document.getElementById('stock-info').classList.add('hidden');
   document.getElementById('sim-price-row').classList.add('hidden');
   try {
     const startDate = document.getElementById('sim-start-date').value;
@@ -467,9 +865,14 @@ async function fetchStockInfo() {
     const res  = await fetch(url);
     const data = await res.json();
     if (!res.ok) {
+      if (data.candidates && data.candidates.length) {
+        status.textContent = `「${ticker}」有多個可能的結果，請從下面選擇：`;
+        status.classList.remove('hidden');
+        _showStockCandidates(data.candidates, ticker);
+        return;
+      }
       status.textContent = data.error || '找不到此股票，請確認代號或名稱';
       status.classList.remove('hidden');
-      document.getElementById('stock-chart-placeholder').textContent = '查詢個股後顯示走勢圖';
       return;
     }
     const prices       = data.data;
@@ -477,6 +880,8 @@ async function fetchStockInfo() {
     const periodReturn = (last / prices[0].close - 1) * 100;
 
     stockCurrentPrice = last;
+    _currentTicker = data.ticker;
+    _lastResolvedInputText = ticker;
     document.getElementById('sim-current-price-display').textContent = 'NT$' + last.toFixed(1);
     document.getElementById('sim-stock-name').textContent = data.name;
     document.getElementById('sim-price-row').classList.remove('hidden');
@@ -485,24 +890,34 @@ async function fetchStockInfo() {
 
     const bestPeriod = _pickBestPeriod(startDate, endDate);
     stockPeriod = bestPeriod;
-    _highlightPeriodBtn(bestPeriod);
-    renderStockChart(data);
-    _fetchAndRenderChart(ticker, bestPeriod);
-    fetchStockNews(ticker);
+    const originEpisodeId = _pendingOriginEpisodeId;
+    _pendingOriginEpisodeId = null;
+    await fetchEpisodeTimeline(data.ticker, originEpisodeId);
   } catch(e) {
     status.textContent = '查詢失敗，請稍後再試';
     status.classList.remove('hidden');
-    document.getElementById('stock-chart-placeholder').textContent = '查詢個股後顯示走勢圖';
-    document.getElementById('stock-chart-placeholder').classList.remove('hidden');
-    document.getElementById('stock-svg').classList.add('hidden');
   }
 }
 
 function setStockPeriod(period) {
   stockPeriod = period;
   _highlightPeriodBtn(period);
-  const ticker = document.getElementById('sim-ticker').value.trim();
-  if (ticker) _fetchAndRenderChart(ticker, period);
+  if (_currentTicker) _fetchAndRenderChart(_currentTicker, period);
+}
+
+// ── Graph page（個股趨勢圖 + 新聞，從計算機頁面跳過去）──────────────
+function openGraphForCurrentTicker() {
+  if (!_currentTicker) return;
+  showPage('graph');
+  document.getElementById('stock-chart-subtitle').textContent = document.getElementById('sim-stock-name').textContent || _currentTicker;
+  const bestPeriod = _pickBestPeriod(
+    document.getElementById('sim-start-date').value,
+    document.getElementById('sim-end-date').value
+  );
+  stockPeriod = bestPeriod;
+  _highlightPeriodBtn(bestPeriod);
+  _fetchAndRenderChart(_currentTicker, bestPeriod);
+  fetchStockNews(_currentTicker);
 }
 
 function _highlightPeriodBtn(period) {
@@ -718,7 +1133,11 @@ function closeNewsPanel() {
 // ── Calculator nav helpers ────────────────────────────────────
 function resetCalculator() {
   document.getElementById('results-section').classList.add('hidden');
-  // (scenario chart now lives inside results-section)
+  document.getElementById('calc-results-placeholder').classList.remove('hidden');
+  document.getElementById('sim-validation-error').classList.add('hidden');
+  _currentTicker = '';
+  _lastResolvedInputText = null;
+  _hideStockCandidates();
   document.getElementById('sim-ticker').value = '';
   document.getElementById('sim-stock-name').textContent = '';
   document.getElementById('sim-current-price-display').textContent = '';
@@ -733,6 +1152,10 @@ function resetCalculator() {
   document.getElementById('sim-yield-bear').value = '';
   _bullUserEdited = false;
   _bearUserEdited = false;
+  _episodeNodes = [];
+  _selectedScoreId = null;
+  _scenarioMeta = null;
+  document.getElementById('episode-scenario-wrap').classList.add('hidden');
   stockCurrentPrice = 0;
   _hostYield = null;
   _hostCalcData = null;
@@ -741,7 +1164,8 @@ function resetCalculator() {
   _initSimDates();
 }
 
-function goToCalculatorWithStock(stockName, endDate) {
+function goToCalculatorWithStock(stockName, endDate, originEpisodeId) {
+  _pendingOriginEpisodeId = originEpisodeId != null ? originEpisodeId : null;
   document.getElementById('sim-yield-base').value = '';
   document.getElementById('sim-yield-bull').value = '';
   document.getElementById('sim-yield-bear').value = '';
