@@ -1067,7 +1067,7 @@ class StockTimelineAPIView(APIView):
         rows = (
             StockSentimentScore.objects
             .using('summariesdb')
-            .filter(ticker=ticker)
+            .filter(ticker=ticker, summary__mode='pro')
             .select_related('summary')
             .order_by('summary__published_at')
         )
@@ -1075,8 +1075,10 @@ class StockTimelineAPIView(APIView):
             {
                 'score_id': r.id,
                 'summary_id': r.summary_id,
+                'episode_id': r.summary.episode_id,
                 'asset_name': r.asset_name,
                 'published_at': r.summary.published_at.date().isoformat() if r.summary.published_at else None,
+                'podcaster': r.summary.podcaster,
                 'macro_score': r.macro_score,
                 'risk_score': r.risk_score,
             }
@@ -1184,6 +1186,7 @@ class ScenarioAPIView(APIView):
         return Response({
             'asset_name': score.asset_name,
             'ticker': score.ticker,
+            'summary_id': score.summary_id,
             'published_at': asof_date.date().isoformat() if asof_date else None,
             'base': score.base,  # 這筆紀錄真實的歷史base，不受base覆蓋影響，給前端顯示「原始數字」用
             'base_overridden': base_override is not None,

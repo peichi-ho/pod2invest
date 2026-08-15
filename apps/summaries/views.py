@@ -227,6 +227,7 @@ class SummaryListAPIView(APIView):
                 "one_sentence_summary": s.one_sentence_summary,
                 "tags": s.tags,
                 "entities": s.entities,
+                "published_at": s.published_at.isoformat() if s.published_at else None,
                 "created_at": s.created_at.isoformat(),
                 "outlook_calls": s.outlook_calls or [],
             })
@@ -255,6 +256,7 @@ class SummaryDetailAPIView(APIView):
 
         return Response({
             "id": s.id,
+            "episode_id": s.episode_id,
             "source_filename": s.source_filename,
             "podcaster": s.podcaster,
             "mode": s.mode,

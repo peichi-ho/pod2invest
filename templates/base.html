@@ -141,9 +141,9 @@
     <span class="material-symbols-outlined nav-icon">calculate</span>
     <span class="font-['Manrope'] font-medium text-[10px] uppercase tracking-[0.05em] mt-1">Calculator</span>
   </button>
-  <button onclick="window.location.href='/api/knowledge-graph/graph/'" id="nav-knowledge-graph" class="nav-btn flex flex-col items-center justify-center transition-all opacity-60">
-    <span class="material-symbols-outlined nav-icon">hub</span>
-    <span class="font-['Manrope'] font-medium text-[10px] uppercase tracking-[0.05em] mt-1">Graph</span>
+  <button onclick="showPage('graph')" id="nav-graph" class="nav-btn flex flex-col items-center justify-center transition-all opacity-60">
+    <span class="material-symbols-outlined nav-icon">newspaper</span>
+    <span class="font-['Manrope'] font-medium text-[10px] uppercase tracking-[0.05em] mt-1">News</span>
   </button>
 </nav>
 
@@ -162,11 +162,11 @@
 </div>
 
 <!-- JS modules -->
-<script src="{% static 'js/app.js' %}?v=10"></script>
+<script src="{% static 'js/app.js' %}?v=11"></script>
 <script src="{% static 'js/discover.js' %}?v=11"></script>
-<script src="{% static 'js/rankings.js' %}?v=10"></script>
-<script src="{% static 'js/deep_dive.js' %}?v=10"></script>
-<script src="{% static 'js/calculator.js' %}?v=10"></script>
+<script src="{% static 'js/rankings.js' %}?v=11"></script>
+<script src="{% static 'js/deep_dive.js' %}?v=12"></script>
+<script src="{% static 'js/calculator.js' %}?v=21"></script>
 <script src="{% static 'js/ai.js' %}?v=10"></script>
 <script src="{% static 'js/profile.js' %}?v=10"></script>
 <script>
