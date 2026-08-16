@@ -1119,6 +1119,45 @@ def _parse_base_override_param(request, lo=-0.95, hi=1000.0):
     return max(lo, min(pct / 100, hi))
 
 
+class EnsureEpisodeScoreAPIView(APIView):
+    """
+    給定 episode_id + ticker：這一集如果已經有這支股票的節目觀點分數就直接回傳，
+    沒有的話當場算一次、存進資料庫再回傳（cache-aside，只有第一次點會比較慢，
+    之後任何人再選到同一集就跟 stock-timeline 列出來的一樣快）。
+    """
+    def get(self, request):
+        episode_id = request.query_params.get('episode_id', '').strip()
+        ticker = request.query_params.get('ticker', '').strip()
+        if not episode_id or not ticker:
+            return Response({'error': '請提供 episode_id 與 ticker'}, status=400)
+
+        from apps.summaries.models import SummaryRecord
+        from apps.summaries.services.sentiment_score import ensure_stock_sentiment_score
+
+        record = (
+            SummaryRecord.objects.using('summariesdb')
+            .filter(episode_id=episode_id, mode='pro')
+            .first()
+        )
+        if not record:
+            return Response({'error': '找不到這一集的正式摘要'}, status=404)
+
+        score = ensure_stock_sentiment_score(record, ticker)
+        if not score:
+            return Response({'error': '這一集沒有明確、可歸因的個股討論，無法算出這支股票的分數'}, status=422)
+
+        return Response({
+            'score_id': score.id,
+            'summary_id': score.summary_id,
+            'episode_id': record.episode_id,
+            'asset_name': score.asset_name,
+            'published_at': record.published_at.date().isoformat() if record.published_at else None,
+            'podcaster': record.podcaster,
+            'macro_score': score.macro_score,
+            'risk_score': score.risk_score,
+        })
+
+
 class ScenarioAPIView(APIView):
     """
     給定某一筆 StockSentimentScore（score_id），算出樂觀/基準/悲觀情境 + GBM 區間帶資料。
@@ -1167,6 +1206,11 @@ class ScenarioAPIView(APIView):
         if start_price is None:
             return Response({'error': f'抓不到 {score.ticker} 當時的股價'}, status=502)
 
+        from apps.summaries.services.sentiment_score import find_stock_topics_with_fallback
+        topics = find_stock_topics_with_fallback(score.summary)
+        matched_topic = next((t for t in topics if t['asset_name'] == score.asset_name), None)
+        topic_summary = matched_topic['topic'].get('summary', '') if matched_topic else ''
+
         # GBM模擬的震盪來源：優先借用這支股票真實的歷史月報酬（bootstrap），
         # 抓不到/歷史不足就自動退回常態隨機數，不會讓請求失敗。
         return_pool = _fetch_historical_return_pool(score.ticker, asof_date)
@@ -1194,6 +1238,7 @@ class ScenarioAPIView(APIView):
             'macro_score': score.macro_score,
             'risk_score': score.risk_score,
             'rationale': score.rationale,
+            'topic_summary': topic_summary,
             'index_used': use_index,
             'index_momentum': index_momentum,
             'index_score': index_score,

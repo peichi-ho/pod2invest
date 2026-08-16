@@ -8,69 +8,63 @@
     <p class="text-secondary font-medium max-w-xl text-lg leading-relaxed">輸入個股代號，計算投資報酬。</p>
   </section>
 
-  <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+  <div class="space-y-6">
+    <!-- 標的資訊 + Podcast 分析：獨立一整排，跟下面試算區同寬，Podcast 文字才有足夠空間 -->
+    <div class="bg-surface-container-low p-8 rounded-lg space-y-6">
+      <div class="flex items-center justify-between border-b border-outline-variant/20 pb-4">
+        <h3 class="font-['Epilogue'] text-xl font-bold text-tertiary-container">選擇投資標的</h3>
+      </div>
+
+      <div class="space-y-2">
+        <label class="font-label text-xs font-bold uppercase tracking-widest text-outline">股票代號</label>
+        <input id="sim-ticker" type="text" placeholder="代號或名稱，如 2330 / 台積電"
+          onkeydown="if(event.key==='Enter') fetchStockInfo()"
+          onblur="fetchStockInfo()"
+          oninput="_checkHostCalcDiff()"
+          class="w-full max-w-md px-4 py-3 bg-surface-container-lowest border-none rounded-full focus:ring-2 focus:ring-secondary font-body text-on-surface-variant"/>
+        <div id="host-calc-badge" class="items-center gap-2 bg-secondary/10 border border-secondary/30 rounded-full px-3 py-1.5" style="display:none">
+          <span class="material-symbols-outlined text-sm text-secondary" style="font-size:14px">record_voice_over</span>
+          <span id="host-calc-label" class="text-[11px] text-secondary font-bold flex-1"></span>
+          <button onclick="resetToHostCalc()" class="text-[11px] font-bold text-secondary underline hover:no-underline whitespace-nowrap">一鍵回復</button>
+        </div>
+        <p id="stock-query-status" class="text-xs text-error font-semibold hidden"></p>
+        <div id="stock-candidates-wrap" class="hidden space-y-1.5 bg-surface-container-lowest rounded-lg p-2 max-w-md"></div>
+      </div>
+
+      <div id="sim-price-row" class="hidden bg-surface-container-lowest rounded-lg px-5 py-4 space-y-1">
+        <div class="text-xs text-outline font-bold uppercase tracking-widest">股票名稱</div>
+        <div id="sim-stock-name" class="font-body text-sm font-semibold text-on-surface-variant"></div>
+        <div class="text-xs text-outline font-bold uppercase tracking-widest pt-2">目前股價</div>
+        <div id="sim-current-price-display" class="font-['Epilogue'] text-2xl font-bold text-tertiary-container"></div>
+        <button onclick="openGraphForCurrentTicker()" class="mt-2 flex items-center gap-1 text-xs font-bold text-secondary hover:text-on-primary-container transition-colors">
+          <span class="material-symbols-outlined" style="font-size:15px">show_chart</span>查看走勢圖與新聞
+        </button>
+      </div>
+
+      <!-- 有比對到 podcast 分析時顯示；沒有則顯示 scenario-source-empty -->
+      <div id="scenario-source-panel" class="hidden bg-surface-container-lowest rounded-lg px-6 py-5 space-y-3">
+        <div class="flex items-center justify-between gap-2">
+          <span class="text-xs font-bold text-tertiary-container uppercase tracking-widest">根據 Podcast 分析</span>
+          <div class="flex gap-1 shrink-0">
+            <button type="button" onclick="setScenarioMode('episode')" id="scenario-mode-episode">當集</button>
+            <button type="button" onclick="setScenarioMode('weighted')" id="scenario-mode-weighted">最新綜合</button>
+          </div>
+        </div>
+        <select id="scenario-episode-select" onchange="onScenarioEpisodeChange()"
+          class="w-full max-w-md text-sm px-3 py-2 bg-surface-container border border-outline-variant/50 rounded-DEFAULT text-on-surface-variant focus:ring-2 focus:ring-secondary"></select>
+        <div id="scenario-source-detail" class="text-sm text-on-surface leading-relaxed max-w-3xl"></div>
+        <p class="text-xs text-outline/60 pt-2 border-t border-outline-variant/10">⚠️ 初步校準版本：參數已用真實資料校準，但資料庫僅涵蓋約15個月AI供應鏈多頭期，尚未涵蓋空頭市況</p>
+      </div>
+      <p id="scenario-source-empty" class="hidden text-sm text-outline/60 px-1"></p>
+    </div>
+
+    <!-- 試算條件 + 試算結果：左右兩欄 -->
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
     <!-- Left: Parameters -->
     <div class="lg:col-span-4 space-y-6">
       <div class="bg-surface-container-low p-8 rounded-lg space-y-6">
         <div class="flex items-center justify-between border-b border-outline-variant/20 pb-4">
-          <h3 class="font-['Epilogue'] text-xl font-bold text-tertiary-container">Investment Parameters</h3>
-        </div>
-
-        <div class="space-y-2">
-          <label class="font-label text-xs font-bold uppercase tracking-widest text-outline">股票代號</label>
-          <input id="sim-ticker" type="text" placeholder="代號或名稱，如 2330 / 台積電"
-            onkeydown="if(event.key==='Enter') fetchStockInfo()"
-            onblur="fetchStockInfo()"
-            oninput="_checkHostCalcDiff()"
-            class="w-full px-4 py-3 bg-surface-container-lowest border-none rounded-full focus:ring-2 focus:ring-secondary font-body text-on-surface-variant"/>
-          <div id="host-calc-badge" class="items-center gap-2 bg-secondary/10 border border-secondary/30 rounded-full px-3 py-1.5" style="display:none">
-            <span class="material-symbols-outlined text-sm text-secondary" style="font-size:14px">record_voice_over</span>
-            <span id="host-calc-label" class="text-[11px] text-secondary font-bold flex-1"></span>
-            <button onclick="resetToHostCalc()" class="text-[11px] font-bold text-secondary underline hover:no-underline whitespace-nowrap">一鍵回復</button>
-          </div>
-          <p id="stock-query-status" class="text-xs text-error font-semibold hidden"></p>
-          <div id="stock-candidates-wrap" class="hidden space-y-1.5 bg-surface-container-lowest rounded-lg p-2"></div>
-        </div>
-
-        <!-- 有比對到 podcast 分析時顯示；沒有則顯示 scenario-source-empty -->
-        <div id="scenario-source-panel" class="hidden bg-tertiary-container/5 border border-tertiary-container/20 rounded-lg px-4 py-3 space-y-2">
-          <div class="flex items-center justify-between gap-2">
-            <span class="text-[11px] font-bold text-tertiary-container uppercase tracking-widest">根據 Podcast 分析</span>
-            <div class="flex gap-1 shrink-0">
-              <button type="button" onclick="setScenarioMode('episode')" id="scenario-mode-episode">當集</button>
-              <button type="button" onclick="setScenarioMode('weighted')" id="scenario-mode-weighted">最新綜合</button>
-            </div>
-          </div>
-          <select id="scenario-episode-select" onchange="onScenarioEpisodeChange()"
-            class="w-full text-xs px-2 py-1.5 bg-surface-container-lowest border-none rounded-DEFAULT text-on-surface-variant focus:ring-2 focus:ring-secondary"></select>
-          <div id="scenario-source-detail" class="text-[11px] text-on-surface-variant leading-relaxed"></div>
-          <p class="text-[10px] text-outline/60 pt-1 border-t border-outline-variant/10">⚠️ 初步校準版本：參數已用真實資料校準，但資料庫僅涵蓋約15個月AI供應鏈多頭期，尚未涵蓋空頭市況</p>
-        </div>
-        <p id="scenario-source-empty" class="hidden text-[11px] text-outline/60 px-1">此股票尚無 Podcast 分析紀錄，樂觀/保守情境採用預設公式（基準×1.5 / ×0.5）推算。</p>
-
-        <div id="sim-price-row" class="hidden bg-surface-container-lowest rounded-lg px-5 py-4 space-y-1">
-          <div class="text-xs text-outline font-bold uppercase tracking-widest">股票名稱</div>
-          <div id="sim-stock-name" class="font-body text-sm font-semibold text-on-surface-variant"></div>
-          <div class="text-xs text-outline font-bold uppercase tracking-widest pt-2">目前股價</div>
-          <div id="sim-current-price-display" class="font-['Epilogue'] text-2xl font-bold text-tertiary-container"></div>
-          <button onclick="openGraphForCurrentTicker()" class="mt-2 flex items-center gap-1 text-xs font-bold text-secondary hover:text-on-primary-container transition-colors">
-            <span class="material-symbols-outlined" style="font-size:15px">show_chart</span>查看走勢圖與新聞
-          </button>
-        </div>
-
-        <div id="episode-scenario-wrap" class="hidden bg-surface-container-lowest rounded-lg px-5 py-4 space-y-3">
-          <div class="flex items-center justify-between">
-            <span class="font-label text-xs font-bold uppercase tracking-widest text-outline">節目觀點依據</span>
-            <div class="flex gap-1 bg-surface-container-high rounded-full p-0.5">
-              <button type="button" onclick="setScenarioMode('single')" data-scenario-mode="single"
-                class="scenario-mode-btn px-3 py-1 rounded-full font-label text-[11px] font-bold transition-all bg-tertiary-container text-white">單集</button>
-              <button type="button" onclick="setScenarioMode('weighted')" data-scenario-mode="weighted"
-                class="scenario-mode-btn px-3 py-1 rounded-full font-label text-[11px] font-bold transition-all text-secondary">綜合觀點</button>
-            </div>
-          </div>
-          <select id="episode-select" onchange="onEpisodeSelectChange()"
-            class="w-full px-3 py-2 bg-surface-container-lowest border border-outline-variant/30 rounded-DEFAULT text-xs font-semibold text-on-surface-variant focus:ring-2 focus:ring-secondary"></select>
-          <p id="scenario-source-badge" class="text-[11px] text-outline leading-relaxed"></p>
+          <h3 class="font-['Epilogue'] text-xl font-bold text-tertiary-container">試算條件</h3>
         </div>
 
         <div class="space-y-2">
@@ -142,12 +136,9 @@
               </button>
               <div id="scenario-hint-box" class="hidden absolute left-0 bottom-full mb-1 z-20 w-64 bg-surface-container-highest text-on-surface rounded-lg shadow-lg p-3 text-[11px] leading-relaxed border border-outline-variant/30">
                 <div id="scenario-hint-default" class="hidden">
-                  <div class="font-bold mb-1.5 text-tertiary-container">自動推算公式</div>
+                  <div class="font-bold mb-1.5 text-tertiary-container">自動推算</div>
                   <div class="space-y-1 text-on-surface-variant">
-                    <div>基準 ≥ 0 時：</div>
-                    <div class="pl-2 font-mono text-[10px]">樂觀 = 基準 × 1.5　保守 = 基準 × 0.5</div>
-                    <div class="mt-1">基準 &lt; 0 時：</div>
-                    <div class="pl-2 font-mono text-[10px]">樂觀 = 基準 × 0.5　保守 = 基準 × 1.5</div>
+                    <div>此股票尚無 Podcast 分析資料，系統會依基準情境自動推算一組合理的樂觀/保守區間，供你參考。</div>
                   </div>
                 </div>
                 <div id="scenario-hint-podcast" class="hidden">
@@ -276,5 +267,6 @@
 
     </div>
 
+    </div>
   </div>
 </div>
