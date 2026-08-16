@@ -1,4 +1,5 @@
 # apps/summaries/services/postprocess.py
+import logging
 import re
 from typing import List, Optional
 
@@ -9,6 +10,15 @@ from .tag_taxonomy import (
     flatten_classification_to_tags,
     dedupe_str_list,
 )
+
+logger = logging.getLogger(__name__)
+
+_FIXED_TOPICS = {"總體經濟環境", "操作策略與建議", "風險提示"}
+
+
+def _is_recognized_topic(t: str) -> bool:
+    """topic 是否符合四種既有格式（固定三個／個股：.../產業：...）。"""
+    return t in _FIXED_TOPICS or t.startswith("個股：") or t.startswith("產業：")
 
 
 def _has_numeric_value(value: str) -> bool:
@@ -174,7 +184,15 @@ def normalize_schema(summary: dict) -> dict:
 
         for a in args:
             if isinstance(a, dict):
-                a["topic"] = _normalize_topic((a.get("topic") or "").strip())
+                topic = _normalize_topic((a.get("topic") or "").strip())
+                a["topic"] = topic
+                if topic and not _is_recognized_topic(topic):
+                    logger.warning(
+                        "postprocess: 不符合命名格式的 topic「%s」（summary: %s），"
+                        "prompt 規則可能沒被遵守，需要人工檢查",
+                        topic,
+                        (summary.get("one_sentence_summary") or "")[:40],
+                    )
 
         # 合併相同 topic 的 arguments
         merged_map: dict = {}

@@ -266,6 +266,7 @@ class SummaryDetailAPIView(APIView):
             "entities": s.entities,
             "arguments": s.arguments,
             "outlook_calls": outlook_calls,
+            "glossary_matches": s.glossary_matches or [],
             "audio_url": audio_url,
             "published_at": s.published_at.isoformat() if s.published_at else None,
             "created_at": s.created_at.isoformat(),
@@ -329,6 +330,7 @@ class BacktestingBySummaryAPIView(APIView):
                 "start_time": r.start_time.isoformat() if r.start_time else None,
                 "end_time": r.end_time.isoformat() if r.end_time else None,
                 "result": r.result,
+                "evidence_timestamps": r.evidence_timestamps or [],
             }
             for r in records
         ]
