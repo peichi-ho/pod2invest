@@ -282,7 +282,7 @@ function renderSignalCards(records) {
     const week = toWeekMon(r.start_time);
     if (!weekMap[week]) weekMap[week] = {};
     const asset = r.asset || '';
-    if (!weekMap[week][asset]) weekMap[week][asset] = { podcasters: {}, dir: r.direction };
+    if (!weekMap[week][asset]) weekMap[week][asset] = { podcasters: {}, dir: r.direction, ticker: r.ticker };
     const p = r.podcaster || '未知';
     if (!weekMap[week][asset].podcasters[p]) weekMap[week][asset].podcasters[p] = 0;
     weekMap[week][asset].podcasters[p]++;
@@ -359,7 +359,7 @@ function renderSignalCards(records) {
       <div class="bg-white rounded-2xl overflow-hidden" style="border-left:3px solid #c1c8c9;border-top:0.5px solid #e5e3d9;border-right:0.5px solid #e5e3d9;border-bottom:0.5px solid #e5e3d9;border-radius:0 1rem 1rem 0;">
         <div class="p-4">
           <div class="flex justify-between items-start mb-2">
-            <div class="font-['Epilogue'] font-bold text-[17px] text-on-surface leading-tight">${asset}</div>
+            <div class="font-['Epilogue'] font-bold text-[17px] text-on-surface leading-tight">${renderAssetNameStar(data.ticker, asset)}</div>
             <span class="text-[11px] px-2.5 py-1 rounded-full bg-surface-container text-outline font-semibold">單一來源</span>
           </div>
           <div class="flex items-center gap-2 mb-3">
@@ -397,7 +397,7 @@ function renderSignalCards(records) {
       <div class="bg-white rounded-2xl overflow-hidden" style="border-left:3px solid ${borderColor};border-top:0.5px solid #e5e3d9;border-right:0.5px solid #e5e3d9;border-bottom:0.5px solid #e5e3d9;border-radius:0 1rem 1rem 0;">
         <div class="p-4">
           <div class="flex justify-between items-start mb-2">
-            <div class="font-['Epilogue'] font-bold text-[17px] text-on-surface leading-tight">${asset}</div>
+            <div class="font-['Epilogue'] font-bold text-[17px] text-on-surface leading-tight">${renderAssetNameStar(data.ticker, asset)}</div>
             <span class="text-[11px] px-2.5 py-1 rounded-full ${badgeClass}">${badgeLabel}（${count}人）</span>
           </div>
           <div class="flex flex-wrap gap-1.5 mb-3">
@@ -454,6 +454,7 @@ async function loadWeeklySignals() {
     if (!res.ok) throw new Error('network');
     const records = await res.json();
     await _ensureAccuracyCache();
+    await _ensureFavoritesCache();
     _signalData = records;
     renderSignalCards(records);
   } catch (e) {

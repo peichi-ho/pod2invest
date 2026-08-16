@@ -146,7 +146,8 @@ async function loadDeepDive(summaryId) {
     document.getElementById('dd-viewpoints').innerHTML = '<p class="text-outline text-sm">載入中...</p>';
     fetch(`/api/summaries/${summaryId}/backtesting/`)
       .then(r => r.json())
-      .then(records => {
+      .then(async records => {
+        await _ensureFavoritesCache();
         const statusMap = {
           pending: { label: '待驗證', icon: 'pending',      cls: 'text-outline',   border: 'border-outline-variant', bg: 'bg-surface-container/50' },
           pass:    { label: '正確',   icon: 'check_circle', cls: 'text-green-600', border: 'border-green-500',       bg: 'bg-green-50/50' },
@@ -172,7 +173,7 @@ async function loadDeepDive(summaryId) {
                   <span class="font-label font-bold uppercase tracking-wider text-xs">${st.label}</span>
                 </div>
                 <div class="flex items-center gap-2">
-                  <span class="text-xs font-bold text-outline uppercase">${r.asset || ''}${r.direction ? ' · ' + (dirLabel[r.direction] || r.direction) : ''}</span>
+                  <span class="text-xs font-bold text-outline uppercase">${renderAssetNameStar(r.ticker, r.asset || '')}${r.direction ? ' · ' + (dirLabel[r.direction] || r.direction) : ''}</span>
                   ${calcBtn}
                 </div>
               </div>
@@ -184,6 +185,28 @@ async function loadDeepDive(summaryId) {
             </div>`;
         });
         document.getElementById('dd-viewpoints').innerHTML = vpHtml || '<p class="text-outline text-sm">此集無可回測觀點</p>';
+
+        // 本集提及的標的（去重），可以直接點名字/星星跳轉、收藏——不含 Critical Thesis
+        // Points 那段自由文字裡的公司名（那邊沒有 ticker 可以解析）。
+        const tickerSection = document.getElementById('dd-ticker-section');
+        const tickerList = document.getElementById('dd-ticker-list');
+        const seenTickers = new Set();
+        const chipHtml = records.filter(r => {
+          if (!resolveAssetCategory(r.ticker)) return false;
+          const dedupeKey = r.ticker.toUpperCase();
+          if (seenTickers.has(dedupeKey)) return false;
+          seenTickers.add(dedupeKey);
+          return true;
+        }).map(r => `
+          <div class="p-4 rounded-lg bg-surface-container-lowest border border-outline-variant/20 font-['Epilogue'] font-bold text-base text-tertiary-container">
+            ${renderAssetNameStar(r.ticker, r.asset || r.ticker)}
+          </div>`).join('');
+        if (chipHtml) {
+          tickerList.innerHTML = chipHtml;
+          tickerSection.classList.remove('hidden');
+        } else {
+          tickerSection.classList.add('hidden');
+        }
       })
       .catch(() => { document.getElementById('dd-viewpoints').innerHTML = '<p class="text-outline text-sm">載入失敗</p>'; });
 

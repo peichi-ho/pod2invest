@@ -74,9 +74,12 @@ async function loadRankings() {
 
   try {
     const sectorParam = _currentSector ? `?sector=${encodeURIComponent(_currentSector)}` : '';
+    // 跟 loadPodcastImages() 一起等，不然 podcastAvatar() 畫的時候 _podcastImages
+    // 可能還沒回來（兩支都是開機時平行打的），頭貼會先顯示成預設圖示、之後不會重畫。
     const [podRes, accRes] = await Promise.all([
       fetch('/api/summaries/podcasters/?limit=50'),
       fetch(`/api/summaries/accuracy-ranking/${sectorParam}`),
+      loadPodcastImages(),
     ]);
 
     const podData = podRes.ok ? await podRes.json() : [];
@@ -255,6 +258,7 @@ async function showPodcaster(name, host, listeners, accuracy, bgColor, icon) {
     }
 
     const accMap = await _ensureAccuracyCache();
+    await _ensureFavoritesCache();
     const accEl  = document.getElementById('podcaster-accuracy');
     const acc    = accMap[name];
     if (acc && acc.total > 0) accEl.textContent = `${acc.pct}%・${acc.total} 筆驗證`;
@@ -282,7 +286,7 @@ async function showPodcaster(name, host, listeners, accuracy, bgColor, icon) {
                 <div class="p-3 mb-2 rounded-lg border-l-4 ${cfg.border} ${cfg.bg} cursor-pointer hover:opacity-80 transition-opacity"
                      onclick="openDeepDive(${v.summary_id})">
                   <div class="flex items-center justify-between mb-1">
-                    <span class="text-[10px] font-bold text-outline uppercase tracking-wider">${v.asset || ''}${v.direction ? ' · ' + (dirLabel[v.direction] || v.direction) : ''}</span>
+                    <span class="text-[10px] font-bold text-outline uppercase tracking-wider">${renderAssetNameStar(v.ticker, v.asset || '')}${v.direction ? ' · ' + (dirLabel[v.direction] || v.direction) : ''}</span>
                     <span class="text-[10px] text-outline">${v.end_time ? '截止 ' + v.end_time : ''}</span>
                   </div>
                   <p class="text-sm font-medium text-on-surface">${v.thesis || ''}</p>
