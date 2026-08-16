@@ -9,6 +9,10 @@ let _hostCalcData   = null;
 let _newsCache      = [];
 let _bullUserEdited = false;
 let _bearUserEdited = false;
+let _currentTicker = '';            // 目前已查詢解析出的 ticker（給「查看走勢圖與新聞」按鈕跳轉用）
+let _lastResolvedInputText = null;  // 股票代號輸入框最後一次成功查詢時的原始文字，判斷試算時要不要先補查
+let _stockInfoInFlight = null;      // { forInput, promise }：目前正在跑的查詢，避免 blur/Enter/試算同時觸發重複打 API
+let _pendingCandidates = [];        // 輸入模糊時（例如「電子」）後端回傳的候選股票清單，等使用者選一個
 
 // ── Podcast-driven scenario (apps/calculator/services/scenario.py) ─────
 // 有比對到這支股票的 podcast 分析時，樂觀/保守情境改用真實校準過的公式算，
@@ -23,6 +27,9 @@ let _scenarioChart      = null;  // 其中的 GBM 模擬資料（months/bull_lin
 let _scenarioDeltas     = null;  // { bullDelta, bearDelta }，讓使用者改動基準時仍套用同一組 spread/lean
 let _scenarioAutoRates  = null;  // 自動帶入時的 {base, bull, bear}，用來判斷輸入框是否還跟後端模擬一致
 let _scenarioFetchSeq   = 0;     // 每次抓 timeline/scenario 都遞增，讓過期的非同步回應可以被忽略（避免race condition）
+let _pendingOriginEpisodeId = null; // 從 Deep Dive「試算」過來時指定的集數；抓完 timeline 後用一次就清掉
+let _scenarioLoading    = false; // 是否還在抓 timeline/scenario，用來跟「已經查完、確定沒有資料」區分，
+                                  // 避免查詢中途誤判成沒資料、或誤用還沒套用GBM模擬的複利曲線畫圖
 
 function _currentSimMonths() {
   return Math.max(Math.round(getSimYears() * 12), 1);
@@ -76,6 +83,10 @@ function _deriveScenarios(base) {
 // _scenarioFetchSeq：所有跟這個區塊有關的非同步請求（換股票/換集數/換模式/投資期間改變重抓GBM）
 // 都共用同一個遞增序號。發出請求時記下當時的序號，回應回來時比對序號還是不是最新的，
 // 不是的話直接丟棄——避免慢的舊請求晚回來蓋掉快的新請求（例如使用者連續切換股票或投資期間）。
+function _sortScenarioNodes(nodes) {
+  return nodes.slice().sort((a, b) => (a.published_at < b.published_at ? 1 : -1));
+}
+
 async function _fetchScenarioSource(ticker) {
   const seq = ++_scenarioFetchSeq;
   _scenarioNodes = null;
@@ -85,17 +96,44 @@ async function _fetchScenarioSource(ticker) {
   _scenarioChart = null;
   _scenarioDeltas = null;
   _scenarioAutoRates = null;
+  _scenarioLoading = true;
+  const originEpisodeId = _pendingOriginEpisodeId;
+  _pendingOriginEpisodeId = null;
   _renderScenarioSourceUI();
 
   try {
     const res  = await fetch(`/api/calculator/stock-timeline/?ticker=${encodeURIComponent(ticker)}`);
     const data = await res.json();
     if (seq !== _scenarioFetchSeq) return; // 已經有更新的請求發出，這筆回應過期了
-    if (!res.ok || !data.nodes || !data.nodes.length) { _renderScenarioSourceUI(); return; }
-    _scenarioNodes = data.nodes.slice().sort((a, b) => (a.published_at < b.published_at ? 1 : -1));
-    await _loadScenarioForScoreId(_scenarioNodes[0].score_id, 'episode', seq);
+    _scenarioNodes = (res.ok && data.nodes) ? _sortScenarioNodes(data.nodes) : [];
+
+    let anchor = originEpisodeId != null
+      ? _scenarioNodes.find(n => n.episode_id != null && String(n.episode_id) === String(originEpisodeId))
+      : null;
+
+    // 從單集摘要頁「試算」過來，但那一集（甚至整支股票）還沒被排進 timeline，可能還沒跑過批次分類：
+    // 當場算一次、存進資料庫、補進清單，而不是默默顯示「尚無資料」。這裡不能只在 _scenarioNodes 非空時才嘗試，
+    // 批次分類還沒涵蓋到的股票才是最常見的情況（timeline 整個是空的），這時候更需要靠這個 fallback 補上。
+    if (originEpisodeId != null && !anchor) {
+      try {
+        const ensureRes  = await fetch(`/api/calculator/ensure-episode-score/?episode_id=${encodeURIComponent(originEpisodeId)}&ticker=${encodeURIComponent(ticker)}`);
+        const ensureData = await ensureRes.json();
+        if (seq !== _scenarioFetchSeq) return;
+        if (ensureRes.ok) {
+          anchor = ensureData;
+          if (!_scenarioNodes.some(n => n.score_id === ensureData.score_id)) {
+            _scenarioNodes = _sortScenarioNodes([..._scenarioNodes, ensureData]);
+          }
+        }
+      } catch (e) { /* 算不出來就照舊往下走，交給下面的空狀態判斷 */ }
+    }
+
+    if (!_scenarioNodes.length) { _scenarioNodes = null; _scenarioLoading = false; _renderScenarioSourceUI(); return; }
+
+    await _loadScenarioForScoreId((anchor || _scenarioNodes[0]).score_id, 'episode', seq);
   } catch (e) {
     if (seq !== _scenarioFetchSeq) return;
+    _scenarioLoading = false;
     _renderScenarioSourceUI();
   }
 }
@@ -104,6 +142,7 @@ async function _loadScenarioForScoreId(scoreId, mode, seq, baseOverridePct) {
   if (seq === undefined) seq = ++_scenarioFetchSeq;
   _scenarioAnchorId = scoreId;
   _scenarioMode = mode;
+  _scenarioLoading = true;
   const endpoint = mode === 'weighted' ? 'scenario-weighted' : 'scenario';
   const months = _currentSimMonths();
   // baseOverridePct 只有在「使用者自己改了基準情境、但沒有直接手動改樂觀/保守」時才會傳進來，
@@ -115,6 +154,7 @@ async function _loadScenarioForScoreId(scoreId, mode, seq, baseOverridePct) {
     if (seq !== _scenarioFetchSeq) return; // 過期回應，忽略
     if (!res.ok) {
       _scenarioSource = null; _scenarioChart = null; _scenarioDeltas = null; _scenarioAutoRates = null;
+      _scenarioLoading = false;
       _renderScenarioSourceUI();
       return;
     }
@@ -129,11 +169,13 @@ async function _loadScenarioForScoreId(scoreId, mode, seq, baseOverridePct) {
       actual_line: data.actual_line, // 這段期間實際發生的股價；還沒到的月份是 null
       start_price: data.start_price,
     };
-    _applyScenarioSourceToInputs();
+    _scenarioLoading = false;
+    _applyScenarioSourceToInputs(); // 內部會呼叫 _refreshIfActive()，圖表因此拿到最新資料重新畫一次
     _renderScenarioSourceUI();
   } catch (e) {
     if (seq !== _scenarioFetchSeq) return;
     _scenarioSource = null; _scenarioChart = null; _scenarioDeltas = null; _scenarioAutoRates = null;
+    _scenarioLoading = false;
     _renderScenarioSourceUI();
   }
 }
@@ -154,14 +196,40 @@ function _applyScenarioSourceToInputs() {
   _refreshIfActive();
 }
 
+function _macroLabel(v) {
+  if (v > 0.33)  return '🟢樂觀';
+  if (v < -0.33) return '🔴悲觀';
+  return '⚪中性';
+}
+function _riskLabel(v) {
+  if (v >= 0.75) return '高風險';
+  if (v >= 0.25) return '中風險';
+  return '低風險';
+}
+
+// 加權模式下，只有「日期 ≥ 目前選中這集」的集數才會真的被納入計算（跟後端
+// compute_time_weighted_scores 的 eligible 篩選邏輯一致，純前端算，不用多打API），
+// 用這個判斷「綜合觀點」現在切換過去是否有意義。
+function _eligibleWeightedNodes(anchorScoreId) {
+  if (!_scenarioNodes) return [];
+  const anchor = _scenarioNodes.find(n => String(n.score_id) === String(anchorScoreId));
+  if (!anchor) return [];
+  return _scenarioNodes.filter(n => n.published_at >= anchor.published_at);
+}
+
 function setScenarioMode(mode) {
   if (!_scenarioAnchorId || mode === _scenarioMode) return;
+  if (mode === 'weighted' && _eligibleWeightedNodes(_scenarioAnchorId).length <= 1) return; // 按鈕本身會被 disable 擋掉，這裡多一層保險
   _loadScenarioForScoreId(_scenarioAnchorId, mode);
 }
 
 function onScenarioEpisodeChange() {
   const select = document.getElementById('scenario-episode-select');
-  if (select && select.value) _loadScenarioForScoreId(select.value, _scenarioMode);
+  if (!select || !select.value) return;
+  // 換到的這集在加權模式下已經沒有其他集數可加權（例如換到最新一集）：自動退回當集模式
+  const mode = (_scenarioMode === 'weighted' && _eligibleWeightedNodes(select.value).length <= 1)
+    ? 'episode' : _scenarioMode;
+  _loadScenarioForScoreId(select.value, mode);
 }
 
 function _renderScenarioSourceUI() {
@@ -175,6 +243,9 @@ function _renderScenarioSourceUI() {
   if (!_scenarioNodes || !_scenarioNodes.length) {
     panel.classList.add('hidden');
     empty.classList.remove('hidden');
+    empty.textContent = _scenarioLoading
+      ? '正在查詢 Podcast 分析中…'
+      : '此股票尚無 Podcast 分析紀錄，樂觀/保守情境為系統自動推算，你也可以自行輸入。';
     if (hintDefault) hintDefault.classList.remove('hidden');
     if (hintPodcast) hintPodcast.classList.add('hidden');
     if (hintLabel) hintLabel.textContent = '依基準情境自動推算，可自行修改';
@@ -186,20 +257,33 @@ function _renderScenarioSourceUI() {
   if (hintPodcast) hintPodcast.classList.remove('hidden');
   if (hintLabel) hintLabel.textContent = '依 Podcast 分析自動推算，可自行修改';
 
+  const eligible = _eligibleWeightedNodes(_scenarioAnchorId);
+  const weightedDisabled = eligible.length <= 1;
+
+  // 「當集」跟「綜合觀點」共用同一個下拉選單：當集列出這支股票所有集數，
+  // 綜合觀點只列出「日期 ≥ 目前選中這集」真的會被加權到的集數（eligible），選別的集數
+  // 就是把加權的錨點換掉，跟當集模式換集數是同一套邏輯（見 onScenarioEpisodeChange）。
   const select = document.getElementById('scenario-episode-select');
   if (select) {
-    select.innerHTML = _scenarioNodes.map(n =>
-      `<option value="${n.score_id}">${n.published_at || '未知日期'}</option>`
-    ).join('');
+    const options = _scenarioMode === 'weighted' ? eligible : _scenarioNodes;
+    select.innerHTML = options.map(n => {
+      const podcaster = n.podcaster ? `・${n.podcaster}` : '';
+      return `<option value="${n.score_id}">${n.published_at || '未知日期'}${podcaster}　${_macroLabel(n.macro_score)}／${_riskLabel(n.risk_score)}</option>`;
+    }).join('');
     if (_scenarioAnchorId) select.value = _scenarioAnchorId;
   }
 
-  const activeCls   = 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-tertiary-container text-white transition-colors';
-  const inactiveCls = 'text-[10px] font-bold px-2 py-0.5 rounded-full text-outline hover:bg-surface-container transition-colors';
+  const activeCls   = 'text-xs font-bold px-3 py-1 rounded-full bg-tertiary-container text-white transition-colors';
+  const inactiveCls = 'text-xs font-bold px-3 py-1 rounded-full text-outline hover:bg-surface-container transition-colors';
+  const disabledCls = 'text-xs font-bold px-3 py-1 rounded-full text-outline/30 cursor-not-allowed';
   const epBtn = document.getElementById('scenario-mode-episode');
   const wtBtn = document.getElementById('scenario-mode-weighted');
   if (epBtn) epBtn.className = _scenarioMode === 'episode'  ? activeCls : inactiveCls;
-  if (wtBtn) wtBtn.className = _scenarioMode === 'weighted' ? activeCls : inactiveCls;
+  if (wtBtn) {
+    wtBtn.disabled = weightedDisabled;
+    wtBtn.title = weightedDisabled ? '這已經是最新一集，沒有其他集數可以加權' : '';
+    wtBtn.className = weightedDisabled ? disabledCls : (_scenarioMode === 'weighted' ? activeCls : inactiveCls);
+  }
 
   const detail = document.getElementById('scenario-source-detail');
   if (detail && _scenarioSource) {
@@ -207,15 +291,22 @@ function _renderScenarioSourceUI() {
     const macroLabel = _scenarioSource.macro_score > 0 ? '樂觀' : _scenarioSource.macro_score < 0 ? '悲觀' : '中性';
     let html;
     if (_scenarioMode === 'weighted' && _scenarioSource.n_episodes != null) {
+      // 哪些集數被加權到、要選別的集數當加權錨點，都靠上面跟「當集」共用的下拉選單處理，
+      // 這裡只顯示彙總後的結果，不再重複列一次集數清單。
       html = `綜合 <b>${_scenarioSource.n_episodes}</b> 集節目看法（半衰期90天加權，越新集數影響越大）：風險<b>${riskLabel}</b>・展望<b>${macroLabel}</b>`;
       if (_scenarioSource.top_contributors && _scenarioSource.top_contributors.length) {
-        html += `<div class="mt-1 text-outline/70">主要依據：${_scenarioSource.top_contributors.map(c => c.published_at).join('、')}</div>`;
+        const names = _scenarioSource.top_contributors.map(c => `${c.published_at}${c.podcaster ? '・' + c.podcaster : ''}`).join('、');
+        html += `<div class="mt-1 text-on-surface-variant">主要依據：${names}</div>`;
       }
     } else {
       html = `${_scenarioSource.published_at || ''} 節目判斷：風險<b>${riskLabel}</b>・展望<b>${macroLabel}</b>`;
       if (_scenarioSource.rationale) {
         const snippet = _scenarioSource.rationale.length > 80 ? _scenarioSource.rationale.slice(0, 80) + '…' : _scenarioSource.rationale;
-        html += `<div class="mt-1 italic text-outline/70">「${snippet}」</div>`;
+        html += `<div class="mt-1 italic text-on-surface-variant">「${snippet}」</div>`;
+      }
+      html += _renderTopicExcerpt(_scenarioSource.topic_summary);
+      if (_scenarioSource.summary_id != null) {
+        html += `<div class="mt-2"><button type="button" onclick="_backOverride='calculator'; openDeepDive(${_scenarioSource.summary_id})" class="text-secondary font-bold text-xs hover:underline">查看完整摘要 →</button></div>`;
       }
     }
     detail.innerHTML = html;
@@ -237,146 +328,17 @@ function _refreshIfActive() {
   }
 }
 
-// ── Episode scenario (podcast-based GBM) ──────────────────────
-function _macroLabel(v) {
-  if (v > 0.33)  return '🟢樂觀';
-  if (v < -0.33) return '🔴悲觀';
-  return '⚪中性';
-}
-function _riskLabel(v) {
-  if (v >= 0.75) return '高風險';
-  if (v >= 0.25) return '中風險';
-  return '低風險';
-}
-
-// 加權模式下，選單只顯示「真的會被加權到」的集數：日期 ≥ 目前選中這集（跟後端
-// compute_time_weighted_scores 的 eligible 篩選邏輯一致，純前端算，不用多打API）。
-function _eligibleWeightedNodes(anchorScoreId) {
-  const anchor = _episodeNodes.find(n => String(n.score_id) === String(anchorScoreId));
-  if (!anchor) return [];
-  return _episodeNodes.filter(n => n.published_at >= anchor.published_at);
-}
-
-function _populateEpisodeSelect() {
-  const sel = document.getElementById('episode-select');
-  const nodes = _scenarioMode === 'weighted'
-    ? _eligibleWeightedNodes(_selectedScoreId)
-    : _episodeNodes;
-  sel.innerHTML = nodes.map(n => {
-    const podcaster = n.podcaster ? `・${n.podcaster}` : '';
-    return `<option value="${n.score_id}">${n.published_at}${podcaster}　${_macroLabel(n.macro_score)}／${_riskLabel(n.risk_score)}</option>`;
-  }).join('');
-  sel.value = _selectedScoreId;
-}
-
-// 「綜合觀點」按鈕本身的啟用/停用＋樣式，跟目前選中集數是否還有其他更新集數可加權有關。
-function _refreshScenarioModeButtons() {
-  const weightedDisabled = _eligibleWeightedNodes(_selectedScoreId).length <= 1;
-  document.querySelectorAll('.scenario-mode-btn').forEach(btn => {
-    const mode = btn.dataset.scenarioMode;
-    const isDisabled = mode === 'weighted' && weightedDisabled;
-    btn.disabled = isDisabled;
-    btn.title = isDisabled ? '這已經是最新一集，沒有其他集數可以加權' : '';
-    btn.className = isDisabled
-      ? 'scenario-mode-btn px-3 py-1 rounded-full font-label text-[11px] font-bold transition-all text-secondary/30 cursor-not-allowed'
-      : (mode === _scenarioMode
-          ? 'scenario-mode-btn px-3 py-1 rounded-full font-label text-[11px] font-bold transition-all bg-tertiary-container text-white'
-          : 'scenario-mode-btn px-3 py-1 rounded-full font-label text-[11px] font-bold transition-all text-secondary');
-  });
-}
-
-function _sortEpisodeNodes(nodes) {
-  return nodes.sort((a, b) => b.published_at.localeCompare(a.published_at) || b.score_id - a.score_id);
-}
-
-async function fetchEpisodeTimeline(ticker, preferredEpisodeId) {
-  const wrap = document.getElementById('episode-scenario-wrap');
-  _episodeNodes = [];
-  _selectedScoreId = null;
-  _scenarioMeta = null;
-  wrap.classList.add('hidden');
-  try {
-    const res  = await fetch(`/api/calculator/stock-timeline/?ticker=${encodeURIComponent(ticker)}`);
-    const data = await res.json();
-    _episodeNodes = _sortEpisodeNodes((res.ok && data.nodes) ? data.nodes.slice() : []);
-
-    let preferredNode = preferredEpisodeId != null
-      ? _episodeNodes.find(n => n.episode_id != null && String(n.episode_id) === String(preferredEpisodeId))
-      : null;
-    let usedOnDemand = false;
-
-    // 從單集摘要頁「試算」過來，但那一集還沒被排進 timeline（可能還沒跑過批次分類）：
-    // 當場算一次、存進資料庫，補進清單，而不是默默改用最新一集資料。
-    if (preferredEpisodeId != null && !preferredNode) {
-      try {
-        const ensureRes  = await fetch(`/api/calculator/ensure-episode-score/?episode_id=${encodeURIComponent(preferredEpisodeId)}&ticker=${encodeURIComponent(ticker)}`);
-        const ensureData = await ensureRes.json();
-        if (ensureRes.ok) {
-          preferredNode = ensureData;
-          usedOnDemand = true;
-          if (!_episodeNodes.some(n => n.score_id === ensureData.score_id)) {
-            _episodeNodes = _sortEpisodeNodes([..._episodeNodes, ensureData]);
-          }
-        }
-      } catch (e) {
-        // 算不出來就照舊退回最新一集，下面的邏輯會處理
-      }
-    }
-
-    if (!_episodeNodes.length) { wrap.classList.add('hidden'); return; }
-
-    wrap.classList.remove('hidden');
-    _scenarioMode = 'single';
-    _selectedScoreId = (preferredNode || _episodeNodes[0]).score_id;
-    _populateEpisodeSelect();
-    _refreshScenarioModeButtons();
-    await applyScenarioFromEpisode();
-
-    if (preferredEpisodeId != null && !preferredNode) {
-      const badge = document.getElementById('scenario-source-badge');
-      const fallback = _episodeNodes[0];
-      badge.innerHTML = `<div class="mb-1.5 px-2 py-1.5 rounded-lg border border-error/30 bg-error/5 text-[11px] text-error font-semibold">`
-        + `⚠️ 你點的那一集沒有明確可歸因的個股討論，改顯示《${fallback.podcaster || '其他節目'}》${fallback.published_at} 的資料</div>`
-        + badge.innerHTML;
-    } else if (usedOnDemand) {
-      const badge = document.getElementById('scenario-source-badge');
-      badge.innerHTML = `✨ 這一集剛剛才即時算出分數（已存起來，之後查會直接秒開）<br>` + badge.innerHTML;
-    }
-  } catch (e) {
-    wrap.classList.add('hidden');
-  }
-}
-
-function setScenarioMode(mode) {
-  if (mode === 'weighted' && _eligibleWeightedNodes(_selectedScoreId).length <= 1) return; // 按鈕本身會被 disable 擋掉，這裡多一層保險
-  _scenarioMode = mode;
-  _populateEpisodeSelect();
-  _refreshScenarioModeButtons();
-  applyScenarioFromEpisode();
-}
-
-function onEpisodeSelectChange() {
-  _selectedScoreId = document.getElementById('episode-select').value;
-  // 換到的這集在加權模式下已經沒有其他集數可加權（例如換到最新一集）：自動退回單集模式
-  if (_scenarioMode === 'weighted' && _eligibleWeightedNodes(_selectedScoreId).length <= 1) {
-    _scenarioMode = 'single';
-  }
-  _populateEpisodeSelect();
-  _refreshScenarioModeButtons();
-  applyScenarioFromEpisode();
-}
-
 // 個股專屬段落原文，預設截斷、可展開，避免把側邊欄撐太長
 function _renderTopicExcerpt(text) {
   if (!text) return '';
-  if (text.length <= 60) return `<div class="mt-1 text-outline/70">${text}</div>`;
+  if (text.length <= 140) return `<div class="mt-1 text-on-surface-variant">${text}</div>`;
   const excerptId = '_topic_excerpt_' + Math.random().toString(36).slice(2, 8);
-  const short = text.slice(0, 60) + '…';
+  const short = text.slice(0, 140) + '…';
   return `
     <div class="mt-1">
-      <span id="${excerptId}-short" class="text-outline/70">${short}</span>
-      <span id="${excerptId}-full" class="hidden text-outline/70">${text}</span>
-      <button type="button" onclick="_toggleTopicExcerpt('${excerptId}', this)" class="text-secondary font-bold text-[10px] ml-1 align-baseline hover:underline">展開</button>
+      <span id="${excerptId}-short" class="text-on-surface-variant">${short}</span>
+      <span id="${excerptId}-full" class="hidden text-on-surface-variant">${text}</span>
+      <button type="button" onclick="_toggleTopicExcerpt('${excerptId}', this)" class="text-secondary font-bold text-xs ml-1 align-baseline hover:underline">展開</button>
     </div>`;
 }
 
@@ -387,66 +349,6 @@ function _toggleTopicExcerpt(id, btn) {
   shortEl.classList.toggle('hidden');
   fullEl.classList.toggle('hidden');
   btn.textContent = wasShort ? '收合' : '展開';
-}
-
-function _renderScenarioBadge(data) {
-  const el = document.getElementById('scenario-source-badge');
-  let html;
-  if (_scenarioMode === 'weighted') {
-    html = `綜合最近 ${data.n_episodes} 集觀點加權（半衰期90天，最新更新 ${data.latest_date}）<br>`
-         + `總體：${_macroLabel(data.macro_score)}／風險：${_riskLabel(data.risk_score)}`;
-    if (data.top_contributors && data.top_contributors.length) {
-      const rows = data.top_contributors.map(c => {
-        const pct = Math.round(c.weight * 100);
-        const podcaster = c.podcaster ? `・${c.podcaster}` : '';
-        return `<div class="pl-2">・${c.published_at}${podcaster}（權重 ${pct}%）</div>`;
-      }).join('');
-      html += `<br><span class="text-outline/70">主要依據集數：</span>${rows}`;
-    }
-  } else {
-    html = `《${data.asset_name}》${data.published_at} 該集內容<br>總體：${_macroLabel(data.macro_score)}／風險：${_riskLabel(data.risk_score)}`;
-    if (data.rationale) html += `<br><span class="text-outline/70">${data.rationale}</span>`;
-    html += _renderTopicExcerpt(data.topic_summary);
-    if (data.summary_id != null) {
-      html += `<div class="mt-1"><button type="button" onclick="_backOverride='calculator'; openDeepDive(${data.summary_id})" class="text-secondary font-bold text-[11px] hover:underline">查看完整摘要 →</button></div>`;
-    }
-  }
-  if (data.is_preliminary_calibration) {
-    html += `<br><span class="text-[10px] text-outline/60">⚠️ 初步校準版本，樣本涵蓋期間較短，參數尚未最終定案</span>`;
-  }
-  el.innerHTML = html;
-}
-
-let _scenarioRequestSeq = 0; // 快速切換集數時，用來判斷回應是不是過期的（避免舊回應晚到蓋掉新畫面）
-
-async function applyScenarioFromEpisode() {
-  if (!_selectedScoreId) return;
-  const seq = ++_scenarioRequestSeq;
-  const badge = document.getElementById('scenario-source-badge');
-  badge.textContent = '載入中...';
-  const path = _scenarioMode === 'weighted' ? 'scenario-weighted' : 'scenario';
-  try {
-    const res  = await fetch(`/api/calculator/${path}/?score_id=${_selectedScoreId}`);
-    const data = await res.json();
-    if (seq !== _scenarioRequestSeq) return; // 等待期間使用者已經換選別集，這筆過期了，不要蓋掉畫面
-    if (!res.ok) {
-      badge.textContent = data.error || '讀取失敗';
-      _scenarioMeta = null;
-      return;
-    }
-    _scenarioMeta = data;
-    _bullUserEdited = false;
-    _bearUserEdited = false;
-    document.getElementById('sim-yield-base').value = +(data.scenario_returns.base * 100).toFixed(1);
-    document.getElementById('sim-yield-bull').value = +(data.scenario_returns.bull * 100).toFixed(1);
-    document.getElementById('sim-yield-bear').value = +(data.scenario_returns.bear * 100).toFixed(1);
-    _renderScenarioBadge(data);
-    _refreshIfActive();
-  } catch (e) {
-    if (seq !== _scenarioRequestSeq) return;
-    badge.textContent = '讀取失敗，請稍後再試';
-    _scenarioMeta = null;
-  }
 }
 
 function _checkHostCalcDiff() {
@@ -652,14 +554,42 @@ function calcWealth() {
 
   // base或月數對不上，但樂觀/保守還是自動算出來的狀態 → 帶著目前的base重抓一次
   // （即使base沒變也一起傳，避免月數觸發的重抓不小心把之前套用的base覆蓋洗掉）。
-  // 這次先用複利曲線顯示，等重抓回來後 _applyScenarioSourceToInputs → _refreshIfActive 會自動重繪一次。
   if (bullBearAutoDerived && _scenarioChart && _scenarioAnchorId && (!baseMatch || !monthsMatch)) {
     _loadScenarioForScoreId(_scenarioAnchorId, _scenarioMode, undefined, baseRate);
   }
 
   const gbmChart = (_scenarioChart && bullBearAutoDerived && baseMatch && monthsMatch) ? _scenarioChart : null;
 
-  renderScenarioChart(invested, months, bullRate, baseRate, bearRate, gbmChart);
+  // 已知這支股票有 podcast 分析、正確的 GBM 圖正在路上，但現在手上這份還沒對上（正在抓/重抓中）：
+  // 先顯示「圖表載入中」，不要畫還沒套用GBM模擬的複利直線，那條線一閃而過會讓人誤以為故障。
+  // 資料抓回來後 _loadScenarioForScoreId → _applyScenarioSourceToInputs → _refreshIfActive
+  // 會自動重新呼叫一次 calcWealth() 畫出正確的圖。
+  const gbmPending = (_scenarioLoading || (bullBearAutoDerived && _scenarioAnchorId && !gbmChart));
+  if (gbmPending) {
+    _showScenarioChartLoading();
+  } else {
+    renderScenarioChart(invested, months, bullRate, baseRate, bearRate, gbmChart);
+  }
+}
+
+function _showScenarioChartLoading() {
+  const svg = document.getElementById('scenario-svg');
+  if (!svg) return;
+  svg.innerHTML = '';
+  const ns = 'http://www.w3.org/2000/svg';
+  const t = document.createElementNS(ns, 'text');
+  t.setAttribute('x', '350'); t.setAttribute('y', '130');
+  t.setAttribute('text-anchor', 'middle');
+  t.setAttribute('fill', '#9b9e9f');
+  t.setAttribute('font-family', 'Manrope'); t.setAttribute('font-size', '14'); t.setAttribute('font-weight', '600');
+  t.textContent = '圖表載入中…';
+  svg.appendChild(t);
+  const gbmNote = document.getElementById('scenario-gbm-note');
+  if (gbmNote) gbmNote.classList.add('hidden');
+  const actualNote = document.getElementById('scenario-actual-note');
+  if (actualNote) actualNote.classList.add('hidden');
+  const rangeNote = document.getElementById('scenario-range-note');
+  if (rangeNote) rangeNote.classList.add('hidden');
 }
 
 function _fmtVal(v) {
@@ -855,7 +785,7 @@ function renderScenarioChart(invested, months, bullRate, baseRate, bearRate, gbm
   if (bearEl) bearEl.textContent = fmtRate(bearRate);
 
   const bandRow = document.getElementById('legend-band-row');
-  if (bandRow) bandRow.className = band
+  if (bandRow) bandRow.className = (bandLow && bandHigh)
     ? 'flex items-center gap-2'
     : 'hidden items-center gap-2';
 
@@ -1335,10 +1265,6 @@ function resetCalculator() {
   document.getElementById('sim-yield-bear').value = '';
   _bullUserEdited = false;
   _bearUserEdited = false;
-  _episodeNodes = [];
-  _selectedScoreId = null;
-  _scenarioMeta = null;
-  document.getElementById('episode-scenario-wrap').classList.add('hidden');
   stockCurrentPrice = 0;
   _hostYield = null;
   _hostCalcData = null;
