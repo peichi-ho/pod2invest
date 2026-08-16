@@ -560,6 +560,7 @@ def create_backtesting_rows(
             timeframe_raw=tf_raw,
             thesis=call.get("thesis", ""),
             evidence_quote=call.get("evidence_quote", ""),
+            evidence_timestamps=call.get("evidence_timestamps") or [],
             target_price=None,          # 目前 LLM 不輸出明確目標價
             start_time=start,
             end_time=end_time,
