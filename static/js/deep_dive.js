@@ -121,6 +121,7 @@ function renderDdModeContent(mode) {
   document.getElementById('dd-takeaways').innerHTML = twHtml || '<p class="text-outline text-sm">無資料</p>';
 
   const args = s.arguments || [];
+  window._ddArgs = args;
   let argHtml = '';
   args.forEach((arg, i) => {
     const isLast      = i === args.length - 1;
@@ -159,11 +160,19 @@ function renderDdModeContent(mode) {
             ${keyDataHtml}
             <div class="thesis-preview text-on-surface-variant leading-relaxed text-base">${previewHtml}</div>
             ${hasMore ? `
-            <div class="thesis-full hidden text-on-surface-variant leading-relaxed text-base"><p>${fullHtml}</p></div>
-            <button onclick="toggleThesis(this)" class="flex items-center gap-1 text-secondary font-label font-bold text-xs uppercase tracking-wider hover:text-on-primary-container transition-colors mt-1">
-              <span class="btn-label">Read More</span>
-              <span class="material-symbols-outlined text-sm btn-icon">expand_more</span>
-            </button>` : ''}
+            <div class="thesis-full hidden text-on-surface-variant leading-relaxed text-base"><p>${fullHtml}</p></div>` : ''}
+            <div class="flex items-center gap-4 flex-wrap mt-1">
+              ${hasMore ? `
+              <button onclick="toggleThesis(this)" class="flex items-center gap-1 text-secondary font-label font-bold text-xs uppercase tracking-wider hover:text-on-primary-container transition-colors">
+                <span class="btn-label">Read More</span>
+                <span class="material-symbols-outlined text-sm btn-icon">expand_more</span>
+              </button>` : ''}
+              <button onclick="toggleArgAiChat(this, ${i})" class="arg-ai-btn flex items-center gap-1 font-label font-bold text-xs uppercase tracking-wider transition-colors text-secondary hover:text-on-primary-container">
+                <span class="material-symbols-outlined text-sm">psychology</span>
+                <span class="arg-ai-btn-label">深入問 AI</span>
+              </button>
+            </div>
+            <div class="arg-ai-chat hidden mt-2"></div>
           </div>
         </div>
       </div>`;
@@ -525,6 +534,167 @@ function toggleThesis(btn) {
     btn.classList.remove('text-secondary');
     btn.classList.add('text-on-primary-container');
   }
+}
+
+// ── Argument inline AI chat ───────────────────────────────────
+
+function toggleArgAiChat(btn, argIdx) {
+  const arg      = (window._ddArgs || [])[argIdx];
+  if (!arg) return;
+  const container = btn.closest('.flex-1');
+  const chatEl    = container.querySelector('.arg-ai-chat');
+  const label     = btn.querySelector('.arg-ai-btn-label');
+  const isOpen    = !chatEl.classList.contains('hidden');
+
+  if (isOpen) {
+    chatEl.classList.add('hidden');
+    chatEl.innerHTML = '';
+    chatEl.dataset.convId = '';
+    btn.classList.remove('text-on-primary-container');
+    btn.classList.add('text-secondary');
+    label.textContent = '深入問 AI';
+    return;
+  }
+
+  chatEl.classList.remove('hidden');
+  btn.classList.remove('text-secondary');
+  btn.classList.add('text-on-primary-container');
+  label.textContent = '關閉 AI';
+
+  const topic = arg.topic || '';
+  const summary = arg.summary || '';
+  chatEl.dataset.topic = topic;
+  chatEl.dataset.summary = summary;
+  chatEl.innerHTML = `
+    <div class="rounded-2xl border border-secondary/20 bg-surface-container-lowest overflow-hidden">
+      <div class="flex items-center gap-2 px-4 py-3 border-b border-outline-variant/20 bg-secondary-container/10">
+        <span class="material-symbols-outlined text-secondary text-sm">psychology</span>
+        <span class="font-label text-xs font-bold text-secondary uppercase tracking-widest">AI 助理・關於「${escapeHtml(topic)}」</span>
+      </div>
+      <div class="arg-chat-messages px-4 py-4 space-y-3 max-h-80 overflow-y-auto"></div>
+      <div class="border-t border-outline-variant/20 px-3 py-3 flex gap-2 items-center">
+        <input type="text"
+          class="flex-1 bg-surface-container text-sm rounded-full px-4 py-2 border border-outline-variant/30 focus:outline-none focus:border-secondary/40 placeholder:text-outline/50"
+          placeholder="輸入你的問題..."
+          onkeydown="if(event.key==='Enter'&&!event.isComposing)_ddArgSend(this)">
+        <button onclick="_ddArgSend(this.previousElementSibling)"
+          class="w-9 h-9 rounded-full bg-secondary text-white flex items-center justify-center hover:opacity-90 active:scale-95 transition-all flex-shrink-0">
+          <span class="material-symbols-outlined text-sm" style="font-variation-settings:'FILL' 1">send</span>
+        </button>
+      </div>
+    </div>`;
+
+  _ddArgAddGreeting(chatEl.querySelector('.arg-chat-messages'));
+}
+
+function _ddArgSend(input) {
+  const query = (input.value || '').trim();
+  if (!query) return;
+  input.value = '';
+  const chatEl = input.closest('.arg-ai-chat');
+
+  const isFirstTurn = !chatEl.dataset.convId;
+  let sendQuery = query;
+  if (isFirstTurn) {
+    const topic   = chatEl.dataset.topic || '';
+    const summary = chatEl.dataset.summary || '';
+    const context = summary
+      ? `主播在這集提到關於「${topic}」：${summary.slice(0, 200)}${summary.length > 200 ? '...' : ''}\n\n`
+      : '';
+    sendQuery = `${context}使用者問題：${query}`;
+  }
+  _ddArgSubmit(chatEl, sendQuery, query);
+}
+
+async function _ddArgSubmit(chatEl, query, displayQuery) {
+  const msgBox  = chatEl.querySelector('.arg-chat-messages');
+  const convId  = chatEl.dataset.convId || null;
+  _ddArgAddUser(msgBox, displayQuery != null ? displayQuery : query);
+  const loadEl = _ddArgAddLoading(msgBox);
+  try {
+    const body = { query };
+    if (convId) body.conversation_id = parseInt(convId);
+    const res  = await fetch('/api/ai/chat/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    loadEl.remove();
+    if (data.ok) {
+      chatEl.dataset.convId = data.conversation_id;
+      _ddArgAddAI(msgBox, data.answer, data.follow_ups || [], chatEl);
+    } else {
+      _ddArgAddAI(msgBox, '發生錯誤：' + (data.error || '請稍後再試'), [], chatEl);
+    }
+  } catch {
+    loadEl.remove();
+    _ddArgAddAI(msgBox, '網路錯誤，請稍後再試。', [], chatEl);
+  }
+}
+
+function _ddArgAddGreeting(msgBox) {
+  const row = document.createElement('div');
+  row.className = 'flex items-start gap-2';
+  const icon = document.createElement('div');
+  icon.className = 'w-6 h-6 rounded-full bg-secondary-container flex items-center justify-center flex-shrink-0 mt-1';
+  icon.innerHTML = '<span class="material-symbols-outlined text-on-secondary-container" style="font-size:13px">psychology</span>';
+  const bubble = document.createElement('div');
+  bubble.className = 'bg-surface-container text-sm px-4 py-2.5 rounded-t-xl rounded-br-xl max-w-[90%] leading-relaxed text-on-surface border border-outline-variant/20';
+  bubble.textContent = '有什麼想問的嗎？';
+  row.appendChild(icon);
+  row.appendChild(bubble);
+  msgBox.appendChild(row);
+}
+
+function _ddArgAddUser(msgBox, text) {
+  const div = document.createElement('div');
+  div.className = 'flex justify-end';
+  const bubble = document.createElement('div');
+  bubble.className = 'bg-tertiary-container text-white text-sm px-4 py-2.5 rounded-t-xl rounded-bl-xl max-w-[85%] leading-relaxed';
+  bubble.textContent = text;
+  div.appendChild(bubble);
+  msgBox.appendChild(div);
+  msgBox.scrollTop = msgBox.scrollHeight;
+}
+
+function _ddArgAddLoading(msgBox) {
+  const div = document.createElement('div');
+  div.className = 'flex items-center gap-2';
+  div.innerHTML = `<div class="w-6 h-6 rounded-full bg-secondary-container flex items-center justify-center flex-shrink-0"><span class="material-symbols-outlined text-on-secondary-container" style="font-size:13px">psychology</span></div><span class="text-xs text-outline animate-pulse">思考中...</span>`;
+  msgBox.appendChild(div);
+  msgBox.scrollTop = msgBox.scrollHeight;
+  return div;
+}
+
+function _ddArgAddAI(msgBox, text, followUps, chatEl) {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'flex flex-col gap-2';
+  const row = document.createElement('div');
+  row.className = 'flex items-start gap-2';
+  const icon = document.createElement('div');
+  icon.className = 'w-6 h-6 rounded-full bg-secondary-container flex items-center justify-center flex-shrink-0 mt-1';
+  icon.innerHTML = '<span class="material-symbols-outlined text-on-secondary-container" style="font-size:13px">psychology</span>';
+  const bubble = document.createElement('div');
+  bubble.className = 'bg-surface-container text-sm px-4 py-2.5 rounded-t-xl rounded-br-xl max-w-[90%] leading-relaxed text-on-surface border border-outline-variant/20';
+  bubble.innerHTML = typeof _renderMarkdown === 'function' ? _renderMarkdown(text) : escapeHtml(text);
+  row.appendChild(icon);
+  row.appendChild(bubble);
+  wrapper.appendChild(row);
+  if (followUps.length) {
+    const chips = document.createElement('div');
+    chips.className = 'flex flex-wrap gap-2 pl-8';
+    followUps.forEach(q => {
+      const btn = document.createElement('button');
+      btn.className = 'px-3 py-1 rounded-full border border-secondary/30 bg-surface-container-lowest text-secondary font-label text-xs font-semibold hover:bg-secondary-container/30 transition-all text-left';
+      btn.textContent = q;
+      btn.onclick = () => _ddArgSubmit(chatEl, q);
+      chips.appendChild(btn);
+    });
+    wrapper.appendChild(chips);
+  }
+  msgBox.appendChild(wrapper);
+  msgBox.scrollTop = msgBox.scrollHeight;
 }
 
 // ── Glossary ──────────────────────────────────────────────────
