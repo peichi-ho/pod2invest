@@ -1,5 +1,7 @@
+import calendar
 import html as _html_mod
 import json
+import math
 import xml.etree.ElementTree as ET
 import re
 from email.utils import parsedate_to_datetime
@@ -894,7 +896,11 @@ class StockChartAPIView(APIView):
             data = [
                 {'date': date.strftime('%Y-%m-%d'), 'close': round(float(row['Close']), 2)}
                 for date, row in hist.iterrows()
+                if row['Close'] == row['Close']  # 排除 NaN（NaN != NaN），yfinance 最新一日資料常尚未補齊
             ]
+
+            if not data:
+                return Response({'error': f'「{query}」目前無有效股價資料，請稍後再試'}, status=404)
 
             name = _get_display_name(ticker)
             return Response({'ticker': ticker, 'name': name, 'data': data})
@@ -1042,3 +1048,428 @@ class NewsContentAPIView(APIView):
             return Response({'title': title, 'content': content, 'real_url': r.url})
         except Exception:
             return Response({'title': '', 'content': '', 'real_url': url})
+
+
+# ── 情境資產成長模擬（試算計算機新功能）───────────────────────────────────────
+# 對應 apps/calculator/services/scenario.py 的已驗證公式 + GBM 模擬。
+# ※ 目前仍是「初步校準版本」：參數已用真實資料校準過，但資料庫只涵蓋約15個月的
+#   AI供應鏈特殊多頭期，尚未涵蓋空頭/盤整市況，之後資料庫累積更長時間需要重新校準。
+
+class StockTimelineAPIView(APIView):
+    """給定 ticker，列出所有已分類過的集數節點（給前端畫時間軸節點用）。"""
+    def get(self, request):
+        ticker = request.query_params.get('ticker', '').strip()
+        if not ticker:
+            return Response({'error': '請提供 ticker'}, status=400)
+
+        from apps.summaries.models import StockSentimentScore
+
+        rows = (
+            StockSentimentScore.objects
+            .using('summariesdb')
+            .filter(ticker=ticker, summary__mode='pro')
+            .select_related('summary')
+            .order_by('summary__published_at')
+        )
+        nodes = [
+            {
+                'score_id': r.id,
+                'summary_id': r.summary_id,
+                'episode_id': r.summary.episode_id,
+                'asset_name': r.asset_name,
+                'published_at': r.summary.published_at.date().isoformat() if r.summary.published_at else None,
+                'podcaster': r.summary.podcaster,
+                'macro_score': r.macro_score,
+                'risk_score': r.risk_score,
+            }
+            for r in rows
+        ]
+        return Response({'ticker': ticker, 'nodes': nodes})
+
+
+def _parse_months_param(request, default=12, lo=1, hi=60):
+    """
+    讓GBM模擬的月數跟前端「投資期間」對齊，而不是永遠固定12個月。
+    lo/hi 夾住合理範圍（1個月~5年），避免異常輸入讓模擬跑太久或沒有意義。
+    """
+    raw = request.query_params.get('months', '').strip()
+    if not raw:
+        return default
+    try:
+        return max(lo, min(int(raw), hi))
+    except ValueError:
+        return default
+
+
+def _parse_base_override_param(request, lo=-0.95, hi=1000.0):
+    """
+    讓使用者可以自己覆蓋base（年化報酬率，用百分比傳進來，例如?base=25代表25%），
+    覆蓋後spread/lean的算法不變（annual_vol/risk_score/macro_score不受影響），
+    GBM模擬會以這個新base為中心重新跑一次，而不是直接放棄模擬退回複利曲線。
+    lo/hi 用小數（不是百分比）表示，夾住範圍避免base <= -100%讓GBM的log算式出現域錯誤，
+    也避免離譜的輸入讓模擬沒有意義。沒帶這個參數就回傳 None，呼叫端會用該筆紀錄自己的歷史base。
+    """
+    raw = request.query_params.get('base', '').strip()
+    if not raw:
+        return None
+    try:
+        pct = float(raw)
+    except ValueError:
+        return None
+    return max(lo, min(pct / 100, hi))
+
+
+class EnsureEpisodeScoreAPIView(APIView):
+    """
+    給定 episode_id + ticker：這一集如果已經有這支股票的節目觀點分數就直接回傳，
+    沒有的話當場算一次、存進資料庫再回傳（cache-aside，只有第一次點會比較慢，
+    之後任何人再選到同一集就跟 stock-timeline 列出來的一樣快）。
+    """
+    def get(self, request):
+        episode_id = request.query_params.get('episode_id', '').strip()
+        ticker = request.query_params.get('ticker', '').strip()
+        if not episode_id or not ticker:
+            return Response({'error': '請提供 episode_id 與 ticker'}, status=400)
+
+        from apps.summaries.models import SummaryRecord
+        from apps.summaries.services.sentiment_score import ensure_stock_sentiment_score
+
+        record = (
+            SummaryRecord.objects.using('summariesdb')
+            .filter(episode_id=episode_id, mode='pro')
+            .first()
+        )
+        if not record:
+            return Response({'error': '找不到這一集的正式摘要'}, status=404)
+
+        score = ensure_stock_sentiment_score(record, ticker)
+        if not score:
+            return Response({'error': '這一集沒有明確、可歸因的個股討論，無法算出這支股票的分數'}, status=422)
+
+        return Response({
+            'score_id': score.id,
+            'summary_id': score.summary_id,
+            'episode_id': record.episode_id,
+            'asset_name': score.asset_name,
+            'published_at': record.published_at.date().isoformat() if record.published_at else None,
+            'podcaster': record.podcaster,
+            'macro_score': score.macro_score,
+            'risk_score': score.risk_score,
+        })
+
+
+class ScenarioAPIView(APIView):
+    """
+    給定某一筆 StockSentimentScore（score_id），算出樂觀/基準/悲觀情境 + GBM 區間帶資料。
+    只做「當集原始預測」模式；「最新綜合預測」(時間加權) 是獨立的另一個 endpoint。
+    """
+    def get(self, request):
+        score_id = request.query_params.get('score_id', '').strip()
+        if not score_id:
+            return Response({'error': '請提供 score_id'}, status=400)
+
+        from apps.summaries.models import StockSentimentScore
+        from apps.calculator.services.scenario import build_scenario_chart, compute_index_score
+
+        try:
+            score = (
+                StockSentimentScore.objects.using('summariesdb')
+                .select_related('summary')
+                .get(id=score_id)
+            )
+        except StockSentimentScore.DoesNotExist:
+            return Response({'error': '找不到這筆分數紀錄'}, status=404)
+
+        if score.base is None or score.annual_vol is None:
+            return Response({'error': '這筆紀錄還沒有歷史股價資料'}, status=422)
+
+        months = _parse_months_param(request)
+        base_override = _parse_base_override_param(request)
+        effective_base = base_override if base_override is not None else score.base
+        asof_date = score.summary.published_at
+
+        # 大改版：大盤指數獨立信號，預設關閉（跟現行版本行為完全一樣），
+        # 只有明確帶 ?use_index=1 才會多打一次yfinance查大盤、把index_score算進lean。
+        use_index = request.query_params.get('use_index', '').strip() in ('1', 'true', 'yes')
+        index_momentum = None
+        index_score = 0.0
+        if use_index:
+            index_momentum = _fetch_index_momentum(score.ticker, asof_date)
+            if index_momentum is not None:
+                index_score = compute_index_score(index_momentum)
+
+        try:
+            actual_line = _fetch_actual_price_path(score.ticker, asof_date, months)
+        except Exception as e:
+            return Response({'error': f'抓不到 {score.ticker} 的股價: {e}'}, status=502)
+        start_price = actual_line[0]
+        if start_price is None:
+            return Response({'error': f'抓不到 {score.ticker} 當時的股價'}, status=502)
+
+        from apps.summaries.services.sentiment_score import find_stock_topics_with_fallback
+        topics = find_stock_topics_with_fallback(score.summary)
+        matched_topic = next((t for t in topics if t['asset_name'] == score.asset_name), None)
+        topic_summary = matched_topic['topic'].get('summary', '') if matched_topic else ''
+
+        # GBM模擬的震盪來源：優先借用這支股票真實的歷史月報酬（bootstrap），
+        # 抓不到/歷史不足就自動退回常態隨機數，不會讓請求失敗。
+        return_pool = _fetch_historical_return_pool(score.ticker, asof_date)
+
+        chart = build_scenario_chart(
+            base=effective_base,
+            annual_vol=score.annual_vol,
+            risk_score=score.risk_score,
+            macro_score=score.macro_score,
+            start_price=start_price,
+            seed=score.id,  # 同一筆分數每次呼叫畫出來的示範線一致，不會每次刷新都亂跳
+            return_pool=return_pool,
+            months=months,
+            index_score=index_score,
+        )
+
+        return Response({
+            'asset_name': score.asset_name,
+            'ticker': score.ticker,
+            'summary_id': score.summary_id,
+            'published_at': asof_date.date().isoformat() if asof_date else None,
+            'base': score.base,  # 這筆紀錄真實的歷史base，不受base覆蓋影響，給前端顯示「原始數字」用
+            'base_overridden': base_override is not None,
+            'annual_vol': score.annual_vol,
+            'macro_score': score.macro_score,
+            'risk_score': score.risk_score,
+            'rationale': score.rationale,
+            'topic_summary': topic_summary,
+            'index_used': use_index,
+            'index_momentum': index_momentum,
+            'index_score': index_score,
+            'start_price': start_price,
+            'scenario_returns': {
+                'bull': chart.returns.bull,
+                'base': chart.returns.base,
+                'bear': chart.returns.bear,
+            },
+            'months': chart.months,
+            'bull_line': chart.bull_line,
+            'base_line': chart.base_line,
+            'bear_line': chart.bear_line,
+            'base_band_low': chart.base_band_low,
+            'base_band_high': chart.base_band_high,
+            'actual_line': actual_line,  # 實際股價路徑，還沒到的月份是 None
+            'is_preliminary_calibration': True,  # 前端要用這個標示「初步校準版本」
+        })
+
+
+class WeightedScenarioAPIView(APIView):
+    """
+    「最新綜合預測」模式：base/annual_vol/start_price 維持選定那一集的真實數字，
+    macro_score/risk_score 改用「這一集到最新一集之間，所有討論過這支股票的集數」
+    時間加權算出來的綜合值，代入跟 ScenarioAPIView 完全相同的公式 + GBM 邏輯。
+    """
+    def get(self, request):
+        score_id = request.query_params.get('score_id', '').strip()
+        if not score_id:
+            return Response({'error': '請提供 score_id'}, status=400)
+
+        from apps.summaries.models import StockSentimentScore
+        from apps.calculator.services.scenario import build_scenario_chart, compute_time_weighted_scores, compute_index_score
+
+        try:
+            score = (
+                StockSentimentScore.objects.using('summariesdb')
+                .select_related('summary')
+                .get(id=score_id)
+            )
+        except StockSentimentScore.DoesNotExist:
+            return Response({'error': '找不到這筆分數紀錄'}, status=404)
+
+        if score.base is None or score.annual_vol is None:
+            return Response({'error': '這筆紀錄還沒有歷史股價資料'}, status=422)
+
+        selected_date = score.summary.published_at.date()
+        weighted = compute_time_weighted_scores(score.ticker, selected_date)
+        if not weighted:
+            return Response({'error': '找不到可加權的集數'}, status=422)
+
+        months = _parse_months_param(request)
+        base_override = _parse_base_override_param(request)
+        effective_base = base_override if base_override is not None else score.base
+
+        use_index = request.query_params.get('use_index', '').strip() in ('1', 'true', 'yes')
+        index_momentum = None
+        index_score = 0.0
+        if use_index:
+            index_momentum = _fetch_index_momentum(score.ticker, score.summary.published_at)
+            if index_momentum is not None:
+                index_score = compute_index_score(index_momentum)
+
+        try:
+            actual_line = _fetch_actual_price_path(score.ticker, score.summary.published_at, months)
+        except Exception as e:
+            return Response({'error': f'抓不到 {score.ticker} 的股價: {e}'}, status=502)
+        start_price = actual_line[0]
+        if start_price is None:
+            return Response({'error': f'抓不到 {score.ticker} 當時的股價'}, status=502)
+
+        return_pool = _fetch_historical_return_pool(score.ticker, score.summary.published_at)
+
+        chart = build_scenario_chart(
+            base=effective_base,
+            annual_vol=score.annual_vol,
+            risk_score=weighted['risk_score'],
+            macro_score=weighted['macro_score'],
+            start_price=start_price,
+            seed=score.id,
+            return_pool=return_pool,
+            months=months,
+            index_score=index_score,
+        )
+
+        return Response({
+            'asset_name': score.asset_name,
+            'ticker': score.ticker,
+            'published_at': selected_date.isoformat(),
+            'index_used': use_index,
+            'index_momentum': index_momentum,
+            'index_score': index_score,
+            'base': score.base,
+            'base_overridden': base_override is not None,
+            'annual_vol': score.annual_vol,
+            'macro_score': weighted['macro_score'],
+            'risk_score': weighted['risk_score'],
+            'n_episodes': weighted['n_episodes'],
+            'latest_date': weighted['latest_date'],
+            'top_contributors': weighted['top_contributors'],
+            'start_price': start_price,
+            'scenario_returns': {
+                'bull': chart.returns.bull,
+                'base': chart.returns.base,
+                'bear': chart.returns.bear,
+            },
+            'months': chart.months,
+            'bull_line': chart.bull_line,
+            'base_line': chart.base_line,
+            'bear_line': chart.bear_line,
+            'base_band_low': chart.base_band_low,
+            'base_band_high': chart.base_band_high,
+            'actual_line': actual_line,
+            'is_preliminary_calibration': True,
+        })
+
+
+def _add_months(d, months: int):
+    """行事曆意義的『加N個月』，處理月份/年份進位跟月底日期溢位（例如1/31加1個月變2/28）。"""
+    month_index = d.month - 1 + months
+    year = d.year + month_index // 12
+    month = month_index % 12 + 1
+    day = min(d.day, calendar.monthrange(year, month)[1])
+    return d.replace(year=year, month=month, day=day)
+
+
+def _fetch_actual_price_path(ticker: str, asof_date, months: int) -> list:
+    """
+    抓這支股票從節目發布當天開始，實際往後 `months` 個月的真實股價，
+    用來跟GBM模擬疊在同一張圖上比較「後來真的發生的」跟「當時模擬出的情境」。
+    還沒到的月份（該月份的日期還在未來）回傳 None，不會憑空捏造還沒發生的資料；
+    回傳陣列長度是 months+1，跟 build_scenario_chart() 回傳的 months 陣列對齊，
+    第0項（發布當天）就是原本 _fetch_price_asof() 要算的起始股價。
+    """
+    start = asof_date.date() if hasattr(asof_date, 'date') else asof_date
+    today = datetime.now(timezone.utc).date()
+    target_dates = [_add_months(start, m) for m in range(months + 1)]
+
+    fetch_end = min(target_dates[-1], today) + timedelta(days=8)
+    hist = yf.Ticker(ticker).history(
+        start=(start - timedelta(days=7)).isoformat(),
+        end=fetch_end.isoformat(),
+        auto_adjust=True,
+    )
+    if hist.empty:
+        raise ValueError('查無股價資料')
+
+    closes = {ts.date(): float(row['Close']) for ts, row in hist.iterrows()}
+
+    def nearest_close(target, max_lookback=7):
+        for back in range(max_lookback + 1):
+            d = target - timedelta(days=back)
+            if d in closes:
+                return closes[d]
+        return None
+
+    return [None if d > today else nearest_close(d) for d in target_dates]
+
+
+def _index_ticker_for(ticker: str) -> str:
+    """台股用加權指數，其他（美股為主）用S&P500當大盤基準，草稿規則，之後可以再細分。"""
+    return '^TWII' if ticker.endswith('.TW') or ticker.endswith('.TWO') else '^GSPC'
+
+
+def _fetch_index_momentum(ticker: str, asof_date, lookback_days: int = 90):
+    """
+    抓對應大盤指數，在asof_date往前lookback_days天的漲跌幅，當作「當時大盤是牛市還是熊市」
+    的客觀訊號（用在大改版的 index_score，見 scenario.py 的 M_MAX/compute_index_score）。
+    這是獨立、額外的一次yfinance查詢——只有明確要求use_index時才會呼叫，預設路徑不受影響。
+    抓不到就回傳 None，呼叫端要把這種情況當「沒有大盤資料，index_score退回中性」處理。
+    """
+    idx_ticker = _index_ticker_for(ticker)
+    start = asof_date.date() if hasattr(asof_date, 'date') else asof_date
+    then = start - timedelta(days=lookback_days)
+    try:
+        hist = yf.Ticker(idx_ticker).history(
+            start=(then - timedelta(days=7)).isoformat(),
+            end=(start + timedelta(days=1)).isoformat(),
+            auto_adjust=True,
+        )
+    except Exception:
+        return None
+    if hist.empty:
+        return None
+    closes = {ts.date(): float(row['Close']) for ts, row in hist.iterrows()}
+
+    def nearest_close(target, max_lookback=7):
+        for back in range(max_lookback + 1):
+            d = target - timedelta(days=back)
+            if d in closes:
+                return closes[d]
+        return None
+
+    now_close = nearest_close(start)
+    then_close = nearest_close(then)
+    if now_close is None or then_close is None or then_close <= 0:
+        return None
+    return now_close / then_close - 1
+
+
+def _fetch_historical_return_pool(ticker: str, asof_date, years: int = 5, min_months: int = 24):
+    """
+    抓這支股票在asof_date之前、過去`years`年的月報酬，標準化（減平均、除標準差）後回傳，
+    當作GBM模擬震盪的bootstrap樣本池（見 scenario.py 的 _generate_shocks），取代常態隨機數，
+    保留這支股票真實發生過的漲跌紋理。用2452筆真實資料回測過，比常態隨機數的區間帶
+    覆蓋率略高、平均寬度還略窄，是雙贏。
+
+    只抓 asof_date 之前的資料（yfinance的end參數是exclusive），不會用到發布當時還沒發生的
+    未來資訊。歷史不足 min_months 個月就回傳 None，呼叫端會自動退回常態隨機數，不影響原本行為。
+    """
+    start = asof_date.date() if hasattr(asof_date, 'date') else asof_date
+    lo = start - timedelta(days=365 * years + 30)
+    try:
+        hist = yf.Ticker(ticker).history(start=lo.isoformat(), end=start.isoformat(), auto_adjust=True)
+    except Exception:
+        return None
+    if hist.empty:
+        return None
+
+    monthly = hist['Close'].resample('ME').last().dropna()
+    vals = monthly.tolist()
+    if len(vals) < min_months + 1:
+        return None
+
+    log_ret = [math.log(vals[i] / vals[i - 1]) for i in range(1, len(vals)) if vals[i - 1] > 0 and vals[i] > 0]
+    if len(log_ret) < min_months:
+        return None
+
+    mean_r = sum(log_ret) / len(log_ret)
+    var_r = sum((x - mean_r) ** 2 for x in log_ret) / (len(log_ret) - 1)
+    if var_r <= 0:
+        return None
+    std_r = math.sqrt(var_r)
+    return [(x - mean_r) / std_r for x in log_ret]

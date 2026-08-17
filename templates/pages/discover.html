@@ -36,14 +36,45 @@
   </section>
 
   <section id="verified-insights-section">
-    <div class="flex justify-between items-end mb-6">
-      <h2 class="text-3xl font-bold tracking-tight text-tertiary-container font-['Epilogue']">最新觀點</h2>
-      <div class="flex items-center gap-2 text-on-primary-container font-bold text-sm">
-        <span class="material-symbols-outlined text-sm" style="font-variation-settings: 'FILL' 1;">bolt</span>最新預測
+    <div class="flex justify-between items-start mb-4">
+      <div>
+        <h2 class="text-3xl font-bold tracking-tight text-tertiary-container font-['Epilogue']">最新觀點</h2>
+      </div>
+      <div class="flex items-center gap-2">
+        <button id="sig-prev-week" onclick="shiftSignalWeek(1)" class="p-1 rounded-full hover:bg-surface-container transition-colors disabled:opacity-30" disabled>
+          <span class="material-symbols-outlined text-outline text-base">chevron_left</span>
+        </button>
+        <div id="signals-week-label" class="text-[11px] font-bold text-outline uppercase tracking-widest whitespace-nowrap"></div>
+        <button id="sig-next-week" onclick="shiftSignalWeek(-1)" class="p-1 rounded-full hover:bg-surface-container transition-colors disabled:opacity-30" disabled>
+          <span class="material-symbols-outlined text-outline text-base">chevron_right</span>
+        </button>
       </div>
     </div>
-    <div id="insights-grid" class="grid grid-cols-1 md:grid-cols-2 gap-6">
-      <p class="text-outline text-sm col-span-2">載入中...</p>
+
+    <!-- 統計列 -->
+    <div class="grid grid-cols-3 gap-3 mb-5">
+      <div class="bg-surface-container-low rounded-xl p-4 text-center border border-outline-variant/10">
+        <div id="stat-total" class="font-['Epilogue'] text-2xl font-bold text-tertiary-container">—</div>
+        <div class="text-[10px] font-bold text-outline uppercase tracking-widest mt-0.5">檔標的被提及</div>
+      </div>
+      <div class="bg-surface-container-low rounded-xl p-4 text-center border border-outline-variant/10">
+        <div id="stat-consensus" class="font-['Epilogue'] text-2xl font-bold text-tertiary-container">—</div>
+        <div class="text-[10px] font-bold text-outline uppercase tracking-widest mt-0.5">檔獲多人共識</div>
+      </div>
+      <div class="bg-surface-container-low rounded-xl p-4 text-center border border-outline-variant/10">
+        <div id="stat-podcasters" class="font-['Epilogue'] text-2xl font-bold text-tertiary-container">—</div>
+        <div class="text-[10px] font-bold text-outline uppercase tracking-widest mt-0.5">位 Podcaster 提供觀點</div>
+      </div>
+    </div>
+
+    <!-- 方向 tabs -->
+    <div class="flex gap-2 mb-4">
+      <button onclick="setSignalDir('bullish')" id="sig-tab-bullish" class="px-4 py-2 rounded-full text-xs font-bold bg-tertiary-container text-white">看多</button>
+      <button onclick="setSignalDir('bearish')" id="sig-tab-bearish" class="px-4 py-2 rounded-full text-xs font-bold bg-surface-container text-outline">看空</button>
+    </div>
+
+    <div id="insights-grid" class="space-y-3">
+      <p class="text-outline text-sm">載入中...</p>
     </div>
   </section>
 

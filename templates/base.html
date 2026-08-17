@@ -9,7 +9,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>Pod2Invest</title>
+<title>{% block title %}Pod2Invest{% endblock %}</title>
 <link href="https://fonts.googleapis.com/css2?family=Epilogue:wght@400;500;700;800&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet"/>
 <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
@@ -62,6 +62,7 @@
   .nav-btn.active { color: #113236; font-weight: bold; transform: scale(1.1); opacity: 1 !important; }
   .nav-btn.active .nav-icon { font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
 </style>
+{% block extra_head %}{% endblock %}
 </head>
 <body class="bg-surface text-on-surface pb-28">
 
@@ -70,11 +71,23 @@
   <div class="w-10"></div>
   <h1 class="font-['Epilogue'] font-bold tracking-[-0.02em] text-2xl text-[#113236] absolute left-1/2 -translate-x-1/2">Pod2Invest</h1>
   <button onclick="showPage('profile')" class="w-10 h-10 rounded-full overflow-hidden bg-surface-container-highest hover:opacity-80 transition-opacity">
-    <div class="w-full h-full flex flex-col items-center justify-center gap-1" style="background:#e5e3d9"><span class="material-symbols-outlined text-white/70 text-3xl" style="font-variation-settings:'FILL' 1">person</span><span class="text-white/60 text-[10px] font-bold uppercase tracking-widest">User</span></div>
+    <div class="w-full h-full flex items-center justify-center" style="background:#e5e3d9"><span class="material-symbols-outlined text-white/70 text-2xl" style="font-variation-settings:'FILL' 1">person</span></div>
   </button>
 </header>
 
 <audio id="disc-audio"></audio>
+
+<script>
+  // 讓底部導覽列在「非 SPA 首頁」的獨立頁面（例如 basket.html）上點擊時，
+  // 不會因為 showPage()/#page-x 不存在而報錯，而是直接導回首頁。
+  function navHome(page) {
+    if (typeof showPage === 'function' && document.getElementById('page-' + page)) {
+      showPage(page);
+    } else {
+      window.location.href = '/#' + page;
+    }
+  }
+</script>
 
 {% block pages %}{% endblock %}
 
@@ -125,25 +138,25 @@
 
 <!-- Bottom nav -->
 <nav class="fixed bottom-0 w-full z-50 flex justify-around items-center px-4 pb-6 pt-3 bg-[#fcf9f0]/80 backdrop-blur-xl rounded-t-[32px] shadow-[0px_-10px_30px_rgba(28,28,22,0.06)]">
-  <button onclick="showPage('discover')" id="nav-discover" class="nav-btn flex flex-col items-center justify-center transition-all">
+  <button onclick="navHome('discover')" id="nav-discover" class="nav-btn flex flex-col items-center justify-center transition-all">
     <span class="material-symbols-outlined nav-icon" style="font-variation-settings: 'FILL' 1;">explore</span>
     <span class="font-['Manrope'] font-medium text-[10px] uppercase tracking-[0.05em] mt-1">Discover</span>
   </button>
-  <button onclick="showPage('rankings')" id="nav-rankings" class="nav-btn flex flex-col items-center justify-center transition-all opacity-60">
+  <button onclick="navHome('rankings')" id="nav-rankings" class="nav-btn flex flex-col items-center justify-center transition-all opacity-60">
     <span class="material-symbols-outlined nav-icon">leaderboard</span>
-    <span class="font-['Manrope'] font-medium text-[10px] uppercase tracking-[0.05em] mt-1">Rankings</span>
+    <span class="font-['Manrope'] font-medium text-[10px] uppercase tracking-[0.05em] mt-1">Podcast Rankings</span>
   </button>
-  <button onclick="showPage('ai')" id="nav-ai" class="nav-btn flex flex-col items-center justify-center transition-all opacity-60">
+  <button onclick="navHome('ai')" id="nav-ai" class="nav-btn flex flex-col items-center justify-center transition-all opacity-60">
     <span class="material-symbols-outlined nav-icon">psychology</span>
     <span class="font-['Manrope'] font-medium text-[10px] uppercase tracking-[0.05em] mt-1">AI Assistant</span>
   </button>
-  <button onclick="resetCalculator(); showPage('calculator')" id="nav-calculator" class="nav-btn flex flex-col items-center justify-center transition-all opacity-60">
+  <button onclick="if (typeof resetCalculator === 'function') resetCalculator(); navHome('calculator')" id="nav-calculator" class="nav-btn flex flex-col items-center justify-center transition-all opacity-60">
     <span class="material-symbols-outlined nav-icon">calculate</span>
     <span class="font-['Manrope'] font-medium text-[10px] uppercase tracking-[0.05em] mt-1">Calculator</span>
   </button>
-  <button onclick="window.location.href='/api/knowledge-graph/graph/'" id="nav-knowledge-graph" class="nav-btn flex flex-col items-center justify-center transition-all opacity-60">
-    <span class="material-symbols-outlined nav-icon">hub</span>
-    <span class="font-['Manrope'] font-medium text-[10px] uppercase tracking-[0.05em] mt-1">Graph</span>
+  <button onclick="navHome('assets')" id="nav-assets" class="nav-btn flex flex-col items-center justify-center transition-all opacity-60">
+    <span class="material-symbols-outlined nav-icon">candlestick_chart</span>
+    <span class="font-['Manrope'] font-medium text-[10px] uppercase tracking-[0.05em] mt-1">Assets</span>
   </button>
 </nav>
 
@@ -161,18 +174,27 @@
   <div id="gc-long" class="hidden mt-3 pt-3 border-t border-outline-variant/20 text-sm text-on-surface-variant leading-relaxed"></div>
 </div>
 
+{% block body_scripts %}
 <!-- JS modules -->
-<script src="{% static 'js/app.js' %}?v=10"></script>
-<script src="{% static 'js/discover.js' %}?v=10"></script>
-<script src="{% static 'js/rankings.js' %}?v=10"></script>
-<script src="{% static 'js/deep_dive.js' %}?v=10"></script>
-<script src="{% static 'js/calculator.js' %}?v=10"></script>
+<script src="{% static 'js/app.js' %}?v=12"></script>
+<script src="{% static 'js/discover.js' %}?v=14"></script>
+<script src="{% static 'js/rankings.js' %}?v=14"></script>
+<script src="{% static 'js/deep_dive.js' %}?v=15"></script>
+<script src="{% static 'js/calculator.js' %}?v=27"></script>
 <script src="{% static 'js/ai.js' %}?v=10"></script>
+<script src="{% static 'js/assets.js' %}?v=11"></script>
 <script src="{% static 'js/profile.js' %}?v=10"></script>
 <script>
   calcWealth();
-  showPage('discover');
-  loadVerifiedInsights();
+  {# 從 basket.html 等獨立頁面連回來時可帶 #assets 之類的 hash，指定要打開哪個分頁 #}
+  (function () {
+    const wanted = location.hash.replace('#', '');
+    const initial = wanted && document.getElementById('page-' + wanted) ? wanted : 'discover';
+    showPage(initial);
+  })();
+  loadWeeklySignals();
+  initAssetsPage();
 </script>
+{% endblock %}
 </body>
 </html>

@@ -2,21 +2,92 @@
 let ddSummaryData = {};
 let ddCurrentMode = 'novice';
 let _ddAutoPlay   = false;
+let _ddTargetBacktestId = null;
 
-function openDeepDive(summaryId, autoPlay = false) {
+function openDeepDive(summaryId, autoPlay = false, targetBacktestId = null) {
   currentSummaryId = summaryId;
   ddSummaryData    = {};
   ddCurrentMode    = (_userPrefs && _userPrefs.level === 'Expert') ? 'pro' : 'novice';
   _ddAutoPlay      = autoPlay;
+  _ddTargetBacktestId = targetBacktestId;
   showPage('deep-dive');
   loadDeepDive(summaryId);
   loadMindmap(summaryId);
+}
+
+// ── 名詞解釋（glossary）────────────────────────────────────────
+// glossary_matches 的 start/end 是後端內部合併字串的位置，跟前端各欄位分開
+// 渲染的方式對不上，所以不用座標，改用 surface 文字本身去比對、包起來。
+function _escapeRegex(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function _buildGlossaryIndex(matches) {
+  const defs = {};
+  const surfaceToId = {};
+  (matches || []).forEach(m => {
+    if (!m || !m.surface || m.term_id == null) return;
+    if (!(m.term_id in defs)) {
+      defs[m.term_id] = { canonical: m.canonical || m.surface, definition: m.short_definition || '' };
+    }
+    if (!(m.surface in surfaceToId)) {
+      surfaceToId[m.surface] = m.term_id;
+    }
+  });
+  const surfaces = Object.keys(surfaceToId).sort((a, b) => b.length - a.length);
+  return { defs, surfaceToId, surfaces };
+}
+
+function annotateGlossaryText(text, glossaryIndex) {
+  if (!text) return '';
+  const { surfaces, surfaceToId } = glossaryIndex;
+  if (!surfaces.length) return escapeHtml(text);
+  const pattern = new RegExp('(' + surfaces.map(_escapeRegex).join('|') + ')', 'g');
+  return text.split(pattern).map((part, i) => {
+    if (i % 2 === 1 && surfaceToId.hasOwnProperty(part)) {
+      return `<span class="glossary-term border-b border-dotted border-secondary text-secondary cursor-pointer" onclick="showGlossaryTerm(event, ${surfaceToId[part]})">${escapeHtml(part)}</span>`;
+    }
+    return escapeHtml(part);
+  }).join('');
+}
+
+let _glossaryPopoverEl = null;
+function showGlossaryTerm(evt, termId) {
+  evt.stopPropagation();
+  hideGlossaryTerm();
+  const info = window._glossaryDefs && window._glossaryDefs[termId];
+  if (!info) return;
+  const pop = document.createElement('div');
+  pop.className = 'glossary-popover fixed z-50 max-w-xs p-3 rounded-lg bg-inverse-surface text-inverse-on-surface text-sm shadow-lg';
+  pop.innerHTML = `<div class="font-bold mb-1">${escapeHtml(info.canonical)}</div><div>${escapeHtml(info.definition)}</div>`;
+  document.body.appendChild(pop);
+  const rect = evt.currentTarget.getBoundingClientRect();
+  const maxLeft = window.innerWidth - pop.offsetWidth - 12;
+  pop.style.top  = (rect.bottom + 6) + 'px';
+  pop.style.left = Math.max(12, Math.min(rect.left, maxLeft)) + 'px';
+  _glossaryPopoverEl = pop;
+  setTimeout(() => document.addEventListener('click', _dismissGlossaryPopover), 0);
+}
+
+function hideGlossaryTerm() {
+  if (_glossaryPopoverEl) { _glossaryPopoverEl.remove(); _glossaryPopoverEl = null; }
+  document.removeEventListener('click', _dismissGlossaryPopover);
+}
+
+function _dismissGlossaryPopover(e) {
+  if (_glossaryPopoverEl && !_glossaryPopoverEl.contains(e.target)) hideGlossaryTerm();
 }
 
 // ── Mode rendering ────────────────────────────────────────────
 function renderDdModeContent(mode) {
   const s = ddSummaryData[mode];
   if (!s) return;
+
+  // 名詞解釋只在小白模式顯示，老鳥模式維持原本純文字（不畫底線、不彈解釋）
+  const glossaryIndex = mode === 'novice'
+    ? _buildGlossaryIndex(s.glossary_matches)
+    : { defs: {}, surfaceToId: {}, surfaces: [] };
+  window._glossaryDefs = glossaryIndex.defs;
 
   const tw = s.investment_takeaways || {};
   let twHtml = '';
@@ -56,7 +127,23 @@ function renderDdModeContent(mode) {
     const isLast      = i === args.length - 1;
     const timestamp   = (arg.evidence_timestamps && arg.evidence_timestamps[0]) || '--:--';
     const fullSummary = arg.summary || '';
-    const preview     = getTwoSentences(fullSummary);
+    const { preview, hasMore } = splitThesisPreview(fullSummary);
+    const previewHtml = annotateGlossaryText(preview, glossaryIndex);
+    const fullHtml    = annotateGlossaryText(fullSummary, glossaryIndex);
+
+    const keyData = arg.key_data || [];
+    let keyDataHtml = '';
+    if (keyData.length) {
+      keyDataHtml = `<div class="flex flex-wrap gap-3 mb-3">${keyData.map(kd => `
+        <div class="min-w-[160px] px-3 py-2.5 rounded-lg bg-surface-container-low border border-outline-variant/20 text-center" style="width:max-content">
+          <div class="text-secondary font-bold text-base leading-snug whitespace-nowrap mb-1">${escapeHtml(kd.value || '')}</div>
+          <div class="flex items-center justify-center gap-1.5 text-outline text-[11px] font-bold">
+            <span class="material-symbols-outlined text-sm">query_stats</span>
+            <span>${escapeHtml(kd.label || '')}</span>
+          </div>
+        </div>`).join('')}</div>`;
+    }
+
     argHtml += `
       <div class="${isLast ? '' : 'border-b border-outline-variant/30'} py-8 px-2">
         <div class="flex flex-col md:flex-row gap-5">
@@ -70,13 +157,16 @@ function renderDdModeContent(mode) {
             <div class="flex items-center gap-3 flex-wrap">
               <h3 class="font-['Epilogue'] text-xl font-bold text-on-surface">${arg.topic || ''}</h3>
             </div>
-            <div class="thesis-preview text-on-surface-variant leading-relaxed text-base">${preview}</div>
-            <div class="thesis-full hidden text-on-surface-variant leading-relaxed text-base"><p>${fullSummary}</p></div>
+            ${keyDataHtml}
+            <div class="thesis-preview text-on-surface-variant leading-relaxed text-base">${previewHtml}</div>
+            ${hasMore ? `
+            <div class="thesis-full hidden text-on-surface-variant leading-relaxed text-base"><p>${fullHtml}</p></div>` : ''}
             <div class="flex items-center gap-4 flex-wrap mt-1">
+              ${hasMore ? `
               <button onclick="toggleThesis(this)" class="flex items-center gap-1 text-secondary font-label font-bold text-xs uppercase tracking-wider hover:text-on-primary-container transition-colors">
                 <span class="btn-label">Read More</span>
                 <span class="material-symbols-outlined text-sm btn-icon">expand_more</span>
-              </button>
+              </button>` : ''}
               <button onclick="toggleArgAiChat(this, ${i})" class="arg-ai-btn flex items-center gap-1 font-label font-bold text-xs uppercase tracking-wider transition-colors text-secondary hover:text-on-primary-container">
                 <span class="material-symbols-outlined text-sm">psychology</span>
                 <span class="arg-ai-btn-label">深入問 AI</span>
@@ -132,6 +222,12 @@ async function loadDeepDive(summaryId) {
     podBtn.addEventListener('click', () => openRankedPodcasterByName(showName));
     podcasterEl.textContent = 'Extracted from ';
     podcasterEl.appendChild(podBtn);
+    if (s.published_at) {
+      const dateSpan = document.createElement('span');
+      dateSpan.className = 'text-outline';
+      dateSpan.textContent = ' · ' + s.published_at.slice(0, 10);
+      podcasterEl.appendChild(dateSpan);
+    }
     document.getElementById('dd-one-sentence').textContent = '"' + s.one_sentence_summary + '"';
 
     const audioEl  = document.getElementById('dd-audio');
@@ -154,7 +250,8 @@ async function loadDeepDive(summaryId) {
     document.getElementById('dd-viewpoints').innerHTML = '<p class="text-outline text-sm">載入中...</p>';
     fetch(`/api/summaries/${summaryId}/backtesting/`)
       .then(r => r.json())
-      .then(records => {
+      .then(async records => {
+        await _ensureFavoritesCache();
         const statusMap = {
           pending: { label: '待驗證', icon: 'pending',      cls: 'text-outline',   border: 'border-outline-variant', bg: 'bg-surface-container/50' },
           pass:    { label: '正確',   icon: 'check_circle', cls: 'text-green-600', border: 'border-green-500',       bg: 'bg-green-50/50' },
@@ -166,21 +263,28 @@ async function loadDeepDive(summaryId) {
           const st      = statusMap[r.result] || statusMap.pending;
           const ticker  = r.ticker || r.asset || '';
           const endDate = r.end_time || '';
+          const timestamp = (r.evidence_timestamps && r.evidence_timestamps[0]) || '';
+          const playBtn = timestamp
+            ? `<button onclick="playAtTimestamp('${timestamp}')" class="flex items-center gap-1 px-2.5 py-1 rounded-full bg-secondary-container text-tertiary-container text-xs font-bold hover:scale-95 transition-transform">
+                 <span class="material-symbols-outlined text-xs" style="font-variation-settings:'FILL' 1">play_arrow</span>${timestamp}
+               </button>`
+            : '';
           const calcBtn = (ticker && r.result === 'pending')
-            ? `<button onclick="goToCalculatorWithStock('${ticker.replace(/'/g, "\\'")}', '${endDate}')"
+            ? `<button onclick="goToCalculatorWithStock('${ticker.replace(/'/g, "\\'")}', '${endDate}', ${s.episode_id != null ? s.episode_id : 'null'})"
                  class="flex items-center gap-1 px-3 py-1 rounded-full bg-tertiary-container/20 border border-tertiary-container/40 text-tertiary-container text-xs font-bold hover:bg-tertiary-container/30 transition-colors">
                  <span class="material-symbols-outlined text-xs" style="font-variation-settings:'FILL' 1">calculate</span>試算
                </button>`
             : '';
           vpHtml += `
-            <div class="p-6 rounded-lg ${st.bg} border-l-4 ${st.border}">
+            <div class="p-6 rounded-lg ${st.bg} border-l-4 ${st.border} transition-shadow" data-backtest-id="${r.id}">
               <div class="flex items-start justify-between mb-2 flex-wrap gap-2">
                 <div class="flex items-center gap-2 ${st.cls}">
                   <span class="material-symbols-outlined text-sm" style="font-variation-settings:'FILL' 1">${st.icon}</span>
                   <span class="font-label font-bold uppercase tracking-wider text-xs">${st.label}</span>
+                  ${playBtn}
                 </div>
                 <div class="flex items-center gap-2">
-                  <span class="text-xs font-bold text-outline uppercase">${r.asset || ''}${r.direction ? ' · ' + (dirLabel[r.direction] || r.direction) : ''}</span>
+                  <span class="text-xs font-bold text-outline uppercase">${renderAssetNameStar(r.ticker, r.asset || '')}${r.direction ? ' · ' + (dirLabel[r.direction] || r.direction) : ''}</span>
                   ${calcBtn}
                 </div>
               </div>
@@ -192,6 +296,39 @@ async function loadDeepDive(summaryId) {
             </div>`;
         });
         document.getElementById('dd-viewpoints').innerHTML = vpHtml || '<p class="text-outline text-sm">此集無可回測觀點</p>';
+
+        // 從 Discover/Rankings 點「Read Thesis」進來時，捲到並高亮對應的那張卡片
+        if (_ddTargetBacktestId != null) {
+          const targetCard = document.querySelector(`#dd-viewpoints [data-backtest-id="${_ddTargetBacktestId}"]`);
+          if (targetCard) {
+            targetCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            targetCard.classList.add('ring-2', 'ring-[#d97f12]', 'ring-offset-2');
+            setTimeout(() => targetCard.classList.remove('ring-2', 'ring-[#d97f12]', 'ring-offset-2'), 2000);
+          }
+          _ddTargetBacktestId = null;
+        }
+
+        // 本集提及的標的（去重），可以直接點名字/星星跳轉、收藏——不含 Critical Thesis
+        // Points 那段自由文字裡的公司名（那邊沒有 ticker 可以解析）。
+        const tickerSection = document.getElementById('dd-ticker-section');
+        const tickerList = document.getElementById('dd-ticker-list');
+        const seenTickers = new Set();
+        const chipHtml = records.filter(r => {
+          if (!resolveAssetCategory(r.ticker)) return false;
+          const dedupeKey = r.ticker.toUpperCase();
+          if (seenTickers.has(dedupeKey)) return false;
+          seenTickers.add(dedupeKey);
+          return true;
+        }).map(r => `
+          <div class="p-4 rounded-lg bg-surface-container-lowest border border-outline-variant/20 font-['Epilogue'] font-bold text-base text-tertiary-container">
+            ${renderAssetNameStar(r.ticker, r.asset || r.ticker)}
+          </div>`).join('');
+        if (chipHtml) {
+          tickerList.innerHTML = chipHtml;
+          tickerSection.classList.remove('hidden');
+        } else {
+          tickerSection.classList.add('hidden');
+        }
       })
       .catch(() => { document.getElementById('dd-viewpoints').innerHTML = '<p class="text-outline text-sm">載入失敗</p>'; });
 
@@ -342,6 +479,36 @@ function renderMindmap(data, container) {
     .style('font-weight', d => d.depth <= 1 ? '600' : '400')
     .style('fill', d => d.depth === 0 ? '#113236' : '#1c1c16')
     .text(d => d.data.name || '');
+}
+
+// ── Thesis preview truncation ────────────────────────────────
+// 找 ≥minLen 字後最近的句尾標點當切點；剩餘沒顯示的字數 ≤minRemainder 就直接併入
+// preview 一起顯示（不出現按鈕），避免「按了 Show More 卻只多幾個字」的無意義互動。
+function splitThesisPreview(text, minLen = 120, minRemainder = 30) {
+  if (!text) return { preview: '', hasMore: false };
+  if (text.length <= minLen) return { preview: text, hasMore: false };
+
+  const sentences = text.match(/[^。！？!?]+[。！？!?]+/g);
+  let cut = null;
+  if (sentences) {
+    let acc = 0;
+    for (const s of sentences) {
+      acc += s.length;
+      if (acc >= minLen) { cut = acc; break; }
+    }
+  }
+
+  let preview;
+  if (cut === null) {
+    // 找不到可用的句尾標點（或所有句子加起來都不到門檻），退回硬切
+    cut = Math.min(minLen, text.length);
+    preview = text.slice(0, cut) + '...';
+  } else {
+    preview = text.slice(0, cut);
+  }
+
+  if (text.length - cut <= minRemainder) return { preview: text, hasMore: false };
+  return { preview, hasMore: true };
 }
 
 // ── Thesis expand/collapse ────────────────────────────────────

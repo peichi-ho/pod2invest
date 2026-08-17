@@ -15,7 +15,7 @@ sys.path.append(str(BASE_DIR / "apps"))
 
 # 改寫 SECRET_KEY 與 DEBUG
 SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'django-insecure-預設字串請在.env中覆蓋')
-DEBUG = os.getenv('DJANGO_DEBUG', 'True') == 'True'
+DEBUG = os.getenv('DJANGO_DEBUG', 'True').strip().lower() in ('1', 'true')
 ALLOWED_HOSTS = os.getenv("DJANGO_ALLOWED_HOSTS", "127.0.0.1,localhost").split(",")
 
 # Gemini / AI Assistant settings
@@ -50,6 +50,7 @@ INSTALLED_APPS = [
     'apps.ai_assistant.apps.AiAssistantConfig',
     'apps.knowledge_graph.apps.KnowledgeGraphConfig',
     'apps.accounts.apps.AccountsConfig',
+    'apps.assets.apps.AssetsConfig',
 ]
 
 
@@ -93,6 +94,12 @@ DATABASES = {
         "OPTIONS": {
             "sslmode": "require",
         },
+    } if os.getenv("USE_LOCAL_DEFAULT_DB", "").strip().lower() not in ("1", "true") else {
+        # 本機開發用：GLOSSARY_DB 所在的 Supabase 專案被鎖時，先用本機 SQLite 頂著
+        # default（只有 auth/glossary/mindmap 用得到），不影響 etfdb/summariesdb/
+        # podcasts/knowledge_graphdb 等其他資料庫，仍然接真正的 Supabase。
+        "ENGINE": "django.db.backends.sqlite3",
+        "NAME": BASE_DIR / "db.sqlite3",
     },
     # 新增：ETF 專用 PostgreSQL
     "etfdb": {

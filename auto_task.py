@@ -94,6 +94,8 @@ def process_show(show_cfg: dict, start_date: datetime | None, outdir: Path) -> d
 
     feed_url = show_info.get("feedUrl")
     show_name = show_info.get("collectionName", name)
+    # Apple Podcasts 頭貼：iTunes Search API 回傳的節目資料裡就有，不用另外查
+    image_url = show_info.get("artworkUrl600") or show_info.get("artworkUrl100", "")
 
     if not feed_url:
         print(f"   [!] 找不到 RSS feed")
@@ -162,6 +164,7 @@ def process_show(show_cfg: dict, start_date: datetime | None, outdir: Path) -> d
                 show_name=show_name,
                 episode_title=title,
                 published_at=published_at,
+                image_url=image_url,
             )
             print(f"   [✓] 完成")
             result["success"].append(title)
