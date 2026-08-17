@@ -47,14 +47,14 @@ function openRankedPodcasterByName(name) {
   if (idx !== -1) {
     openRankedPodcaster(idx);
   } else {
-    showPodcaster(name, name, '--', '--', _rankColors[0], _rankIcons[0]);
+    showPodcaster(name, '--', '--', _rankColors[0], _rankIcons[0]);
   }
 }
 
 function openRankedPodcaster(idx) {
   const p = _rankData[idx];
   if (!p) return;
-  showPodcaster(p.podcaster, p.podcaster, p.episodes + ' 集', '--', _rankColors[idx % _rankColors.length], _rankIcons[idx % _rankIcons.length]);
+  showPodcaster(p.podcaster, p.episodes + ' 集', '--', _rankColors[idx % _rankColors.length], _rankIcons[idx % _rankIcons.length]);
 }
 
 async function loadRankings() {
@@ -196,10 +196,9 @@ async function loadRankings() {
 }
 
 // ── Podcaster page ────────────────────────────────────────────
-async function showPodcaster(name, host, listeners, accuracy, bgColor, icon) {
+async function showPodcaster(name, episodeCount, accuracy, bgColor, icon) {
   document.getElementById('podcaster-name').textContent = name;
-  document.getElementById('podcaster-host').textContent = host;
-  document.getElementById('podcaster-listeners').textContent = listeners;
+  document.getElementById('podcaster-episode-count').textContent = episodeCount;
   document.getElementById('podcaster-accuracy').textContent = accuracy;
   document.getElementById('podcaster-avatar-inner').style.background = bgColor;
   document.getElementById('podcaster-avatar-icon').textContent = icon;
@@ -261,7 +260,7 @@ async function showPodcaster(name, host, listeners, accuracy, bgColor, icon) {
     await _ensureFavoritesCache();
     const accEl  = document.getElementById('podcaster-accuracy');
     const acc    = accMap[name];
-    if (acc && acc.total > 0) accEl.textContent = `${acc.pct}%・${acc.total} 筆驗證`;
+    if (acc && acc.total > 0) accEl.textContent = `平均準確率 ${acc.pct}%・${acc.total} 筆驗證`;
     else accEl.textContent = '尚無驗證觀點';
 
     const groupConfig = {
@@ -284,7 +283,7 @@ async function showPodcaster(name, host, listeners, accuracy, bgColor, icon) {
             ? '<p class="text-xs text-outline pl-7">尚無資料</p>'
             : items.map(v => `
                 <div class="p-3 mb-2 rounded-lg border-l-4 ${cfg.border} ${cfg.bg} cursor-pointer hover:opacity-80 transition-opacity"
-                     onclick="openDeepDive(${v.summary_id})">
+                     onclick="openDeepDive(${v.summary_id}, false, ${v.id})">
                   <div class="flex items-center justify-between mb-1">
                     <span class="text-[10px] font-bold text-outline uppercase tracking-wider">${renderAssetNameStar(v.ticker, v.asset || '')}${v.direction ? ' · ' + (dirLabel[v.direction] || v.direction) : ''}</span>
                     <span class="text-[10px] text-outline">${v.end_time ? '截止 ' + v.end_time : ''}</span>

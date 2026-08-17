@@ -46,13 +46,6 @@ function formatTime(sec) {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-function getTwoSentences(text) {
-  if (!text) return '';
-  const sentences = text.match(/[^。！？!?]+[。！？!?]+/g) || [];
-  if (sentences.length >= 2) return sentences.slice(0, 2).join('');
-  return text.slice(0, 80) + (text.length > 80 ? '...' : '');
-}
-
 function escapeHtml(str) {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }

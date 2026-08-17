@@ -1,43 +1,9 @@
-<!DOCTYPE html>
-<html lang="zh-TW">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>投資探索</title>
-<link href="https://fonts.googleapis.com/css2?family=Epilogue:wght@400;500;700;800&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
-<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
-<script>
-  tailwind.config = {
-    theme: {
-      extend: {
-        colors: {
-          "on-error-container": "#93000a","on-error": "#ffffff","surface-tint": "#8d4f00",
-          "tertiary-fixed-dim": "#abccd1","on-primary-fixed": "#2d1600","on-tertiary-fixed-variant": "#2c4c50",
-          "on-primary-fixed-variant": "#6b3b00","on-secondary": "#ffffff","secondary": "#286671",
-          "on-tertiary-container": "#7a9b9f","on-primary-container": "#d97f12","error": "#ba1a1a",
-          "surface-dim": "#dcdad1","surface-container-highest": "#e5e3d9","surface-container-high": "#eae8df",
-          "inverse-surface": "#31312b","on-tertiary-fixed": "#001f23","on-surface-variant": "#414849",
-          "surface-container": "#f0eee5","inverse-primary": "#ffb875","tertiary-fixed": "#c7e9ed",
-          "secondary-fixed": "#b0ecf9","on-surface": "#1c1c16","surface-variant": "#e5e3d9",
-          "outline": "#717879","tertiary-container": "#113236","inverse-on-surface": "#f3f1e7",
-          "surface-container-lowest": "#ffffff","on-secondary-container": "#2f6d78","on-primary": "#ffffff",
-          "secondary-container": "#b0ecf9","error-container": "#ffdad6","on-secondary-fixed": "#001f25",
-          "on-secondary-fixed-variant": "#024e59","background": "#fcf9f0","on-tertiary": "#ffffff",
-          "primary": "#291300","primary-fixed": "#ffdcc0","surface-container-low": "#f6f4ea",
-          "surface-bright": "#fcf9f0","primary-fixed-dim": "#ffb875","surface": "#fcf9f0",
-          "tertiary": "#001d20","on-background": "#1c1c16","primary-container": "#472500",
-          "outline-variant": "#c1c8c9","secondary-fixed-dim": "#95d0dc"
-        },
-        fontFamily: { "headline": ["Epilogue"], "body": ["Manrope"], "label": ["Manrope"] },
-        borderRadius: {"DEFAULT": "1rem", "lg": "2rem", "xl": "3rem", "full": "9999px"},
-      },
-    },
-  }
-</script>
+{% extends "base.html" %}
+
+{% block title %}投資探索{% endblock %}
+
+{% block extra_head %}
 <style>
-  .material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
-  body { font-family: 'Manrope', sans-serif; }
   .dot { width: 6px; height: 6px; border-radius: 9999px; }
   #detail-overlay { transition: opacity .25s ease; }
   #detail-panel { transition: transform .3s ease; }
@@ -48,9 +14,10 @@
   ::-webkit-scrollbar { width: 6px; height: 6px; }
   ::-webkit-scrollbar-thumb { background: #c1c8c9; border-radius: 9999px; }
 </style>
-</head>
-<body class="bg-background text-on-background min-h-screen pb-24">
-<div class="max-w-6xl mx-auto px-6 py-10">
+{% endblock %}
+
+{% block pages %}
+<div class="max-w-6xl mx-auto px-6 pt-24 pb-10">
 
   <!-- 標題 -->
   <div class="flex items-start justify-between gap-4 mb-8">
@@ -58,9 +25,10 @@
       <h1 id="page-title" class="font-headline font-extrabold text-3xl text-tertiary-container tracking-tight">探索投資機會</h1>
       <p class="text-on-surface-variant text-sm mt-1">從 Podcast 討論與財務數據中，發掘值得關注的標的</p>
     </div>
-    <button class="flex-shrink-0 flex items-center gap-1.5 px-4 py-2 rounded-full border border-outline-variant text-tertiary-container text-sm font-semibold hover:bg-surface-container transition-colors">
-      <span class="material-symbols-outlined text-base">help</span>使用教學
-    </button>
+    <div class="flex-shrink-0 flex gap-1 bg-surface-container-high rounded-full p-1">
+      <button onclick="window.location.href='/#assets'" class="px-4 py-2 rounded-full font-label text-xs font-bold transition-all text-secondary hover:bg-surface-container-highest whitespace-nowrap">查看個股資訊</button>
+      <button class="px-4 py-2 rounded-full font-label text-xs font-bold transition-all bg-tertiary-container text-white whitespace-nowrap">探索相關標的</button>
+    </div>
   </div>
 
   <!-- 查詢表單 -->
@@ -136,7 +104,9 @@
 <div id="detail-panel" class="fixed top-0 right-0 h-full w-full max-w-md bg-surface z-50 shadow-2xl translate-x-full overflow-y-auto">
   <div id="detail-body" class="p-6"></div>
 </div>
+{% endblock %}
 
+{% block body_scripts %}
 <script>
 let selectedPurpose = null;
 let selectedTier = "均衡";
@@ -471,5 +441,4 @@ function hideError() {
 }
 function esc(s) { return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;"); }
 </script>
-</body>
-</html>
+{% endblock %}

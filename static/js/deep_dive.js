@@ -2,12 +2,14 @@
 let ddSummaryData = {};
 let ddCurrentMode = 'novice';
 let _ddAutoPlay   = false;
+let _ddTargetBacktestId = null;
 
-function openDeepDive(summaryId, autoPlay = false) {
+function openDeepDive(summaryId, autoPlay = false, targetBacktestId = null) {
   currentSummaryId = summaryId;
   ddSummaryData    = {};
   ddCurrentMode    = (_userPrefs && _userPrefs.level === 'Expert') ? 'pro' : 'novice';
   _ddAutoPlay      = autoPlay;
+  _ddTargetBacktestId = targetBacktestId;
   showPage('deep-dive');
   loadDeepDive(summaryId);
   loadMindmap(summaryId);
@@ -54,8 +56,8 @@ function renderDdModeContent(mode) {
   args.forEach((arg, i) => {
     const isLast      = i === args.length - 1;
     const timestamp   = (arg.evidence_timestamps && arg.evidence_timestamps[0]) || '--:--';
-    const fullSummary = arg.summary || '';
-    const preview     = getTwoSentences(fullSummary);
+    const fullSummary   = arg.summary || '';
+    const { preview, hasMore } = splitThesisPreview(fullSummary);
     argHtml += `
       <div class="${isLast ? '' : 'border-b border-outline-variant/30'} py-8 px-2">
         <div class="flex flex-col md:flex-row gap-5">
@@ -70,11 +72,12 @@ function renderDdModeContent(mode) {
               <h3 class="font-['Epilogue'] text-xl font-bold text-on-surface">${arg.topic || ''}</h3>
             </div>
             <div class="thesis-preview text-on-surface-variant leading-relaxed text-base">${preview}</div>
+            ${hasMore ? `
             <div class="thesis-full hidden text-on-surface-variant leading-relaxed text-base"><p>${fullSummary}</p></div>
             <button onclick="toggleThesis(this)" class="flex items-center gap-1 text-secondary font-label font-bold text-xs uppercase tracking-wider hover:text-on-primary-container transition-colors mt-1">
               <span class="btn-label">Read More</span>
               <span class="material-symbols-outlined text-sm btn-icon">expand_more</span>
-            </button>
+            </button>` : ''}
           </div>
         </div>
       </div>`;
@@ -166,7 +169,7 @@ async function loadDeepDive(summaryId) {
                </button>`
             : '';
           vpHtml += `
-            <div class="p-6 rounded-lg ${st.bg} border-l-4 ${st.border}">
+            <div class="p-6 rounded-lg ${st.bg} border-l-4 ${st.border} transition-shadow" data-backtest-id="${r.id}">
               <div class="flex items-start justify-between mb-2 flex-wrap gap-2">
                 <div class="flex items-center gap-2 ${st.cls}">
                   <span class="material-symbols-outlined text-sm" style="font-variation-settings:'FILL' 1">${st.icon}</span>
@@ -185,6 +188,17 @@ async function loadDeepDive(summaryId) {
             </div>`;
         });
         document.getElementById('dd-viewpoints').innerHTML = vpHtml || '<p class="text-outline text-sm">此集無可回測觀點</p>';
+
+        // 從 Discover/Rankings 點「Read Thesis」進來時，捲到並高亮對應的那張卡片
+        if (_ddTargetBacktestId != null) {
+          const targetCard = document.querySelector(`#dd-viewpoints [data-backtest-id="${_ddTargetBacktestId}"]`);
+          if (targetCard) {
+            targetCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            targetCard.classList.add('ring-2', 'ring-[#d97f12]', 'ring-offset-2');
+            setTimeout(() => targetCard.classList.remove('ring-2', 'ring-[#d97f12]', 'ring-offset-2'), 2000);
+          }
+          _ddTargetBacktestId = null;
+        }
 
         // 本集提及的標的（去重），可以直接點名字/星星跳轉、收藏——不含 Critical Thesis
         // Points 那段自由文字裡的公司名（那邊沒有 ticker 可以解析）。
@@ -357,6 +371,36 @@ function renderMindmap(data, container) {
     .style('font-weight', d => d.depth <= 1 ? '600' : '400')
     .style('fill', d => d.depth === 0 ? '#113236' : '#1c1c16')
     .text(d => d.data.name || '');
+}
+
+// ── Thesis preview truncation ────────────────────────────────
+// 找 ≥minLen 字後最近的句尾標點當切點；剩餘沒顯示的字數 ≤minRemainder 就直接併入
+// preview 一起顯示（不出現按鈕），避免「按了 Show More 卻只多幾個字」的無意義互動。
+function splitThesisPreview(text, minLen = 120, minRemainder = 30) {
+  if (!text) return { preview: '', hasMore: false };
+  if (text.length <= minLen) return { preview: text, hasMore: false };
+
+  const sentences = text.match(/[^。！？!?]+[。！？!?]+/g);
+  let cut = null;
+  if (sentences) {
+    let acc = 0;
+    for (const s of sentences) {
+      acc += s.length;
+      if (acc >= minLen) { cut = acc; break; }
+    }
+  }
+
+  let preview;
+  if (cut === null) {
+    // 找不到可用的句尾標點（或所有句子加起來都不到門檻），退回硬切
+    cut = Math.min(minLen, text.length);
+    preview = text.slice(0, cut) + '...';
+  } else {
+    preview = text.slice(0, cut);
+  }
+
+  if (text.length - cut <= minRemainder) return { preview: text, hasMore: false };
+  return { preview, hasMore: true };
 }
 
 // ── Thesis expand/collapse ────────────────────────────────────
