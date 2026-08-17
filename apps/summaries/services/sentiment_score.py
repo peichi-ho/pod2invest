@@ -84,6 +84,54 @@ def find_grounded_stock_topics(record) -> list[dict]:
     return results
 
 
+def find_stock_topics_with_fallback(record) -> list[dict]:
+    """
+    先用 find_grounded_stock_topics()（嚴格版：獨立成段的「個股：X」，判斷依據完整）；
+    段落沒涵蓋到的股票，退而求其次用 outlook_calls 裡對應的那句話當備援內容
+    （寬鬆版：只有一句 thesis/evidence_quote，判斷依據比較薄，但至少有得算，
+    不會讓使用者點試算卻找不到任何依據）。
+
+    回傳格式跟 find_grounded_stock_topics 相容：[{"asset_name","ticker","topic":{...}}, ...]，
+    topic 是組出來、跟 arguments 段落同樣形狀的 dict（有 topic/summary/position 三個 key），
+    讓 build_classification_context() 不用另外改就能吃。
+    """
+    grounded = find_grounded_stock_topics(record)
+    covered = {t["ticker"] for t in grounded}
+
+    results = list(grounded)
+    for call in (record.outlook_calls or []):
+        if not isinstance(call, dict):
+            continue
+        asset_name = (call.get("asset") or "").strip()
+        if not asset_name or is_multi_name_topic(asset_name):
+            continue
+        ticker = resolve_ticker(asset_name)
+        if not ticker or ticker in covered:
+            continue
+
+        thesis = (call.get("thesis") or "").strip()
+        quote = (call.get("evidence_quote") or "").strip()
+        if not thesis and not quote:
+            continue
+
+        # outlook_call 有結構化的 direction，比 arguments 段落靠 open text 前綴猜立場更可靠，
+        # 組成 extract_explicit_stance() 認得的格式（"看多："/"看空：" 開頭）直接重用既有機制。
+        stance = {"bullish": "看多", "bearish": "看空"}.get(call.get("direction", ""), "")
+        position_text = f"{stance}：{quote}" if stance else quote
+
+        covered.add(ticker)
+        results.append({
+            "asset_name": asset_name,
+            "ticker": ticker,
+            "topic": {
+                "topic": f"個股：{asset_name}",
+                "summary": thesis,
+                "position": position_text,
+            },
+        })
+    return results
+
+
 def build_classification_context(record, asset_name: str, ticker: str, stock_topic: dict) -> tuple[str, str]:
     """組出餵給 Gemini 的輸入段落 + 已知立場標籤提示。"""
     macro_topic = None
@@ -175,3 +223,61 @@ def classify_stock_sentiment(client, model: str, record, asset_name: str, ticker
         }
     except Exception:
         return None
+
+
+def ensure_stock_sentiment_score(record, ticker: str, client=None, model: Optional[str] = None):
+    """
+    給定一筆 SummaryRecord 跟目標 ticker，確保這支股票有 StockSentimentScore 可用：
+    已經算過就直接回傳既有那筆；沒算過就當場分類、存進資料庫再回傳（cache-aside，
+    跟 backfill_stock_sentiment management command 共用同一套邏輯，避免兩邊邏輯兜不起來）。
+
+    用 find_stock_topics_with_fallback()：優先用「個股：X」段落（判斷依據完整），
+    沒有的話退而求其次用 outlook_calls 的那句話（判斷依據較薄，但至少有得算）。
+    兩者都沒有才回傳 None——這種情況才是這集真的完全沒提到這支股票，沒東西可算。
+    """
+    import os
+    from apps.summaries.models import StockSentimentScore
+    from .gemini import make_client
+
+    if not record.published_at:
+        return None
+
+    topics = find_stock_topics_with_fallback(record)
+    match = next((t for t in topics if t["ticker"] == ticker), None)
+    if not match:
+        return None
+
+    asset_name = match["asset_name"]
+    existing = (
+        StockSentimentScore.objects.using("summariesdb")
+        .filter(summary=record, asset_name=asset_name)
+        .first()
+    )
+    if existing:
+        return existing
+
+    bv = get_base_vol_asof(ticker, record.published_at)
+    if not bv:
+        return None
+    base, annual_vol = bv
+
+    if client is None:
+        client = make_client(api_key=os.getenv("GEMINI_API_KEY", ""))
+    if model is None:
+        model = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
+
+    result = classify_stock_sentiment(client, model, record, asset_name, ticker, match["topic"])
+    if not result:
+        return None
+
+    return StockSentimentScore.objects.using("summariesdb").create(
+        summary=record,
+        episode_id=record.episode_id,
+        asset_name=asset_name,
+        ticker=ticker,
+        base=base,
+        annual_vol=annual_vol,
+        macro_score=result["macro_score"],
+        risk_score=result["risk_score"],
+        rationale=result["rationale"],
+    )

@@ -15,10 +15,79 @@ function openDeepDive(summaryId, autoPlay = false, targetBacktestId = null) {
   loadMindmap(summaryId);
 }
 
+// ── 名詞解釋（glossary）────────────────────────────────────────
+// glossary_matches 的 start/end 是後端內部合併字串的位置，跟前端各欄位分開
+// 渲染的方式對不上，所以不用座標，改用 surface 文字本身去比對、包起來。
+function _escapeRegex(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function _buildGlossaryIndex(matches) {
+  const defs = {};
+  const surfaceToId = {};
+  (matches || []).forEach(m => {
+    if (!m || !m.surface || m.term_id == null) return;
+    if (!(m.term_id in defs)) {
+      defs[m.term_id] = { canonical: m.canonical || m.surface, definition: m.short_definition || '' };
+    }
+    if (!(m.surface in surfaceToId)) {
+      surfaceToId[m.surface] = m.term_id;
+    }
+  });
+  const surfaces = Object.keys(surfaceToId).sort((a, b) => b.length - a.length);
+  return { defs, surfaceToId, surfaces };
+}
+
+function annotateGlossaryText(text, glossaryIndex) {
+  if (!text) return '';
+  const { surfaces, surfaceToId } = glossaryIndex;
+  if (!surfaces.length) return escapeHtml(text);
+  const pattern = new RegExp('(' + surfaces.map(_escapeRegex).join('|') + ')', 'g');
+  return text.split(pattern).map((part, i) => {
+    if (i % 2 === 1 && surfaceToId.hasOwnProperty(part)) {
+      return `<span class="glossary-term border-b border-dotted border-secondary text-secondary cursor-pointer" onclick="showGlossaryTerm(event, ${surfaceToId[part]})">${escapeHtml(part)}</span>`;
+    }
+    return escapeHtml(part);
+  }).join('');
+}
+
+let _glossaryPopoverEl = null;
+function showGlossaryTerm(evt, termId) {
+  evt.stopPropagation();
+  hideGlossaryTerm();
+  const info = window._glossaryDefs && window._glossaryDefs[termId];
+  if (!info) return;
+  const pop = document.createElement('div');
+  pop.className = 'glossary-popover fixed z-50 max-w-xs p-3 rounded-lg bg-inverse-surface text-inverse-on-surface text-sm shadow-lg';
+  pop.innerHTML = `<div class="font-bold mb-1">${escapeHtml(info.canonical)}</div><div>${escapeHtml(info.definition)}</div>`;
+  document.body.appendChild(pop);
+  const rect = evt.currentTarget.getBoundingClientRect();
+  const maxLeft = window.innerWidth - pop.offsetWidth - 12;
+  pop.style.top  = (rect.bottom + 6) + 'px';
+  pop.style.left = Math.max(12, Math.min(rect.left, maxLeft)) + 'px';
+  _glossaryPopoverEl = pop;
+  setTimeout(() => document.addEventListener('click', _dismissGlossaryPopover), 0);
+}
+
+function hideGlossaryTerm() {
+  if (_glossaryPopoverEl) { _glossaryPopoverEl.remove(); _glossaryPopoverEl = null; }
+  document.removeEventListener('click', _dismissGlossaryPopover);
+}
+
+function _dismissGlossaryPopover(e) {
+  if (_glossaryPopoverEl && !_glossaryPopoverEl.contains(e.target)) hideGlossaryTerm();
+}
+
 // ── Mode rendering ────────────────────────────────────────────
 function renderDdModeContent(mode) {
   const s = ddSummaryData[mode];
   if (!s) return;
+
+  // 名詞解釋只在小白模式顯示，老鳥模式維持原本純文字（不畫底線、不彈解釋）
+  const glossaryIndex = mode === 'novice'
+    ? _buildGlossaryIndex(s.glossary_matches)
+    : { defs: {}, surfaceToId: {}, surfaces: [] };
+  window._glossaryDefs = glossaryIndex.defs;
 
   const tw = s.investment_takeaways || {};
   let twHtml = '';
@@ -56,8 +125,24 @@ function renderDdModeContent(mode) {
   args.forEach((arg, i) => {
     const isLast      = i === args.length - 1;
     const timestamp   = (arg.evidence_timestamps && arg.evidence_timestamps[0]) || '--:--';
-    const fullSummary   = arg.summary || '';
+    const fullSummary = arg.summary || '';
     const { preview, hasMore } = splitThesisPreview(fullSummary);
+    const previewHtml = annotateGlossaryText(preview, glossaryIndex);
+    const fullHtml    = annotateGlossaryText(fullSummary, glossaryIndex);
+
+    const keyData = arg.key_data || [];
+    let keyDataHtml = '';
+    if (keyData.length) {
+      keyDataHtml = `<div class="flex flex-wrap gap-3 mb-3">${keyData.map(kd => `
+        <div class="min-w-[160px] px-3 py-2.5 rounded-lg bg-surface-container-low border border-outline-variant/20 text-center" style="width:max-content">
+          <div class="text-secondary font-bold text-base leading-snug whitespace-nowrap mb-1">${escapeHtml(kd.value || '')}</div>
+          <div class="flex items-center justify-center gap-1.5 text-outline text-[11px] font-bold">
+            <span class="material-symbols-outlined text-sm">query_stats</span>
+            <span>${escapeHtml(kd.label || '')}</span>
+          </div>
+        </div>`).join('')}</div>`;
+    }
+
     argHtml += `
       <div class="${isLast ? '' : 'border-b border-outline-variant/30'} py-8 px-2">
         <div class="flex flex-col md:flex-row gap-5">
@@ -71,9 +156,10 @@ function renderDdModeContent(mode) {
             <div class="flex items-center gap-3 flex-wrap">
               <h3 class="font-['Epilogue'] text-xl font-bold text-on-surface">${arg.topic || ''}</h3>
             </div>
-            <div class="thesis-preview text-on-surface-variant leading-relaxed text-base">${preview}</div>
+            ${keyDataHtml}
+            <div class="thesis-preview text-on-surface-variant leading-relaxed text-base">${previewHtml}</div>
             ${hasMore ? `
-            <div class="thesis-full hidden text-on-surface-variant leading-relaxed text-base"><p>${fullSummary}</p></div>
+            <div class="thesis-full hidden text-on-surface-variant leading-relaxed text-base"><p>${fullHtml}</p></div>
             <button onclick="toggleThesis(this)" class="flex items-center gap-1 text-secondary font-label font-bold text-xs uppercase tracking-wider hover:text-on-primary-container transition-colors mt-1">
               <span class="btn-label">Read More</span>
               <span class="material-symbols-outlined text-sm btn-icon">expand_more</span>
@@ -127,6 +213,12 @@ async function loadDeepDive(summaryId) {
     podBtn.addEventListener('click', () => openRankedPodcasterByName(showName));
     podcasterEl.textContent = 'Extracted from ';
     podcasterEl.appendChild(podBtn);
+    if (s.published_at) {
+      const dateSpan = document.createElement('span');
+      dateSpan.className = 'text-outline';
+      dateSpan.textContent = ' · ' + s.published_at.slice(0, 10);
+      podcasterEl.appendChild(dateSpan);
+    }
     document.getElementById('dd-one-sentence').textContent = '"' + s.one_sentence_summary + '"';
 
     const audioEl  = document.getElementById('dd-audio');
@@ -162,8 +254,14 @@ async function loadDeepDive(summaryId) {
           const st      = statusMap[r.result] || statusMap.pending;
           const ticker  = r.ticker || r.asset || '';
           const endDate = r.end_time || '';
+          const timestamp = (r.evidence_timestamps && r.evidence_timestamps[0]) || '';
+          const playBtn = timestamp
+            ? `<button onclick="playAtTimestamp('${timestamp}')" class="flex items-center gap-1 px-2.5 py-1 rounded-full bg-secondary-container text-tertiary-container text-xs font-bold hover:scale-95 transition-transform">
+                 <span class="material-symbols-outlined text-xs" style="font-variation-settings:'FILL' 1">play_arrow</span>${timestamp}
+               </button>`
+            : '';
           const calcBtn = (ticker && r.result === 'pending')
-            ? `<button onclick="goToCalculatorWithStock('${ticker.replace(/'/g, "\\'")}', '${endDate}')"
+            ? `<button onclick="goToCalculatorWithStock('${ticker.replace(/'/g, "\\'")}', '${endDate}', ${s.episode_id != null ? s.episode_id : 'null'})"
                  class="flex items-center gap-1 px-3 py-1 rounded-full bg-tertiary-container/20 border border-tertiary-container/40 text-tertiary-container text-xs font-bold hover:bg-tertiary-container/30 transition-colors">
                  <span class="material-symbols-outlined text-xs" style="font-variation-settings:'FILL' 1">calculate</span>試算
                </button>`
@@ -174,6 +272,7 @@ async function loadDeepDive(summaryId) {
                 <div class="flex items-center gap-2 ${st.cls}">
                   <span class="material-symbols-outlined text-sm" style="font-variation-settings:'FILL' 1">${st.icon}</span>
                   <span class="font-label font-bold uppercase tracking-wider text-xs">${st.label}</span>
+                  ${playBtn}
                 </div>
                 <div class="flex items-center gap-2">
                   <span class="text-xs font-bold text-outline uppercase">${renderAssetNameStar(r.ticker, r.asset || '')}${r.direction ? ' · ' + (dirLabel[r.direction] || r.direction) : ''}</span>

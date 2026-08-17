@@ -3,6 +3,8 @@ let _discoverCache = [];
 let _pageHistory = [];
 let _accuracyCache = null;
 let _podcastImages = {};  // show_name → image_url
+let _backOverride = null; // 下一次 goBack() 要去的頁面，用一次就清掉（例如「查看完整摘要」這種
+                           // 跳到 deep-dive 但內容跟共用頁面堆疊裡記的不一樣的入口，避免返回鍵跳錯集數）
 
 async function loadPodcastImages() {
   try {
@@ -52,6 +54,16 @@ function escapeHtml(str) {
 
 // ── Navigation ────────────────────────────────────────────────
 function goBack() {
+  if (_backOverride) {
+    const target = _backOverride;
+    _backOverride = null;
+    // showPage() 進來時本來就會把同一個頁面名稱再推一次，這裡順便清掉避免多按一次沒反應
+    if (_pageHistory.length && _pageHistory[_pageHistory.length - 1] === target) {
+      _pageHistory.pop();
+    }
+    _renderPage(target);
+    return;
+  }
   if (_pageHistory.length > 0) {
     const prev = _pageHistory.pop();
     _renderPage(prev);

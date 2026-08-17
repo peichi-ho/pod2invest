@@ -226,7 +226,7 @@ async function showPodcaster(name, episodeCount, accuracy, bgColor, icon) {
     epList.innerHTML = episodes.length
       ? episodes.map(ep => {
           const title = (ep.source_filename || '').replace(/\.srt$/i, '') || ep.one_sentence_summary?.slice(0, 60) || '(未命名)';
-          const date  = (ep.created_at || '').slice(0, 10);
+          const date  = (ep.published_at || ep.created_at || '').slice(0, 10);
           return `
             <div onclick="openDeepDive(${ep.id})" class="flex items-center justify-between p-4 bg-surface-container-low rounded-lg hover:bg-surface-container-highest transition-all cursor-pointer">
               <div class="flex items-center gap-4">

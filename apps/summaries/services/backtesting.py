@@ -255,7 +255,7 @@ def _rule_based_ticker(asset: str) -> Optional[str]:
 
     # ── 指數關鍵字 ────────────────────────────────────────────────────────────
     INDEX_MAP = {
-        ("台股加權", "加權指數", "大盤", "台北股市"): "^TWII",
+        ("台股加權", "加權指數", "大盤", "台北股市", "台股"): "^TWII",
         ("那斯達克", "Nasdaq", "nasdaq", "納斯達克", "納指"): "^IXIC",
         ("S&P500", "S&P 500", "S&P", "標準普爾", "標普", "標普500"): "^GSPC",
         ("費半", "費城半導體指數", "費城半導體"): "^SOX",
@@ -560,6 +560,7 @@ def create_backtesting_rows(
             timeframe_raw=tf_raw,
             thesis=call.get("thesis", ""),
             evidence_quote=call.get("evidence_quote", ""),
+            evidence_timestamps=call.get("evidence_timestamps") or [],
             target_price=None,          # 目前 LLM 不輸出明確目標價
             start_time=start,
             end_time=end_time,

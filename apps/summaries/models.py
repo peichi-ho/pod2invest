@@ -71,6 +71,7 @@ class BacktestingRecord(models.Model):
     timeframe_raw  = models.CharField(max_length=50, default="")
     thesis         = models.TextField(blank=True, default="")
     evidence_quote = models.TextField(blank=True, default="")
+    evidence_timestamps = models.JSONField(default=list, blank=True)
     target_price   = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
 
     # 時間

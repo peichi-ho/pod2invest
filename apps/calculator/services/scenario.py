@@ -137,9 +137,12 @@ def compute_time_weighted_scores(ticker: str, selected_date, latest_date=None, h
     """
     from apps.summaries.models import StockSentimentScore
 
+    # 只用 pro 版本：novice 是從 pro 改寫成白話文字再重新分類，同一集會產生兩筆
+    # StockSentimentScore，全部納入等於同一集被加權兩次。pro/novice 是嚴格一對一
+    # 配對（見 novice_content.py），只篩 pro 不會漏掉任何一集。
     rows = list(
         StockSentimentScore.objects.using("summariesdb")
-        .filter(ticker=ticker)
+        .filter(ticker=ticker, summary__mode="pro")
         .select_related("summary")
         .order_by("summary__published_at")
     )
@@ -163,6 +166,8 @@ def compute_time_weighted_scores(ticker: str, selected_date, latest_date=None, h
         weighted_risk += w * r.risk_score
         weighted_items.append({
             "summary_id": r.summary_id,
+            "asset_name": r.asset_name,
+            "podcaster": r.summary.podcaster,
             "published_at": pub_date.isoformat(),
             "weight": w,
             "macro_score": r.macro_score,
