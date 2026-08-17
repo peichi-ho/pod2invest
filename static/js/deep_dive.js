@@ -396,6 +396,8 @@ function toggleArgAiChat(btn, argIdx) {
 
   const topic = arg.topic || '';
   const summary = arg.summary || '';
+  chatEl.dataset.topic = topic;
+  chatEl.dataset.summary = summary;
   chatEl.innerHTML = `
     <div class="rounded-2xl border border-secondary/20 bg-surface-container-lowest overflow-hidden">
       <div class="flex items-center gap-2 px-4 py-3 border-b border-outline-variant/20 bg-secondary-container/10">
@@ -406,7 +408,7 @@ function toggleArgAiChat(btn, argIdx) {
       <div class="border-t border-outline-variant/20 px-3 py-3 flex gap-2 items-center">
         <input type="text"
           class="flex-1 bg-surface-container text-sm rounded-full px-4 py-2 border border-outline-variant/30 focus:outline-none focus:border-secondary/40 placeholder:text-outline/50"
-          placeholder="繼續追問..."
+          placeholder="輸入你的問題..."
           onkeydown="if(event.key==='Enter'&&!event.isComposing)_ddArgSend(this)">
         <button onclick="_ddArgSend(this.previousElementSibling)"
           class="w-9 h-9 rounded-full bg-secondary text-white flex items-center justify-center hover:opacity-90 active:scale-95 transition-all flex-shrink-0">
@@ -415,14 +417,32 @@ function toggleArgAiChat(btn, argIdx) {
       </div>
     </div>`;
 
-  const initQuery = `主播在這集提到關於「${topic}」：${summary.slice(0, 200)}${summary.length > 200 ? '...' : ''}。這個觀點有什麼需要補充或注意的地方？其他節目有沒有不同看法？`;
-  _ddArgSubmit(chatEl, initQuery);
+  _ddArgAddGreeting(chatEl.querySelector('.arg-chat-messages'));
 }
 
-async function _ddArgSubmit(chatEl, query) {
+function _ddArgSend(input) {
+  const query = (input.value || '').trim();
+  if (!query) return;
+  input.value = '';
+  const chatEl = input.closest('.arg-ai-chat');
+
+  const isFirstTurn = !chatEl.dataset.convId;
+  let sendQuery = query;
+  if (isFirstTurn) {
+    const topic   = chatEl.dataset.topic || '';
+    const summary = chatEl.dataset.summary || '';
+    const context = summary
+      ? `主播在這集提到關於「${topic}」：${summary.slice(0, 200)}${summary.length > 200 ? '...' : ''}\n\n`
+      : '';
+    sendQuery = `${context}使用者問題：${query}`;
+  }
+  _ddArgSubmit(chatEl, sendQuery, query);
+}
+
+async function _ddArgSubmit(chatEl, query, displayQuery) {
   const msgBox  = chatEl.querySelector('.arg-chat-messages');
   const convId  = chatEl.dataset.convId || null;
-  _ddArgAddUser(msgBox, query);
+  _ddArgAddUser(msgBox, displayQuery != null ? displayQuery : query);
   const loadEl = _ddArgAddLoading(msgBox);
   try {
     const body = { query };
@@ -446,12 +466,18 @@ async function _ddArgSubmit(chatEl, query) {
   }
 }
 
-function _ddArgSend(input) {
-  const query = (input.value || '').trim();
-  if (!query) return;
-  input.value = '';
-  const chatEl = input.closest('.arg-ai-chat');
-  _ddArgSubmit(chatEl, query);
+function _ddArgAddGreeting(msgBox) {
+  const row = document.createElement('div');
+  row.className = 'flex items-start gap-2';
+  const icon = document.createElement('div');
+  icon.className = 'w-6 h-6 rounded-full bg-secondary-container flex items-center justify-center flex-shrink-0 mt-1';
+  icon.innerHTML = '<span class="material-symbols-outlined text-on-secondary-container" style="font-size:13px">psychology</span>';
+  const bubble = document.createElement('div');
+  bubble.className = 'bg-surface-container text-sm px-4 py-2.5 rounded-t-xl rounded-br-xl max-w-[90%] leading-relaxed text-on-surface border border-outline-variant/20';
+  bubble.textContent = '有什麼想問的嗎？';
+  row.appendChild(icon);
+  row.appendChild(bubble);
+  msgBox.appendChild(row);
 }
 
 function _ddArgAddUser(msgBox, text) {
