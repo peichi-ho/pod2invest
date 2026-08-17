@@ -200,8 +200,8 @@ async function showPodcaster(name, episodeCount, accuracy, bgColor, icon) {
   document.getElementById('podcaster-name').textContent = name;
   document.getElementById('podcaster-episode-count').textContent = episodeCount;
   document.getElementById('podcaster-accuracy').textContent = accuracy;
-  document.getElementById('podcaster-avatar-inner').style.background = bgColor;
-  document.getElementById('podcaster-avatar-icon').textContent = icon;
+  // 用真正的節目封面圖（有的話），沒有才退回背景色+icon——不要固定只顯示 icon。
+  document.getElementById('podcaster-avatar-inner').innerHTML = podcastAvatar(name, bgColor, icon);
 
   const epList   = document.getElementById('podcaster-episodes-list');
   const viewList = document.getElementById('podcaster-views-list');
@@ -230,8 +230,8 @@ async function showPodcaster(name, episodeCount, accuracy, bgColor, icon) {
           return `
             <div onclick="openDeepDive(${ep.id})" class="flex items-center justify-between p-4 bg-surface-container-low rounded-lg hover:bg-surface-container-highest transition-all cursor-pointer">
               <div class="flex items-center gap-4">
-                <div class="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0" style="background:${bgColor}">
-                  <span class="material-symbols-outlined text-white/80 text-lg" style="font-variation-settings:'FILL' 1">${icon}</span>
+                <div class="w-10 h-10 rounded-lg overflow-hidden flex-shrink-0">
+                  ${podcastAvatar(name, bgColor, icon)}
                 </div>
                 <div>
                   <h4 class="font-bold text-tertiary-container text-sm leading-snug line-clamp-2">${title}</h4>

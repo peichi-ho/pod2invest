@@ -429,8 +429,41 @@ class AllBacktestingAPIView(APIView):
         return Response(_normalize_asset_display_names(data))
 
 
+def _search_visible_hit_terms(s, terms_pairs):
+    """
+    回傳這筆 SummaryRecord「畫面上真的會顯示出來」的文字裡，命中了 terms_pairs
+    （[(原始字串, 小寫字串), ...]）裡的哪些字串。
+
+    只認：節目名稱、集數標題、Critical Thesis Points 的 topic / summary /
+    key_data 的 label / value——這些都對應 deep_dive.js 實際 render 出來的欄位。
+    故意不比對 key_data.context、related_concepts、evidence_* 這些欄位，因為
+    deep_dive.js 從來沒把它們印在畫面上，命中那邊的話使用者點進去會完全找不到
+    搜尋詞出現在哪裡（這是先前版本的真實 bug）。
+    """
+    hit = set()
+    title_blob = f"{s.podcaster or ''} {s.source_filename or ''}".lower()
+    for t, t_lower in terms_pairs:
+        if t_lower in title_blob:
+            hit.add(t)
+
+    for arg in (s.arguments or []):
+        if not isinstance(arg, dict):
+            continue
+        haystacks = [arg.get('topic') or '', arg.get('summary') or '']
+        for kd in (arg.get('key_data') or []):
+            if isinstance(kd, dict):
+                haystacks.append(kd.get('label') or '')
+                haystacks.append(kd.get('value') or '')
+        blob = ' '.join(haystacks).lower()
+        for t, t_lower in terms_pairs:
+            if t_lower in blob:
+                hit.add(t)
+
+    return hit
+
+
 class SearchAPIView(APIView):
-    """搜尋節目名稱 / 集數標題（含股票代號轉換）"""
+    """搜尋節目名稱 / 集數標題 / 集數裡畫面上看得到的重點內容（含股票代號轉換）"""
     def get(self, request):
         from django.db.models import Q
         q     = request.query_params.get('q', '').strip()
@@ -453,45 +486,43 @@ class SearchAPIView(APIView):
         except Exception:
             logger.exception("TickerMap search failed")
 
-        all_terms = [q] + list(extra_terms - {q})
+        all_terms   = [q] + list(extra_terms - {q})
+        terms_pairs = [(t, t.lower()) for t in all_terms if t]
 
-        # ── 比對節目名稱、集數標題、Critical Thesis Points ──
-        q_filter       = Q()   # 全部條件（用來篩選）
-        q_title_filter = Q()   # 僅標題條件（用來排序優先）
+        # ── 資料庫先粗篩候選（比對整包 arguments JSON 的文字，含畫面沒顯示的欄位）──
+        # 底下再用 Python 那層依 terms_pairs 精篩，只留下真的有命中「畫面上會顯示」
+        # 欄位的紀錄，所以這裡要多抓一些候選，篩完才夠湊到 limit 筆。
+        q_filter = Q()
         for term in all_terms:
             q_filter |= (
                 Q(podcaster__icontains=term)       |
                 Q(source_filename__icontains=term) |
                 Q(arguments__icontains=term)
             )
-            q_title_filter |= (
-                Q(podcaster__icontains=term)       |
-                Q(source_filename__icontains=term)
-            )
 
-        from django.db.models import Case, When, IntegerField, Value
-        qs = (
+        candidates = (
             SummaryRecord.objects.using('summariesdb')
             .filter(q_filter)
-            .annotate(
-                relevance=Case(
-                    When(q_title_filter, then=Value(1)),  # 標題命中 → 排前面
-                    default=Value(2),                      # 僅 arguments 命中 → 排後面
-                    output_field=IntegerField(),
-                )
-            )
-            .order_by('relevance', '-created_at')[:limit * 4]  # 多抓一些供去重後仍夠 limit 筆
+            .order_by('-created_at')[:limit * 10]
         )
 
-        # 同一集數（source_filename）只保留第一筆（relevance 最高）
+        # 同一集數（source_filename）只保留第一筆
         seen_filenames = set()
-        result = []
-        for s in qs:
+        title_hits, content_hits = [], []
+        for s in candidates:
             key = s.source_filename or str(s.id)
             if key in seen_filenames:
                 continue
+
+            hit_terms = _search_visible_hit_terms(s, terms_pairs)
+            if not hit_terms:
+                continue  # 只命中畫面看不到的欄位（如 key_data.context），不算數
+
             seen_filenames.add(key)
-            result.append({
+            title_blob = f"{s.podcaster or ''} {s.source_filename or ''}".lower()
+            is_title_hit = any(t_lower in title_blob for t, t_lower in terms_pairs if t in hit_terms)
+
+            row = {
                 'id':                   s.id,
                 'mode':                 s.mode,
                 'podcaster':            s.podcaster,
@@ -500,10 +531,15 @@ class SearchAPIView(APIView):
                 'tags':                 s.tags,
                 'entities':             s.entities,
                 'created_at':           s.created_at.isoformat(),
-            })
-            if len(result) >= limit:
+                # 命中的字串，交給前端在 deep dive 頁面裡定位到對應的 Critical Thesis
+                # Points 卡片、自動展開＋捲過去，不用使用者自己在整集內容裡找。
+                'match_terms':          sorted(hit_terms),
+            }
+            (title_hits if is_title_hit else content_hits).append(row)
+            if len(title_hits) + len(content_hits) >= limit * 2:
                 break
 
+        result = (title_hits + content_hits)[:limit]
         return Response(result)
 
 

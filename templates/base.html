@@ -67,7 +67,7 @@
 <body class="bg-surface text-on-surface pb-28">
 
 <!-- Top Navigation -->
-<header class="fixed top-0 w-full flex justify-between items-center px-6 h-16 bg-[#fcf9f0]/80 backdrop-blur-xl z-50 shadow-[0px_10px_30px_rgba(28,28,22,0.06)] relative">
+<header class="fixed top-0 w-full flex justify-between items-center px-6 h-16 bg-[#fcf9f0]/80 backdrop-blur-xl z-50 shadow-[0px_10px_30px_rgba(28,28,22,0.06)]">
   <div class="w-10"></div>
   <h1 class="font-['Epilogue'] font-bold tracking-[-0.02em] text-2xl text-[#113236] absolute left-1/2 -translate-x-1/2">Pod2Invest</h1>
   <button onclick="showPage('profile')" class="w-10 h-10 rounded-full overflow-hidden bg-surface-container-highest hover:opacity-80 transition-opacity">
@@ -160,29 +160,15 @@
   </button>
 </nav>
 
-<!-- Glossary popup -->
-<div id="glossary-btn" class="hidden fixed z-[200] cursor-pointer">
-  <button onclick="lookupGlossary()" class="bg-tertiary-container text-white text-xs font-bold px-3 py-1.5 rounded-full shadow-lg">解釋</button>
-</div>
-<div id="glossary-card" class="bg-surface-container-lowest border border-outline-variant/30 rounded-xl shadow-2xl p-5 w-72" style="position:fixed; top:120px; left:50%; transform:translateX(-50%); z-index:9999; display:none;">
-  <div class="flex justify-between items-start mb-2">
-    <p id="gc-term" class="font-['Epilogue'] font-bold text-tertiary-container text-base"></p>
-    <button onclick="document.getElementById('glossary-card').style.display='none'" class="text-outline text-xs ml-2">✕</button>
-  </div>
-  <p id="gc-short" class="text-sm text-on-surface-variant leading-relaxed"></p>
-  <button id="gc-more-btn" onclick="showGlossaryLong()" class="mt-3 text-secondary font-bold text-xs uppercase tracking-wider hover:text-on-primary-container transition-colors">查看更多 ›</button>
-  <div id="gc-long" class="hidden mt-3 pt-3 border-t border-outline-variant/20 text-sm text-on-surface-variant leading-relaxed"></div>
-</div>
-
 {% block body_scripts %}
 <!-- JS modules -->
 <script src="{% static 'js/app.js' %}?v=12"></script>
-<script src="{% static 'js/discover.js' %}?v=14"></script>
-<script src="{% static 'js/rankings.js' %}?v=14"></script>
-<script src="{% static 'js/deep_dive.js' %}?v=15"></script>
+<script src="{% static 'js/discover.js' %}?v=17"></script>
+<script src="{% static 'js/rankings.js' %}?v=15"></script>
+<script src="{% static 'js/deep_dive.js' %}?v=17"></script>
 <script src="{% static 'js/calculator.js' %}?v=27"></script>
 <script src="{% static 'js/ai.js' %}?v=10"></script>
-<script src="{% static 'js/assets.js' %}?v=11"></script>
+<script src="{% static 'js/assets.js' %}?v=12"></script>
 <script src="{% static 'js/profile.js' %}?v=10"></script>
 <script>
   calcWealth();
@@ -191,6 +177,10 @@
     const wanted = location.hash.replace('#', '');
     const initial = wanted && document.getElementById('page-' + wanted) ? wanted : 'discover';
     showPage(initial);
+    // hash 只是「一次性」的深連結入口，用掉就從網址列清掉——SPA 裡平常切分頁本來就
+    // 不會更新 hash，留著的話網址列會一直卡在第一次連進來的那個分頁，之後重新整理
+    // 永遠回不去首頁，跟使用者實際在哪一頁對不上。
+    if (wanted) history.replaceState(null, '', location.pathname + location.search);
   })();
   loadWeeklySignals();
   initAssetsPage();

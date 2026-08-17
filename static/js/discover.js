@@ -590,6 +590,19 @@ async function loadHotTags() {
 
 // ── Search ────────────────────────────────────────────────────
 let _searchTimer = null;
+let _podcasterListCache = null;
+let _searchSeq = 0;  // 過期回應防護：使用者打字夠快時，前一次查詢可能比這次晚回來，
+                      // 不擋掉的話下拉選單會被過期結果蓋掉（跟 assets.js 的 _assetsFetchSeq 同一招）。
+
+// 節目清單就 13 檔（見 rankings.js 的 podcasters/ API），快取起來避免每次打字都重打一次 API。
+async function _ensurePodcasterList() {
+  if (_podcasterListCache) return _podcasterListCache;
+  try {
+    const res = await fetch('/api/summaries/podcasters/?limit=200');
+    _podcasterListCache = res.ok ? await res.json() : [];
+  } catch (e) { _podcasterListCache = []; }
+  return _podcasterListCache;
+}
 
 function onSearchInput() {
   const q  = (document.getElementById('discover-search')?.value || '').trim();
@@ -611,37 +624,160 @@ function _closeSearch() {
   document.getElementById('discover-search').value = '';
 }
 
+// 點下拉裡的「相關標的」列：跳到 ASSETS 分頁並直接開該標的詳情頁，
+// 跟 assets.js 自己下拉選單點擊後的行為（openAssetDetailBySymbol）共用同一支函式。
+// 故意不呼叫 _closeSearch()——保留搜尋框內容跟下拉選單，這樣從 Assets 詳情頁按返回
+// （見 assets.js 的 closeAssetDetail）跳回本頁時，剛剛的搜尋結果還在，不會憑空消失。
+function _goToAssetFromSearch(symbol, category, name) {
+  _backOverride = 'discover';
+  showPage('assets');
+  openAssetDetailBySymbol(symbol, category, name);
+}
+
+// 標的比對：同時查台股個股／ETF 兩個分類，其中一個分類的資料來源掛掉時
+// （例如 ETF 專用的 Supabase 連線異常）不要讓整個搜尋失敗，該分類回空陣列就好。
+async function _fetchAssetMatches(q) {
+  const fetches = [
+    { category: 'tw_stock' },
+    { category: 'tw_etf' },
+  ].map(({ category }) =>
+    fetch(`/api/assets/rankings/?category=${category}&q=${encodeURIComponent(q)}&sort=volume&direction=desc&limit=3`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => (data && Array.isArray(data.data) ? data.data : []).map(r => ({ ...r, category })))
+      .catch(() => [])
+  );
+  const results = await Promise.all(fetches);
+  return results.flat().slice(0, 5);
+}
+
+// 跟 assets.js 的 _runAssetSearch() 下拉選項用同一套排版/配色，讓使用者一眼認出
+// 這是「標的」而不是「單集」（單集那排是另一種顏色的卡片，見 _episodeRowHtml）。
+function _assetMatchRowHtml(r) {
+  const name = r.name || r.symbol;
+  const pct = r.change_pct;
+  const isUp = pct != null && pct > 0;
+  const isDown = pct != null && pct < 0;
+  const pctColor = pct == null ? 'text-outline' : (isUp ? 'text-[#ba1a1a]' : isDown ? 'text-[#1e8e3e]' : 'text-outline');
+  const pctLabel = pct == null ? '—' : `${isUp ? '▲' : isDown ? '▼' : ''} ${Math.abs(pct).toFixed(2)}%`;
+  return `
+    <div onclick="_goToAssetFromSearch('${r.symbol}', '${r.category}', '${name.replace(/'/g, "\\'")}')"
+      class="flex items-center justify-between gap-3 px-4 py-4 hover:bg-surface-container-highest cursor-pointer border-b border-outline-variant/10 last:border-0 transition-colors">
+      <div class="flex items-baseline gap-2 min-w-0">
+        <span class="text-base font-bold text-tertiary-container truncate">${name}</span>
+        <span class="text-sm text-outline flex-shrink-0">${r.symbol}</span>
+      </div>
+      <div class="flex items-baseline gap-2 flex-shrink-0">
+        <span class="text-base font-bold text-on-surface">${r.close != null ? r.close.toFixed(2) : '—'}</span>
+        <span class="text-sm font-semibold ${pctColor} whitespace-nowrap">${pctLabel}</span>
+      </div>
+    </div>`;
+}
+
+// 整個節目（不是單集）那一列：點下去開節目頁（跟 Rankings 點進節目一樣的頁面）。
+// 故意不呼叫 _closeSearch()——節目頁的返回鍵本來就是走 goBack()／_pageHistory，
+// 保留搜尋框內容跟下拉選單，按返回時才能看到剛剛的搜尋結果，不是空的。
+function _showMatchRowHtml(podcaster) {
+  const st = cardStyle(podcaster.podcaster);
+  const safeName = podcaster.podcaster.replace(/'/g, "\\'");
+  return `
+    <div onclick="openRankedPodcasterByName('${safeName}')"
+      class="flex items-center gap-3 p-4 hover:bg-surface-container-highest cursor-pointer border-b border-outline-variant/10 transition-colors">
+      <div class="w-12 h-12 rounded-full overflow-hidden flex-shrink-0">
+        ${podcastAvatar(podcaster.podcaster, st.bg, st.icon)}
+      </div>
+      <div class="min-w-0 flex-1">
+        <p class="text-[10px] font-bold text-secondary uppercase tracking-widest">節目</p>
+        <p class="text-base font-bold text-tertiary-container leading-snug truncate">${podcaster.podcaster}</p>
+        <p class="text-xs text-outline">共 ${podcaster.episodes} 集 · 查看全部集數</p>
+      </div>
+      <span class="material-symbols-outlined text-outline/40 text-base flex-shrink-0">chevron_right</span>
+    </div>`;
+}
+
+// 搜尋結果快取，讓下面的列點下去時可以查回 match_terms（命中字串），
+// 帶去 deep dive 頁面直接定位到對應段落——不直接把陣列塞進 inline onclick
+// 屬性字串（JSON 裡有引號，跟 HTML 屬性的引號會互咬，容易寫壞）。
+let _lastEpisodeResults = [];
+
+function _openSearchEpisode(id) {
+  const hit = _lastEpisodeResults.find(s => s.id === id);
+  // 不呼叫 _closeSearch()：deep dive 的返回鍵是走 goBack()／_pageHistory，保留搜尋框
+  // 內容跟下拉選單，按返回時才能看到剛剛的搜尋結果，不是空的。
+  openDeepDive(id, false, null, (hit && hit.match_terms) || null);
+}
+
+function _episodeRowHtml(s) {
+  const title  = (s.source_filename || '').replace(/\.srt$/i, '') || (s.one_sentence_summary || '').slice(0, 60) || '(未命名)';
+  const tagStr = (s.tags || []).slice(0, 3).join(' · ');
+  const st     = cardStyle(s.podcaster || s.source_filename || '');
+  return `
+    <div onclick="_openSearchEpisode(${s.id})"
+      class="flex items-center gap-3 p-4 hover:bg-surface-container-highest cursor-pointer border-b border-outline-variant/10 last:border-0 transition-colors">
+      <div class="w-10 h-10 rounded-lg overflow-hidden flex-shrink-0">
+        ${podcastAvatar(s.podcaster, st.bg, st.icon)}
+      </div>
+      <div class="min-w-0 flex-1">
+        <p class="text-[10px] font-bold text-secondary uppercase tracking-widest truncate">${s.podcaster || ''}</p>
+        <p class="text-sm font-semibold text-tertiary-container leading-snug line-clamp-1">${title}</p>
+        <p class="text-xs text-outline truncate">${tagStr}</p>
+      </div>
+      <span class="material-symbols-outlined text-outline/40 text-base flex-shrink-0">chevron_right</span>
+    </div>`;
+}
+
+function _searchSectionLabel(text) {
+  return `<div class="px-4 pt-3 pb-1 text-[10px] font-bold text-outline uppercase tracking-widest">${text}</div>`;
+}
+
 async function _runSearch(q) {
+  const seq = ++_searchSeq;
   const dd = document.getElementById('search-dropdown');
   dd.innerHTML = '<p class="text-outline text-sm p-4">搜尋中...</p>';
   dd.classList.remove('hidden');
+
   try {
-    const res = await fetch(`/api/summaries/search/?q=${encodeURIComponent(q)}&limit=8`);
-    if (!res.ok) throw new Error();
-    const results = await res.json();
-    if (!results.length) {
+    const podcasters = await _ensurePodcasterList();
+    if (seq !== _searchSeq) return; // 使用者在等待期間又打了新字，這次查詢已經過期
+
+    const qLower = q.toLowerCase();
+    // 搜尋字串太短（1 個字）容易誤判成節目名稱，只在夠長時才當作「找節目」處理。
+    const showMatch = q.length >= 2
+      ? podcasters.find(p => p.podcaster && p.podcaster.toLowerCase().includes(qLower))
+      : null;
+
+    const [assetMatches, episodeResults] = await Promise.all([
+      _fetchAssetMatches(q),
+      showMatch
+        ? fetch(`/api/summaries/?podcaster=${encodeURIComponent(showMatch.podcaster)}&limit=50`)
+            .then(r => r.ok ? r.json() : [])
+            .then(list => dedupeByEpisode(list).slice(0, 5))
+        : fetch(`/api/summaries/search/?q=${encodeURIComponent(q)}&limit=8`).then(r => r.ok ? r.json() : []),
+    ]);
+    if (seq !== _searchSeq) return; // 回應到的時候已經不是最新一次查詢了，結果不能再用
+
+    if (!assetMatches.length && !showMatch && !episodeResults.length) {
       dd.innerHTML = '<p class="text-outline text-sm p-4 text-center">找不到相關節目或公司</p>';
       return;
     }
-    dd.innerHTML = results.map(s => {
-      const title  = (s.source_filename || '').replace(/\.srt$/i, '') || (s.one_sentence_summary || '').slice(0, 60) || '(未命名)';
-      const tagStr = (s.tags || []).slice(0, 3).join(' · ');
-      const st     = cardStyle(s.podcaster || s.source_filename || '');
-      return `
-        <div onclick="openDeepDive(${s.id}); _closeSearch();"
-          class="flex items-center gap-3 p-4 hover:bg-surface-container-highest cursor-pointer border-b border-outline-variant/10 last:border-0 transition-colors">
-          <div class="w-10 h-10 rounded-lg flex-shrink-0 flex items-center justify-center" style="background:${st.bg}">
-            <span class="material-symbols-outlined text-white/60 text-lg" style="font-variation-settings:'FILL' 1">${st.icon}</span>
-          </div>
-          <div class="min-w-0 flex-1">
-            <p class="text-[10px] font-bold text-secondary uppercase tracking-widest truncate">${s.podcaster || ''}</p>
-            <p class="text-sm font-semibold text-tertiary-container leading-snug line-clamp-1">${title}</p>
-            <p class="text-xs text-outline truncate">${tagStr}</p>
-          </div>
-          <span class="material-symbols-outlined text-outline/40 text-base flex-shrink-0">chevron_right</span>
-        </div>`;
-    }).join('');
+
+    _lastEpisodeResults = episodeResults;
+
+    let html = '';
+    if (assetMatches.length) {
+      html += _searchSectionLabel('相關標的');
+      html += assetMatches.map(_assetMatchRowHtml).join('');
+    }
+    if (showMatch) {
+      html += _searchSectionLabel('節目');
+      html += _showMatchRowHtml(showMatch);
+    }
+    if (episodeResults.length) {
+      html += _searchSectionLabel(showMatch ? '最新集數' : '相關集數');
+      html += episodeResults.map(_episodeRowHtml).join('');
+    }
+    dd.innerHTML = html;
   } catch (e) {
+    if (seq !== _searchSeq) return;
     dd.innerHTML = '<p class="text-outline text-sm p-4 text-center">搜尋失敗，請稍後再試</p>';
   }
 }

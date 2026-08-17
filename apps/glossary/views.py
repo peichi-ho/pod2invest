@@ -4,56 +4,7 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from apps.glossary.models import GlossaryTerm
 from apps.glossary.services.annotator import annotate
-from django.db.models import Q, Case, When, IntegerField, Value
 from rest_framework import status
-
-
-#搜尋 term + alias
-#有 relevance score
-#term 完全相等 > 前綴 > 包含 > alias
-#最多回傳 20 筆
-@api_view(["GET"])
-def lookup(request):
-    q = (request.GET.get("q") or "").strip()
-    if not q:
-        return Response({"error": "q is required"}, status=400)
-
-    terms = (
-        GlossaryTerm.objects
-        .filter(is_active=True)
-        .filter(Q(term__icontains=q) | Q(aliases__alias__icontains=q))
-        .annotate(
-            score=Case(
-                # term 優先
-                When(term__iexact=q, then=Value(100)),          # term 完全相等
-                When(term__istartswith=q, then=Value(80)),      # term 前綴
-                When(term__icontains=q, then=Value(60)),        # term 包含
-
-                # alias 次之
-                When(aliases__alias__iexact=q, then=Value(40)),      # alias 完全相等
-                When(aliases__alias__istartswith=q, then=Value(20)), # alias 前綴
-                When(aliases__alias__icontains=q, then=Value(10)),   # alias 包含
-
-                default=Value(0),
-                output_field=IntegerField(),
-            )
-        )
-        .order_by("-score", "term")  # 分數高的先出來；同分再按字母
-        .distinct()
-    )
-    terms = terms[:20]
-    data = []
-    for t in terms:
-        data.append({
-            "id": t.id,
-            "term": t.term,
-            "short_definition": t.short_definition,
-            "long_definition": t.long_definition,
-            "category": t.category,
-            "lang": t.lang,
-            "aliases": [a.alias for a in t.aliases.all()],
-        })
-    return Response({"results": data})
 
 
 #呼叫 annotate()，找出所有出現的詞 + 正確位置
