@@ -48,13 +48,6 @@ function formatTime(sec) {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-function getTwoSentences(text) {
-  if (!text) return '';
-  const sentences = text.match(/[^。！？!?]+[。！？!?]+/g) || [];
-  if (sentences.length >= 2) return sentences.slice(0, 2).join('');
-  return text.slice(0, 80) + (text.length > 80 ? '...' : '');
-}
-
 function escapeHtml(str) {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
@@ -100,6 +93,7 @@ function _renderPage(page) {
   // Global input bar hidden — AI page has its own inline input
   document.getElementById('ai-input-bar').classList.add('hidden');
   if (page === 'ai' && typeof onAiPageShow === 'function') onAiPageShow();
+  if (page === 'assets' && typeof onAssetsPageShow === 'function') onAssetsPageShow();
 }
 
 // ── Accuracy cache (shared by discover, rankings, podcaster) ──
@@ -118,6 +112,150 @@ async function _ensureAccuracyCache() {
     _accuracyCache = {};
   }
   return _accuracyCache;
+}
+
+// ── Favorites（收藏標的）＋ 跨頁面跳轉到 ASSETS 詳情頁 ──────────
+// Discover/Rankings/Deep Dive/Assets 共用，放在 app.js 是因為它比這幾個頁面
+// 自己的 JS 都先載入（見 templates/base.html 的 <script> 順序）。
+let _favoritesCache = null;          // Set<"category:symbol">
+let _favoritesLoadingPromise = null;
+
+function _favKey(category, symbol) { return `${category}:${symbol}`; }
+
+// 跟 apps/assets/services/tw_stock_rankings.py 的 _is_tw_etf() 保持同一條規則。
+function _isTwEtfCode(code) { return /^00\d{2,4}[A-Z]?$/.test(code); }
+
+// ticker 格式參考 apps/summaries/models.py TickerMap 的註解："2330.TW" / "NVDA"。
+// 回傳 { category, symbol }（symbol 不含 .TW 後綴）；不是 .TW 結尾（美股/指數/
+// 大宗商品等）一律回傳 null，代表目前 ASSETS 頁面還不支援。
+function resolveAssetCategory(ticker) {
+  if (!ticker) return null;
+  const t = ticker.trim();
+  if (!t.toUpperCase().endsWith('.TW')) return null;
+  const code = t.slice(0, -3).toUpperCase();
+  if (!code) return null;
+  return { category: _isTwEtfCode(code) ? 'tw_etf' : 'tw_stock', symbol: code };
+}
+
+async function _ensureFavoritesCache() {
+  if (_favoritesCache) return _favoritesCache;
+  if (_favoritesLoadingPromise) return _favoritesLoadingPromise;
+  _favoritesLoadingPromise = (async () => {
+    try {
+      const res = await fetch('/api/accounts/favorites/');
+      const data = res.ok ? await res.json() : { symbols: [] };
+      _favoritesCache = new Set((data.symbols || []).map(s => _favKey(s.category, s.symbol)));
+    } catch (e) {
+      // accountsdb 還沒接上時這裡一定會失敗，優雅退回空清單，不能讓整頁掛掉。
+      _favoritesCache = new Set();
+    }
+    return _favoritesCache;
+  })();
+  return _favoritesLoadingPromise;
+}
+
+// 極簡共用提示訊息，「尚未支援」跟收藏失敗都用這個，全專案目前沒有 toast 元件。
+function showToast(msg) {
+  let el = document.getElementById('app-toast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'app-toast';
+    el.className = 'fixed left-1/2 bottom-24 -translate-x-1/2 z-[999] px-4 py-2.5 rounded-full bg-on-primary-container text-white text-sm font-semibold shadow-lg opacity-0 pointer-events-none transition-opacity duration-200';
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.style.opacity = '1';
+  clearTimeout(el._hideTimer);
+  el._hideTimer = setTimeout(() => { el.style.opacity = '0'; }, 2000);
+}
+
+function onAssetNameClick(ticker, displayName) {
+  const resolved = resolveAssetCategory(ticker);
+  if (!resolved) { showToast('尚未支援此標的'); return; }
+  showPage('assets');
+  openAssetDetail({ symbol: resolved.symbol, category: resolved.category, name: displayName || resolved.symbol });
+}
+
+function _paintFavoriteIcon(key, isFav) {
+  document.querySelectorAll(`[data-fav-key="${key}"]`).forEach(el => {
+    const icon = el.querySelector('.material-symbols-outlined');
+    if (icon) icon.style.fontVariationSettings = `'FILL' ${isFav ? 1 : 0}`;
+    el.classList.toggle('text-[#d97f12]', isFav);
+    el.classList.toggle('text-outline/40', !isFav);
+  });
+}
+
+// 更新收藏狀態的單一入口：改快取、改畫面上所有星星圖示、發自訂事件讓
+// assets.js 的「我的最愛」清單可以跟著同步（見 assets.js 的事件監聽）。
+// 樂觀更新（先假設會成功）用它來立刻反應；請求失敗時也用它復原成原本狀態，
+// 兩種情況畫面邏輯完全一樣，不用寫兩份。
+function _setFavoriteState(category, symbol, isFav) {
+  const key = _favKey(category, symbol);
+  if (isFav) _favoritesCache.add(key); else _favoritesCache.delete(key);
+  _paintFavoriteIcon(key, isFav);
+  window.dispatchEvent(new CustomEvent('pod2invest:favorite-toggled', {
+    detail: { category, symbol, favorited: isFav },
+  }));
+}
+
+async function toggleFavoriteStar(btnEl, category, symbol) {
+  await _ensureFavoritesCache();
+  const key = _favKey(category, symbol);
+  const wasFav = _favoritesCache.has(key);
+  const nextFav = !wasFav;
+
+  // 樂觀更新：先假設會成功，畫面立刻反應（星星圖示 + 我的最愛清單），
+  // 不用等網路來回才看到變化；失敗的話下面會呼叫同一個函式復原回 wasFav。
+  _setFavoriteState(category, symbol, nextFav);
+  btnEl.disabled = true;
+
+  try {
+    const res = await fetch('/api/accounts/favorites/toggle/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ category, symbol }),
+    });
+    if (res.status === 401) {
+      _setFavoriteState(category, symbol, wasFav);
+      showToast('請先登入才能收藏');
+      return;
+    }
+    if (!res.ok) {
+      _setFavoriteState(category, symbol, wasFav);
+      showToast('操作失敗，請稍後再試');
+      return;
+    }
+    const data = await res.json();
+    if (data.favorited !== nextFav) {
+      // 跟伺服器最後認定的狀態對不上（例如兩個分頁同時操作），以伺服器為準校正。
+      _setFavoriteState(category, symbol, data.favorited);
+    }
+  } catch (e) {
+    _setFavoriteState(category, symbol, wasFav);
+    showToast('網路錯誤，請稍後再試');
+  } finally {
+    btnEl.disabled = false;
+  }
+}
+
+// 產生「名稱 + 星星」HTML，discover.js/rankings.js/deep_dive.js 共用。
+// 呼叫前要先 await _ensureFavoritesCache()，不然星星狀態會一律顯示未收藏。
+function renderAssetNameStar(ticker, displayName, nameClass = '') {
+  const resolved = resolveAssetCategory(ticker);
+  const key = resolved ? _favKey(resolved.category, resolved.symbol) : null;
+  const isFav = !!(resolved && _favoritesCache && _favoritesCache.has(key));
+  const safeName = escapeHtml(displayName || '');
+  const safeTicker = (ticker || '').replace(/'/g, "\\'");
+  const safeDisplay = safeName.replace(/'/g, "\\'");
+  const star = resolved ? `
+    <button type="button" data-fav-key="${key}" onclick="event.stopPropagation(); toggleFavoriteStar(this, '${resolved.category}', '${resolved.symbol}')"
+      class="asset-star-btn inline-flex items-center justify-center w-6 h-6 flex-shrink-0 ${isFav ? 'text-[#d97f12]' : 'text-outline/40'} hover:opacity-70 transition-opacity">
+      <span class="material-symbols-outlined text-base" style="font-variation-settings:'FILL' ${isFav ? 1 : 0}">star</span>
+    </button>` : '';
+  return `<span class="inline-flex items-center gap-1">
+    <span class="${nameClass} cursor-pointer hover:underline decoration-dotted underline-offset-2" onclick="event.stopPropagation(); onAssetNameClick('${safeTicker}', '${safeDisplay}')">${safeName}</span>
+    ${star}
+  </span>`;
 }
 
 // ── Boot ─────────────────────────────────────────────────────

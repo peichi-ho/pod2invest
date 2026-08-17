@@ -25,4 +25,7 @@ urlpatterns = [
     path("leiden-cluster/",               views.leiden_cluster_page),
     path("leiden-cluster-data/",          views.leiden_cluster_api),
     path("name-clusters/",                views.name_clusters_api),
+    path("basket/",                       views.basket_page),
+    path("basket-data/",                  views.basket_api),
+    path("basket-purposes/",              views.basket_purposes_api),
 ]

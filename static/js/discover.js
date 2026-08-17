@@ -217,7 +217,7 @@ function toggleSignalDetail(chipBtn, asset, week, podcaster, event) {
         <p class="text-sm font-bold text-tertiary-container font-['Epilogue'] leading-snug mb-2">${r.thesis || ''}</p>
         <div class="text-[11px] text-outline mb-0.5 truncate" title="${episodeName}">${episodeName}</div>
         ${acc ? `<div class="text-[11px] font-bold text-secondary mt-1">⚡ ${acc.pct}% 準確率</div>` : ''}
-        <button onclick="openDeepDive(${r.summary_id})" class="mt-3 w-full py-2 bg-on-primary-container text-white rounded-full font-label text-[11px] font-bold uppercase tracking-widest">Read Thesis</button>
+        <button onclick="openDeepDive(${r.summary_id}, false, ${r.id})" class="mt-3 w-full py-2 bg-on-primary-container text-white rounded-full font-label text-[11px] font-bold uppercase tracking-widest">Read Thesis</button>
       </div>`;
   }).join('') || '<p class="text-outline text-xs py-2">此 Podcaster 無驗證句</p>';
   detail.classList.remove('hidden');
@@ -282,7 +282,7 @@ function renderSignalCards(records) {
     const week = toWeekMon(r.start_time);
     if (!weekMap[week]) weekMap[week] = {};
     const asset = r.asset || '';
-    if (!weekMap[week][asset]) weekMap[week][asset] = { podcasters: {}, dir: r.direction };
+    if (!weekMap[week][asset]) weekMap[week][asset] = { podcasters: {}, dir: r.direction, ticker: r.ticker };
     const p = r.podcaster || '未知';
     if (!weekMap[week][asset].podcasters[p]) weekMap[week][asset].podcasters[p] = 0;
     weekMap[week][asset].podcasters[p]++;
@@ -346,20 +346,20 @@ function renderSignalCards(records) {
     const thesisHtml = recs.map(r => {
       const cfg = resultCfg[r.result] || resultCfg.pending;
       const ep = (r.source_filename || '').replace(/\.srt$/i, '');
-      return `<div class="bg-surface-container-lowest rounded-xl border border-outline-variant/20 p-3 mt-2">
+      return `<div class="bg-surface-container-lowest rounded-md border border-outline-variant/20 p-3 mt-2">
         <div class="flex justify-between items-center mb-1.5">
           <span class="text-[10px] font-bold px-2 py-0.5 rounded-full" style="background:${cfg.bg};color:${cfg.color}">${cfg.label}</span>
         </div>
         <p class="text-sm font-bold text-tertiary-container font-['Epilogue'] leading-snug mb-1.5">${r.thesis || ''}</p>
         <div class="text-[11px] text-outline truncate mb-2" title="${ep}">${ep}</div>
-        <button onclick="openDeepDive(${r.summary_id})" class="w-full py-1.5 bg-on-primary-container text-white rounded-full font-label text-[11px] font-bold uppercase tracking-widest">Read Thesis</button>
+        <button onclick="openDeepDive(${r.summary_id}, false, ${r.id})" class="w-full py-1.5 bg-on-primary-container text-white rounded-full font-label text-[11px] font-bold uppercase tracking-widest">Read Thesis</button>
       </div>`;
     }).join('');
     return `
       <div class="bg-white rounded-2xl overflow-hidden" style="border-left:3px solid #c1c8c9;border-top:0.5px solid #e5e3d9;border-right:0.5px solid #e5e3d9;border-bottom:0.5px solid #e5e3d9;border-radius:0 1rem 1rem 0;">
         <div class="p-4">
           <div class="flex justify-between items-start mb-2">
-            <div class="font-['Epilogue'] font-bold text-[17px] text-on-surface leading-tight">${asset}</div>
+            <div class="font-['Epilogue'] font-bold text-[17px] text-on-surface leading-tight">${renderAssetNameStar(data.ticker, asset)}</div>
             <span class="text-[11px] px-2.5 py-1 rounded-full bg-surface-container text-outline font-semibold">單一來源</span>
           </div>
           <div class="flex items-center gap-2 mb-3">
@@ -397,7 +397,7 @@ function renderSignalCards(records) {
       <div class="bg-white rounded-2xl overflow-hidden" style="border-left:3px solid ${borderColor};border-top:0.5px solid #e5e3d9;border-right:0.5px solid #e5e3d9;border-bottom:0.5px solid #e5e3d9;border-radius:0 1rem 1rem 0;">
         <div class="p-4">
           <div class="flex justify-between items-start mb-2">
-            <div class="font-['Epilogue'] font-bold text-[17px] text-on-surface leading-tight">${asset}</div>
+            <div class="font-['Epilogue'] font-bold text-[17px] text-on-surface leading-tight">${renderAssetNameStar(data.ticker, asset)}</div>
             <span class="text-[11px] px-2.5 py-1 rounded-full ${badgeClass}">${badgeLabel}（${count}人）</span>
           </div>
           <div class="flex flex-wrap gap-1.5 mb-3">
@@ -454,6 +454,7 @@ async function loadWeeklySignals() {
     if (!res.ok) throw new Error('network');
     const records = await res.json();
     await _ensureAccuracyCache();
+    await _ensureFavoritesCache();
     _signalData = records;
     renderSignalCards(records);
   } catch (e) {

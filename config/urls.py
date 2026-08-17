@@ -69,6 +69,7 @@ urlpatterns = [
     path("api/knowledge-graph/", include("apps.knowledge_graph.urls")),
     path("api/calculator/", include("apps.calculator.urls")),
     path("api/accounts/", include("apps.accounts.urls")),
+    path("api/assets/", include("apps.assets.api.urls")),
     path('onboarding/', onboarding_view, name='onboarding'),
     path('', frontend_index),
 ]

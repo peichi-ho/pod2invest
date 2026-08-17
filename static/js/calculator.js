@@ -1066,11 +1066,14 @@ async function _fetchAndRenderChart(ticker, period) {
 async function fetchChartForPeriod(ticker) { await _fetchAndRenderChart(ticker, stockPeriod); }
 async function fetchChartForDates(ticker)  { await _fetchAndRenderChart(ticker, stockPeriod); }
 
-function renderStockChart(data) {
-  const svg    = document.getElementById('stock-svg');
+// ids 可選：讓其他頁面（如 assets.js 的標的詳情頁）重用同一份渲染邏輯，
+// 只要傳自己的 DOM id 對照表就好，不用複製整份函式。不傳就用預設值，
+// calculator 頁面本身的呼叫方式完全不用改。
+function renderStockChart(data, ids = {}) {
+  const svg    = document.getElementById(ids.svg || 'stock-svg');
   svg.innerHTML = '';
   svg.classList.remove('hidden');
-  document.getElementById('stock-chart-placeholder').classList.add('hidden');
+  document.getElementById(ids.placeholder || 'stock-chart-placeholder').classList.add('hidden');
   const prices = data.data;
   if (!prices.length) return;
 
@@ -1122,6 +1125,97 @@ function renderStockChart(data) {
     svg.appendChild(xt);
   }
 
+  // ── Crosshair + price tooltip：滑鼠/手指移動時，貼齊最近的資料點畫十字線 + 提示框 ──
+  const chGroup = document.createElementNS(ns, 'g');
+  chGroup.style.display = 'none';
+  chGroup.style.pointerEvents = 'none';
+
+  const hLine = document.createElementNS(ns, 'line');
+  hLine.setAttribute('x1', padL); hLine.setAttribute('x2', W - padR);
+  hLine.setAttribute('stroke', '#717879'); hLine.setAttribute('stroke-width', '1');
+  hLine.setAttribute('stroke-dasharray', '4,3');
+  chGroup.appendChild(hLine);
+
+  const vLine = document.createElementNS(ns, 'line');
+  vLine.setAttribute('y1', padT); vLine.setAttribute('y2', H - padB);
+  vLine.setAttribute('stroke', '#717879'); vLine.setAttribute('stroke-width', '1');
+  vLine.setAttribute('stroke-dasharray', '4,3');
+  chGroup.appendChild(vLine);
+
+  const chDot = document.createElementNS(ns, 'circle');
+  chDot.setAttribute('r', '4');
+  chDot.setAttribute('fill', lineColor);
+  chDot.setAttribute('stroke', '#fff');
+  chDot.setAttribute('stroke-width', '1.5');
+  chGroup.appendChild(chDot);
+
+  const ttBg = document.createElementNS(ns, 'rect');
+  ttBg.setAttribute('rx', '6');
+  ttBg.setAttribute('fill', '#113236');
+  chGroup.appendChild(ttBg);
+
+  const ttDate = document.createElementNS(ns, 'text');
+  ttDate.setAttribute('fill', '#ffffff'); ttDate.setAttribute('font-family', 'Manrope');
+  ttDate.setAttribute('font-size', '11'); ttDate.setAttribute('font-weight', '600');
+  chGroup.appendChild(ttDate);
+
+  const ttPrice = document.createElementNS(ns, 'text');
+  ttPrice.setAttribute('fill', '#ffffff'); ttPrice.setAttribute('font-family', 'Epilogue');
+  ttPrice.setAttribute('font-size', '13'); ttPrice.setAttribute('font-weight', '700');
+  chGroup.appendChild(ttPrice);
+
+  svg.appendChild(chGroup);
+
+  function moveCrosshairTo(clientX) {
+    // 用 SVG 自己的座標轉換 API，才能正確處理 preserveAspectRatio 縮放/置中造成的落差，
+    // 不能單純用畫面寬度去除以 viewBox 寬度換算。
+    const ctm = svg.getScreenCTM();
+    if (!ctm) return;
+    const pt = svg.createSVGPoint();
+    pt.x = clientX;
+    const svgX = pt.matrixTransform(ctm.inverse()).x;
+
+    let idx = Math.round(((svgX - padL) / (W - padL - padR)) * (n - 1));
+    idx = Math.max(0, Math.min(n - 1, idx));
+
+    const px = toX(idx), py = toY(prices[idx].close);
+    hLine.setAttribute('y1', py); hLine.setAttribute('y2', py);
+    vLine.setAttribute('x1', px); vLine.setAttribute('x2', px);
+    chDot.setAttribute('cx', px); chDot.setAttribute('cy', py);
+
+    ttDate.textContent  = prices[idx].date;
+    ttPrice.textContent = 'NT$' + prices[idx].close.toFixed(2);
+    ttDate.setAttribute('x', 0); ttDate.setAttribute('y', 16);
+    ttPrice.setAttribute('x', 0); ttPrice.setAttribute('y', 34);
+    const boxW = Math.max(ttDate.getBBox().width, ttPrice.getBBox().width) + 20;
+    const boxH = 42;
+    let boxX = px + 12;
+    if (boxX + boxW > W - padR) boxX = px - boxW - 12; // 靠右邊界時翻到左邊，避免被裁掉
+    boxX = Math.max(padL, boxX);
+    const boxY = Math.max(padT, Math.min(py - boxH / 2, H - padB - boxH));
+
+    ttBg.setAttribute('x', boxX); ttBg.setAttribute('y', boxY);
+    ttBg.setAttribute('width', boxW); ttBg.setAttribute('height', boxH);
+    ttDate.setAttribute('x', boxX + 10); ttDate.setAttribute('y', boxY + 16);
+    ttPrice.setAttribute('x', boxX + 10); ttPrice.setAttribute('y', boxY + 34);
+
+    chGroup.style.display = '';
+  }
+
+  const hitOverlay = document.createElementNS(ns, 'rect');
+  hitOverlay.setAttribute('x', 0); hitOverlay.setAttribute('y', 0);
+  hitOverlay.setAttribute('width', W); hitOverlay.setAttribute('height', H);
+  hitOverlay.setAttribute('fill', 'transparent');
+  hitOverlay.style.cursor = 'crosshair';
+  hitOverlay.addEventListener('mousemove', e => moveCrosshairTo(e.clientX));
+  hitOverlay.addEventListener('mouseleave', () => { chGroup.style.display = 'none'; });
+  hitOverlay.addEventListener('touchmove', e => {
+    if (e.touches[0]) moveCrosshairTo(e.touches[0].clientX);
+    e.preventDefault();
+  }, { passive: false });
+  hitOverlay.addEventListener('touchend', () => { chGroup.style.display = 'none'; });
+  svg.appendChild(hitOverlay);
+
   const lastClose = prices[n - 1].close;
   const change    = ((lastClose - prices[0].close) / prices[0].close * 100).toFixed(2);
   const annualizedReturn = (stockPeriod === '3mo'
@@ -1132,23 +1226,26 @@ function renderStockChart(data) {
     ? (Math.pow(1 + parseFloat(change) / 100, 0.5) - 1) * 100
     : parseFloat(change)).toFixed(1);
 
-  document.getElementById('stock-name').textContent          = data.name;
-  document.getElementById('stock-last-price').textContent    = 'NT$' + lastClose.toFixed(1);
-  document.getElementById('stock-chart-subtitle').textContent = data.name;
-  const changeEl = document.getElementById('stock-change');
+  document.getElementById(ids.name || 'stock-name').textContent          = data.name;
+  document.getElementById(ids.lastPrice || 'stock-last-price').textContent    = 'NT$' + lastClose.toFixed(1);
+  document.getElementById(ids.subtitle || 'stock-chart-subtitle').textContent = data.name;
+  // 台股慣例是漲＝紅、跌＝綠，跟美股配色相反，跟 ASSETS 頁面排名列表用同一組顏色
+  // （見 static/js/assets.js 的 _assetRowHtml）。
+  const changeEl = document.getElementById(ids.change || 'stock-change');
   changeEl.textContent = (change >= 0 ? '+' : '') + change + '%';
-  changeEl.className   = `font-['Epilogue'] font-bold text-lg ${isUp ? 'text-[#286671]' : 'text-[#ba1a1a]'}`;
-  const histEl = document.getElementById('stock-hist-return');
+  changeEl.className   = `font-['Epilogue'] font-bold text-lg ${isUp ? 'text-[#ba1a1a]' : 'text-[#1e8e3e]'}`;
+  const histEl = document.getElementById(ids.histReturn || 'stock-hist-return');
   histEl.textContent = (annualizedReturn >= 0 ? '+' : '') + annualizedReturn + '%';
-  histEl.className   = `font-['Epilogue'] font-bold text-lg ${annualizedReturn >= 0 ? 'text-[#286671]' : 'text-[#ba1a1a]'}`;
-  document.getElementById('stock-info').classList.remove('hidden');
-  document.getElementById('stock-data-asof').textContent = '資料更新至 ' + prices[n - 1].date;
+  histEl.className   = `font-['Epilogue'] font-bold text-lg ${annualizedReturn >= 0 ? 'text-[#ba1a1a]' : 'text-[#1e8e3e]'}`;
+  document.getElementById(ids.info || 'stock-info').classList.remove('hidden');
+  document.getElementById(ids.dataAsof || 'stock-data-asof').textContent = '資料更新至 ' + prices[n - 1].date;
 }
 
 // ── Stock news ────────────────────────────────────────────────
-async function fetchStockNews(ticker) {
-  const section = document.getElementById('stock-news-section');
-  const list    = document.getElementById('stock-news-list');
+// ids 可選，同 renderStockChart() 的做法。
+async function fetchStockNews(ticker, ids = {}) {
+  const section = document.getElementById(ids.section || 'stock-news-section');
+  const list    = document.getElementById(ids.list || 'stock-news-list');
   section.classList.add('hidden');
   list.innerHTML = '';
   _newsCache = [];

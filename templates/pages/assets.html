@@ -1,0 +1,106 @@
+<!-- ═══════════════════════════════════════════════ PAGE: ASSETS ═══ -->
+<div id="page-assets" class="page pt-24 px-6 max-w-5xl mx-auto pb-8">
+
+  <!-- ── 排名列表 ─────────────────────────────────────────────── -->
+  <div id="assets-list-view">
+    <section class="mb-8">
+      <div class="flex items-start justify-between gap-4">
+        <div>
+          <h2 class="font-['Epilogue'] text-5xl font-bold tracking-tight text-tertiary-container mb-2">Assets</h2>
+          <p class="text-secondary font-medium">瀏覽台股與台股ETF，依成交量、成交價、漲跌幅排名</p>
+        </div>
+        <div class="flex-shrink-0 flex gap-1 bg-surface-container-high rounded-full p-1">
+          <button class="px-4 py-2 rounded-full font-label text-xs font-bold transition-all bg-tertiary-container text-white whitespace-nowrap">查看個股資訊</button>
+          <button onclick="window.location.href='/api/knowledge-graph/basket/'" class="px-4 py-2 rounded-full font-label text-xs font-bold transition-all text-secondary hover:bg-surface-container-highest whitespace-nowrap">探索相關標的</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 查詢欄位：在目前分類的完整清單裡找代碼/名稱（不是只在畫面上的前50筆裡找），
+         結果顯示在輸入框正下方的下拉建議清單，不會動到下面的主排名列表 -->
+    <div class="relative mb-5">
+      <span class="material-symbols-outlined absolute left-4 top-1/2 -translate-y-1/2 text-outline/60 text-xl pointer-events-none">search</span>
+      <input id="assets-search" type="text" placeholder="搜尋代碼或名稱，如 2330 / 台積電"
+        oninput="onAssetSearchInput()" onkeydown="onAssetSearchKeydown(event)"
+        class="w-full pl-11 pr-4 py-3 bg-surface-container-lowest border-none rounded-full focus:ring-2 focus:ring-secondary font-body text-sm text-on-surface-variant"/>
+      <div id="assets-search-dropdown" class="hidden absolute left-0 right-0 top-full mt-2 bg-surface-container-lowest rounded-2xl shadow-xl z-50 border border-outline-variant/20 max-h-96 overflow-y-auto"></div>
+    </div>
+
+    <!-- 分類 tab -->
+    <div class="flex gap-2 mb-4" id="assets-category-tabs"></div>
+
+    <!-- 我的最愛：固定顯示，沒有收藏時 assets.js 會放空狀態提示，不整個隱藏 -->
+    <section id="assets-favorites-section" class="mb-6">
+      <div class="flex items-center gap-2 mb-3">
+        <span class="material-symbols-outlined text-base text-[#d97f12]" style="font-variation-settings:'FILL' 1">star</span>
+        <h3 class="font-['Epilogue'] text-lg font-bold text-tertiary-container">我的最愛</h3>
+      </div>
+      <div id="assets-favorites-list" class="space-y-2 mb-2">
+        <p class="text-outline text-sm py-4 text-center">載入中...</p>
+      </div>
+    </section>
+
+    <!-- 排序按鈕 -->
+    <div class="flex flex-wrap items-center gap-2 mb-2" id="assets-sort-tabs"></div>
+    <p id="assets-as-of-date" class="text-xs text-outline mb-4"></p>
+
+    <div id="assets-list" class="space-y-2">
+      <p class="text-outline text-sm py-8 text-center">載入中...</p>
+    </div>
+  </div>
+
+  <!-- ── 標的詳情 ─────────────────────────────────────────────── -->
+  <div id="assets-detail-view" class="hidden">
+    <button onclick="closeAssetDetail()" class="flex items-center gap-1 text-secondary font-label text-sm font-semibold mb-6 hover:opacity-70 transition-opacity">
+      <span class="material-symbols-outlined text-base">arrow_back_ios</span>返回列表
+    </button>
+
+    <div class="flex items-start justify-between gap-3 mb-1">
+      <div class="flex items-baseline gap-3">
+        <h3 id="asset-detail-name" class="font-['Epilogue'] text-3xl font-bold text-tertiary-container"></h3>
+        <span id="asset-detail-symbol" class="text-outline font-semibold"></span>
+      </div>
+      <button type="button" id="asset-detail-star-btn"
+        class="asset-star-btn inline-flex items-center justify-center w-10 h-10 flex-shrink-0 rounded-full hover:bg-surface-container transition-colors text-outline/40">
+        <span class="material-symbols-outlined text-2xl" style="font-variation-settings:'FILL' 0">star</span>
+      </button>
+    </div>
+
+    <!-- 基本資料 -->
+    <div id="asset-basic-info" class="hidden grid grid-cols-3 gap-3 my-5"></div>
+    <p id="asset-basic-info-status" class="text-xs text-outline mb-2"></p>
+
+    <!-- 股價走勢圖 + 相關新聞（重用 calculator.js 的 renderStockChart/fetchStockNews，帶 asset- 前綴 id） -->
+    <div class="bg-surface-container-lowest rounded-lg p-8 flex flex-col mt-2" style="min-height:420px;">
+      <div class="flex flex-wrap items-start justify-between gap-4 mb-8">
+        <div>
+          <h3 class="font-['Epilogue'] text-xl font-bold text-tertiary-container">股價走勢</h3>
+          <p id="asset-stock-chart-subtitle" class="text-outline font-medium">載入中...</p>
+        </div>
+        <div class="flex gap-1 bg-surface-container-high rounded-full p-1">
+          <button onclick="setAssetStockPeriod('1mo')" data-period="1mo" class="asset-stock-period-btn px-3 py-1.5 rounded-full font-label text-xs font-bold transition-all text-secondary">1月</button>
+          <button onclick="setAssetStockPeriod('3mo')" data-period="3mo" class="asset-stock-period-btn px-3 py-1.5 rounded-full font-label text-xs font-bold transition-all text-secondary">3月</button>
+          <button onclick="setAssetStockPeriod('6mo')" data-period="6mo" class="asset-stock-period-btn px-3 py-1.5 rounded-full font-label text-xs font-bold transition-all text-secondary">6月</button>
+          <button onclick="setAssetStockPeriod('1y')"  data-period="1y"  class="asset-stock-period-btn px-3 py-1.5 rounded-full font-label text-xs font-bold transition-all bg-tertiary-container text-white">1年</button>
+        </div>
+      </div>
+      <div class="flex-grow relative flex items-center justify-center" style="min-height:260px;">
+        <p id="asset-stock-chart-placeholder" class="text-outline text-sm">載入中...</p>
+        <svg id="asset-stock-svg" class="w-full h-full hidden" viewBox="0 0 800 380" preserveAspectRatio="xMidYMid meet"></svg>
+      </div>
+      <div id="asset-stock-info" class="hidden mt-5 pt-4 border-t border-outline-variant/20 flex gap-8">
+        <div><div class="text-xs text-outline font-bold uppercase tracking-widest mb-1">名稱</div><div id="asset-stock-name" class="font-['Epilogue'] font-bold text-tertiary-container text-lg"></div></div>
+        <div><div class="text-xs text-outline font-bold uppercase tracking-widest mb-1">最新收盤</div><div id="asset-stock-last-price" class="font-['Epilogue'] font-bold text-tertiary-container text-lg"></div></div>
+        <div><div class="text-xs text-outline font-bold uppercase tracking-widest mb-1">區間漲跌</div><div id="asset-stock-change" class="font-['Epilogue'] font-bold text-lg"></div></div>
+        <div><div class="text-xs text-outline font-bold uppercase tracking-widest mb-1">歷史年化報酬</div><div id="asset-stock-hist-return" class="font-['Epilogue'] font-bold text-lg"></div></div>
+      </div>
+      <p id="asset-stock-data-asof" class="mt-2 text-xs text-outline"></p>
+
+      <div id="asset-stock-news-section" class="hidden mt-5 pt-4 border-t border-outline-variant/20">
+        <div class="text-xs text-outline font-bold uppercase tracking-widest mb-3">相關新聞</div>
+        <div id="asset-stock-news-list" class="space-y-2"></div>
+      </div>
+    </div>
+  </div>
+
+</div>

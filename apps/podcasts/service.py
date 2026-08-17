@@ -364,6 +364,9 @@ def insert_to_db(
       - PodcastEpisode → 單集 metadata（含官方上傳時間）
       - PodcastTranscript → 逐字稿（重跑校對時更新 srt_content）
     """
+    from django.db import close_old_connections
+    close_old_connections()
+
     from apps.podcasts.models import Podcast, PodcastEpisode, PodcastTranscript
 
     with open(srt_path, "r", encoding="utf-8") as f:
