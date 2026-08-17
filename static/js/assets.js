@@ -375,6 +375,11 @@ function openAssetDetail(indexOrAsset) {
 function closeAssetDetail() {
   document.getElementById('assets-detail-view').classList.add('hidden');
   document.getElementById('assets-list-view').classList.remove('hidden');
+  // 如果是從別的頁面（例如首頁搜尋結果）跳進來看這支標的，_backOverride 會被設成原本
+  // 那個頁面——這裡要直接跳回去，不能只收合成本頁清單，不然使用者會卡在 Assets 排行榜，
+  // 回不去剛剛的搜尋結果。正常從 Assets 頁面自己點進詳情頁的情況不會設 _backOverride，
+  // 行為維持原樣（就只是收合成清單）。
+  if (_backOverride) goBack();
 }
 
 function setAssetStockPeriod(period) {
