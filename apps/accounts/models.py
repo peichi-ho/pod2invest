@@ -15,9 +15,7 @@ class UserProfile(models.Model):
     class Meta:
         app_label = 'accounts'
         db_table = 'user_profile'
-        # 原本這裡是 managed=False（假設表已經存在於外部資料庫）。但這個 accountsdb
-        # 是全新建立的專案，沒有任何外部腳本會建這張表，所以改成讓 Django migration
-        # 自己管理建表，否則 onboarding 偏好設定會因為表不存在而一直 500。
+        managed = False
 
 
 class FavoriteAsset(models.Model):

@@ -242,10 +242,13 @@ function _renderScenarioSourceUI() {
 
   if (!_scenarioNodes || !_scenarioNodes.length) {
     panel.classList.add('hidden');
-    empty.classList.remove('hidden');
-    empty.textContent = _scenarioLoading
-      ? '正在查詢 Podcast 分析中…'
-      : '此股票尚無 Podcast 分析紀錄，樂觀/保守情境為系統自動推算，你也可以自行輸入。';
+    if (_scenarioLoading) {
+      empty.classList.remove('hidden');
+      empty.textContent = '正在查詢 Podcast 分析中…';
+    } else {
+      empty.classList.add('hidden');
+      empty.textContent = '';
+    }
     if (hintDefault) hintDefault.classList.remove('hidden');
     if (hintPodcast) hintPodcast.classList.add('hidden');
     if (hintLabel) hintLabel.textContent = '依基準情境自動推算，可自行修改';

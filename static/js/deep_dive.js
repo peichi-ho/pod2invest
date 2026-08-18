@@ -386,9 +386,9 @@ async function loadDeepDive(summaryId) {
 
     document.getElementById('dd-ticker-section').classList.add('hidden');
 
-    if (_discoverCache.length) renderRelated(_discoverCache, summaryId);
+    if (_discoverCache.length) renderRelated(_discoverCache, summaryId, s.tags);
     else fetch('/api/summaries/?limit=30').then(r => r.json())
-      .then(all => { _discoverCache = dedupeByEpisode(all); renderRelated(_discoverCache, summaryId); })
+      .then(all => { _discoverCache = dedupeByEpisode(all); renderRelated(_discoverCache, summaryId, s.tags); })
       .catch(() => {});
 
   } catch (e) {
@@ -397,9 +397,23 @@ async function loadDeepDive(summaryId) {
 }
 
 // ── Related ───────────────────────────────────────────────────
-function renderRelated(list, currentId) {
+// 依「領域標籤」重疊數排序，不是單純取最新幾篇——重疊越多代表越相關（跟 discover.js
+// 依偏好排序用的是同一套 tags 詞彙，如台股/總體經濟/個股/ETF 等）。完全沒有重疊的
+// 集數會被排到最後，等於自動退回「最新優先」當保底，不會因為篩太嚴格而開天窗。
+function _tagOverlapCount(tagsA, tagsB) {
+  if (!tagsA || !tagsB || !tagsA.length || !tagsB.length) return 0;
+  const setB = new Set(tagsB);
+  return tagsA.reduce((n, t) => n + (setB.has(t) ? 1 : 0), 0);
+}
+
+function renderRelated(list, currentId, currentTags) {
   const el       = document.getElementById('dd-related-grid');
-  const filtered = list.filter(s => s.id !== currentId).slice(0, 3);
+  const filtered = list
+    .filter(s => s.id !== currentId)
+    .map(s => ({ s, overlap: _tagOverlapCount(currentTags, s.tags) }))
+    .sort((a, b) => b.overlap - a.overlap)
+    .slice(0, 3)
+    .map(x => x.s);
   if (!filtered.length) { el.innerHTML = '<p class="text-outline text-sm col-span-3">暫無資料</p>'; return; }
   el.innerHTML = filtered.map(s => {
     const st    = cardStyle(s.podcaster || s.source_filename);
@@ -407,9 +421,7 @@ function renderRelated(list, currentId) {
     return `
       <div onclick="openDeepDive(${s.id})" class="bg-surface-container-lowest rounded-lg overflow-hidden group hover:shadow-xl transition-shadow border border-outline-variant/10 cursor-pointer">
         <div class="h-48 overflow-hidden">
-          <div class="w-full h-full flex flex-col items-center justify-center gap-2" style="background:${st.bg}">
-            <span class="material-symbols-outlined text-white/70 text-3xl" style="font-variation-settings:'FILL' 1">${st.icon}</span>
-          </div>
+          ${podcastAvatar(s.podcaster, st.bg, st.icon)}
         </div>
         <div class="p-6">
           <span class="font-label text-[10px] font-bold text-secondary uppercase tracking-widest mb-2 block">${s.podcaster || ''}</span>
