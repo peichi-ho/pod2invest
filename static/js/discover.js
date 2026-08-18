@@ -630,6 +630,8 @@ function _closeSearch() {
 // （見 assets.js 的 closeAssetDetail）跳回本頁時，剛剛的搜尋結果還在，不會憑空消失。
 function _goToAssetFromSearch(symbol, category, name) {
   _backOverride = 'discover';
+  _backOverrideOwner = 'assets';
+  _backOverrideArmed = false;
   showPage('assets');
   openAssetDetailBySymbol(symbol, category, name);
 }

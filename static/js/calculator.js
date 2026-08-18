@@ -309,7 +309,7 @@ function _renderScenarioSourceUI() {
       }
       html += _renderTopicExcerpt(_scenarioSource.topic_summary);
       if (_scenarioSource.summary_id != null) {
-        html += `<div class="mt-2"><button type="button" onclick="_backOverride='calculator'; openDeepDive(${_scenarioSource.summary_id})" class="text-secondary font-bold text-xs hover:underline">查看完整摘要 →</button></div>`;
+        html += `<div class="mt-2"><button type="button" onclick="_backOverride='calculator'; _backOverrideOwner='deep-dive'; _backOverrideArmed=false; openDeepDive(${_scenarioSource.summary_id})" class="text-secondary font-bold text-xs hover:underline">查看完整摘要 →</button></div>`;
       }
     }
     detail.innerHTML = html;
