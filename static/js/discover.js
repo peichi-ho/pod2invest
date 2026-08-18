@@ -162,7 +162,7 @@ async function loadDiscoverData() {
       : _discoverCache;
 
     renderContinueListening(sorted[0] || null);
-    renderRecommended(sorted.slice(0, 8));
+    renderRecommended(sorted.slice(0, 10));
   } catch(e) { console.error('loadDiscoverData failed', e); }
 }
 
