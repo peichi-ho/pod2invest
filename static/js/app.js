@@ -3,8 +3,13 @@ let _discoverCache = [];
 let _pageHistory = [];
 let _accuracyCache = null;
 let _podcastImages = {};  // show_name → image_url
-let _backOverride = null; // 下一次 goBack() 要去的頁面，用一次就清掉（例如「查看完整摘要」這種
-                           // 跳到 deep-dive 但內容跟共用頁面堆疊裡記的不一樣的入口，避免返回鍵跳錯集數）
+let _backOverride = null;       // 下一次 goBack() 要去的頁面，用一次就清掉（例如「查看完整摘要」這種
+                                 // 跳到 deep-dive 但內容跟共用頁面堆疊裡記的不一樣的入口，避免返回鍵跳錯集數）
+let _backOverrideOwner = null;  // _backOverride 綁定的頁面（設定當下要跳去顯示的目的頁）
+let _backOverrideArmed = false; // 是否已經真的顯示過 owner 頁一次。使用者如果沒有在 owner 頁真的按
+                                 // 返回、而是改用底部導覽列等其他方式離開，_backOverride 會一直卡著沒
+                                 // 被消耗掉，之後在任何頁面按返回都會被劫持跳去過期的目標——showPage()
+                                 // 偵測到「已經 armed 過、卻又被呼叫」時會把過期的 override 清掉，見下方。
 
 async function loadPodcastImages() {
   try {
@@ -57,6 +62,8 @@ function goBack() {
   if (_backOverride) {
     const target = _backOverride;
     _backOverride = null;
+    _backOverrideOwner = null;
+    _backOverrideArmed = false;
     // showPage() 進來時本來就會把同一個頁面名稱再推一次，這裡順便清掉避免多按一次沒反應
     if (_pageHistory.length && _pageHistory[_pageHistory.length - 1] === target) {
       _pageHistory.pop();
@@ -71,12 +78,26 @@ function goBack() {
 }
 
 function showPage(page) {
+  // _backOverride 已經在 owner 頁顯示過一次（armed），卻又被呼叫到 showPage()——代表使用者
+  // 不是按返回鍵離開 owner 頁的（例如改點底部導覽列），override 沒被正常消耗掉、已經過期，
+  // 清掉避免它卡住污染到接下來任何一頁的返回鍵。真正設定 override 當下呼叫的那次 showPage()
+  // 因為 armed 還是 false，不會被這裡誤清掉。
+  if (_backOverride && _backOverrideArmed) {
+    _backOverride = null;
+    _backOverrideOwner = null;
+    _backOverrideArmed = false;
+  }
+
   const currentActive = document.querySelector('.page.active');
   if (currentActive) {
     const currentId = currentActive.id.replace('page-', '');
     if (currentId !== page) _pageHistory.push(currentId);
   }
   _renderPage(page);
+
+  if (_backOverride && page === _backOverrideOwner) {
+    _backOverrideArmed = true;
+  }
 }
 
 function _renderPage(page) {
