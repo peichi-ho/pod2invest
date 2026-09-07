@@ -894,7 +894,13 @@ class StockChartAPIView(APIView):
                 return Response({'error': f'找不到「{query}」的資料，請確認代號或名稱是否正確'}, status=404)
 
             data = [
-                {'date': date.strftime('%Y-%m-%d'), 'close': round(float(row['Close']), 2)}
+                {
+                    'date': date.strftime('%Y-%m-%d'),
+                    'open': round(float(row['Open']), 2),
+                    'high': round(float(row['High']), 2),
+                    'low': round(float(row['Low']), 2),
+                    'close': round(float(row['Close']), 2),
+                }
                 for date, row in hist.iterrows()
                 if row['Close'] == row['Close']  # 排除 NaN（NaN != NaN），yfinance 最新一日資料常尚未補齊
             ]

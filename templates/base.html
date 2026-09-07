@@ -65,12 +65,13 @@
 {% block extra_head %}{% endblock %}
 </head>
 <body class="bg-surface text-on-surface pb-28">
+<script>window.IS_AUTHENTICATED = {{ request.user.is_authenticated|yesno:"true,false" }};</script>
 
 <!-- Top Navigation -->
 <header class="fixed top-0 w-full flex justify-between items-center px-6 h-16 bg-[#fcf9f0]/80 backdrop-blur-xl z-50 shadow-[0px_10px_30px_rgba(28,28,22,0.06)]">
   <div class="w-10"></div>
   <h1 class="font-['Epilogue'] font-bold tracking-[-0.02em] text-2xl text-[#113236] absolute left-1/2 -translate-x-1/2">Pod2Invest</h1>
-  <button onclick="showPage('profile')" class="w-10 h-10 rounded-full overflow-hidden bg-surface-container-highest hover:opacity-80 transition-opacity">
+  <button onclick="openProfilePage()" class="w-10 h-10 rounded-full overflow-hidden bg-surface-container-highest hover:opacity-80 transition-opacity">
     <div id="header-avatar-inner" class="w-full h-full flex items-center justify-center" style="background:#e5e3d9"><span class="material-symbols-outlined text-white/70 text-2xl" style="font-variation-settings:'FILL' 1">person</span></div>
   </button>
 </header>
@@ -81,6 +82,9 @@
   // 讓底部導覽列在「非 SPA 首頁」的獨立頁面（例如 basket.html）上點擊時，
   // 不會因為 showPage()/#page-x 不存在而報錯，而是直接導回首頁。
   function navHome(page) {
+    // 底部導覽列點擊算「切分頁」而不是「往下鑽」，即使當下頁面有 SPA history 也一樣——
+    // 見 app.js 的 _renderPage()，這個旗標只會影響「即將顯示」的那一頁一次就被清掉。
+    if (typeof window !== 'undefined') window._enteredViaBottomNav = true;
     if (typeof showPage === 'function' && document.getElementById('page-' + page)) {
       showPage(page);
     } else {
@@ -90,6 +94,20 @@
 </script>
 
 {% block pages %}{% endblock %}
+
+<!-- 訪客（未登入）點開單集摘要時的登入提示，見 app.js 的 showLoginPrompt() /
+     static/js/deep_dive.js 的 openDeepDive() -->
+<div id="login-prompt-overlay" class="hidden fixed inset-0 z-[80] bg-black/40 backdrop-blur-sm flex items-center justify-center p-4" onclick="if(event.target===this) closeLoginPrompt()">
+  <div class="bg-surface w-full max-w-sm rounded-2xl shadow-2xl p-8 text-center space-y-5">
+    <span class="material-symbols-outlined text-tertiary-container" style="font-size:40px">lock</span>
+    <div class="space-y-2">
+      <h3 class="font-['Epilogue'] font-bold text-xl text-tertiary-container">登入以查看更多內容</h3>
+      <p class="text-on-surface-variant text-sm leading-relaxed">註冊或登入帳號，解鎖完整的單集深度摘要、投資觀點與個人化推薦。</p>
+    </div>
+    <button onclick="window.location.href='/login/'" class="w-full py-3.5 bg-tertiary-container text-white rounded-full font-['Epilogue'] font-bold text-sm hover:opacity-90 active:scale-[0.98] transition-all">前往登入</button>
+    <button onclick="closeLoginPrompt()" class="w-full py-1 text-secondary text-sm font-semibold hover:underline">先繼續逛逛</button>
+  </div>
+</div>
 
 <!-- News panel -->
 <div id="news-panel-overlay" class="fixed inset-0 bg-black/40 z-40 hidden" onclick="closeNewsPanel()"></div>
@@ -162,11 +180,11 @@
 
 {% block body_scripts %}
 <!-- JS modules -->
-<script src="{% static 'js/app.js' %}?v=14"></script>
-<script src="{% static 'js/discover.js' %}?v=18"></script>
+<script src="{% static 'js/app.js' %}?v=15"></script>
+<script src="{% static 'js/discover.js' %}?v=19"></script>
 <script src="{% static 'js/rankings.js' %}?v=16"></script>
 <script src="{% static 'js/deep_dive.js' %}?v=19"></script>
-<script src="{% static 'js/calculator.js' %}?v=28"></script>
+<script src="{% static 'js/calculator.js' %}?v=29"></script>
 <script src="{% static 'js/ai.js' %}?v=10"></script>
 <script src="{% static 'js/assets.js' %}?v=12"></script>
 <script src="{% static 'js/profile.js' %}?v=11"></script>

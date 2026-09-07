@@ -116,6 +116,14 @@ function _renderPage(page) {
   if (page === 'ai' && typeof onAiPageShow === 'function') onAiPageShow();
   if (page === 'assets' && typeof onAssetsPageShow === 'function') onAssetsPageShow();
   if (page === 'profile' && typeof onProfilePageShow === 'function') onProfilePageShow();
+
+  // 計算機的返回鍵：從底部導覽列直接點進來（等於在切分頁，不是從某個頁面鑽進來）
+  // 就不需要顯示，其他入口（深度剖析頁的「試算」、Profile 頁的「New Sim」）都是直接呼叫
+  // showPage('calculator')，不會經過 navHome()，所以這個旗標不會被誤設。用完立刻消耗掉，
+  // 不會影響下一次導覽。
+  const calcBackBtn = document.getElementById('calc-back-btn');
+  if (calcBackBtn) calcBackBtn.classList.toggle('hidden', page === 'calculator' && !!window._enteredViaBottomNav);
+  window._enteredViaBottomNav = false;
 }
 
 // ── Accuracy cache (shared by discover, rankings, podcaster) ──
@@ -174,6 +182,29 @@ async function _ensureFavoritesCache() {
     return _favoritesCache;
   })();
   return _favoritesLoadingPromise;
+}
+
+// ── 訪客登入提示（見 templates/base.html 的 #login-prompt-overlay）─────
+// Header 右上角頭像按鈕的入口——訪客沒有帳號，Profile 頁大部分內容都要靠
+// /api/accounts/... 這幾支 API，訪客打這些 API 一律回 401，直接放行進去只會看到
+// 卡在「載入中...」、一堆空白區塊的頁面，體驗很差。跟 openDeepDive() 用同一套
+// 登入提示，不用另外設計一套訊息。
+function openProfilePage() {
+  if (typeof window.IS_AUTHENTICATED !== 'undefined' && !window.IS_AUTHENTICATED) {
+    showLoginPrompt();
+    return;
+  }
+  showPage('profile');
+}
+
+function showLoginPrompt() {
+  const el = document.getElementById('login-prompt-overlay');
+  if (el) el.classList.remove('hidden');
+}
+
+function closeLoginPrompt() {
+  const el = document.getElementById('login-prompt-overlay');
+  if (el) el.classList.add('hidden');
 }
 
 // 極簡共用提示訊息，「尚未支援」跟收藏失敗都用這個，全專案目前沒有 toast 元件。

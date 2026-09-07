@@ -6,6 +6,13 @@ let _ddTargetBacktestId = null;
 let _ddTargetArgTerms   = null;  // 從搜尋結果點進來時帶的命中字串，見 renderDdModeContent()
 
 function openDeepDive(summaryId, autoPlay = false, targetBacktestId = null, targetArgTerms = null) {
+  // 訪客（未登入）可以自由瀏覽首頁/排行榜/搜尋，但打開單集深度摘要要先登入——
+  // openDeepDive() 是全站唯一「開啟單集」的入口，所有進入點（推薦卡片、繼續閱讀、
+  // 節目集數列表、搜尋結果…）都會經過這裡，擋這裡就等於全部擋到，不用逐一修改呼叫端。
+  if (typeof window.IS_AUTHENTICATED !== 'undefined' && !window.IS_AUTHENTICATED) {
+    showLoginPrompt();
+    return;
+  }
   currentSummaryId = summaryId;
   ddSummaryData    = {};
   ddCurrentMode    = (_userPrefs && _userPrefs.level === 'Expert') ? 'pro' : 'novice';
