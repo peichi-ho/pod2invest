@@ -203,15 +203,24 @@ class SummaryListAPIView(APIView):
         source_filename = request.query_params.get("source_filename")
         podcaster = request.query_params.get("podcaster")
         mode = request.query_params.get("mode")
+        ids = request.query_params.get("ids")
 
         qs = SummaryRecord.objects.using("summariesdb").order_by("-created_at")
+        if ids:
+            # Profile 頁「收藏單集/觀看紀錄」用：拿一批 summary_id 一次查回顯示用資料
+            # （標題/節目名稱/日期等），不用逐筆打 /api/summaries/<id>/。
+            try:
+                id_list = [int(x) for x in ids.split(",") if x.strip()]
+            except ValueError:
+                return Response([])
+            qs = qs.filter(id__in=id_list)
         if source_filename:
             qs = qs.filter(source_filename=source_filename)
         if podcaster:
             qs = qs.filter(podcaster=podcaster)
         if mode:
             qs = qs.filter(mode=mode)
-        if not source_filename and not podcaster:
+        if not source_filename and not podcaster and not ids:
             limit = int(request.query_params.get("limit", 20))
             qs = qs[:limit]
         elif request.query_params.get("limit"):

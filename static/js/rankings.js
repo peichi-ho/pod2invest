@@ -80,6 +80,7 @@ async function loadRankings() {
       fetch('/api/summaries/podcasters/?limit=50'),
       fetch(`/api/summaries/accuracy-ranking/${sectorParam}`),
       loadPodcastImages(),
+      _ensurePodcastFavoritesCache(),
     ]);
 
     const podData = podRes.ok ? await podRes.json() : [];
@@ -144,7 +145,10 @@ async function loadRankings() {
               <p class="text-xl text-on-tertiary-container mt-1">${epStr}</p>
               <p class="text-xl font-bold text-on-tertiary-container/80 mt-0.5">準確率 ${accDisp}</p>
             </div>
-            <button onclick="openRankedPodcaster(${origIdx})" class="px-4 py-1.5 bg-on-primary-container text-white rounded-full font-label text-xl font-bold uppercase tracking-widest hover:opacity-90 transition-all">More</button>
+            <div class="flex items-center gap-1.5">
+              <button onclick="openRankedPodcaster(${origIdx})" class="px-4 py-1.5 bg-on-primary-container text-white rounded-full font-label text-xl font-bold uppercase tracking-widest hover:opacity-90 transition-all">More</button>
+              ${renderPodcastFollowButton(p.podcaster, 'w-8 h-8')}
+            </div>
           </div>`;
       } else {
         return `
@@ -158,7 +162,10 @@ async function loadRankings() {
               <p class="text-xl text-outline mt-1">${epStr}</p>
               <p class="text-xl font-bold text-secondary mt-0.5">準確率 ${accDisp}</p>
             </div>
-            <button onclick="openRankedPodcaster(${origIdx})" class="px-4 py-1.5 border border-secondary text-secondary rounded-full font-label text-xl font-bold uppercase tracking-widest hover:bg-secondary hover:text-white transition-all">More</button>
+            <div class="flex items-center gap-1.5">
+              <button onclick="openRankedPodcaster(${origIdx})" class="px-4 py-1.5 border border-secondary text-secondary rounded-full font-label text-xl font-bold uppercase tracking-widest hover:bg-secondary hover:text-white transition-all">More</button>
+              ${renderPodcastFollowButton(p.podcaster, 'w-8 h-8')}
+            </div>
           </div>`;
       }
     }).join('');
@@ -185,7 +192,10 @@ async function loadRankings() {
               <p class="text-base text-outline font-medium">${epStr} · 準確率 ${accDisp}</p>
             </div>
           </div>
-          <button onclick="openRankedPodcaster(${dataIdx})" class="px-5 py-2 border border-secondary text-secondary rounded-full font-label text-base font-bold uppercase tracking-widest hover:bg-secondary hover:text-white transition-all">More</button>
+          <div class="flex items-center gap-2 flex-shrink-0">
+            <button onclick="openRankedPodcaster(${dataIdx})" class="px-5 py-2 border border-secondary text-secondary rounded-full font-label text-base font-bold uppercase tracking-widest hover:bg-secondary hover:text-white transition-all">More</button>
+            ${renderPodcastFollowButton(p.podcaster, 'w-9 h-9')}
+          </div>
         </div>`;
     }).join('') || '<p class="text-outline text-sm">暫無更多資料</p>';
 
@@ -202,6 +212,9 @@ async function showPodcaster(name, episodeCount, accuracy, bgColor, icon) {
   document.getElementById('podcaster-accuracy').textContent = accuracy;
   // 用真正的節目封面圖（有的話），沒有才退回背景色+icon——不要固定只顯示 icon。
   document.getElementById('podcaster-avatar-inner').innerHTML = podcastAvatar(name, bgColor, icon);
+  _ensurePodcastFavoritesCache().then(() => {
+    document.getElementById('podcaster-favorite-slot').innerHTML = renderPodcastFollowButton(name, 'w-9 h-9');
+  });
 
   const epList   = document.getElementById('podcaster-episodes-list');
   const viewList = document.getElementById('podcaster-views-list');

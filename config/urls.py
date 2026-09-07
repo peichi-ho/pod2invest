@@ -21,6 +21,7 @@ from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.forms import AuthenticationForm, UserCreationForm
 from django.contrib.auth.decorators import login_required
 from apps.accounts.views import onboarding_view
+from apps.accounts.models import UserProfile
 
 @login_required(login_url='/login/')
 def frontend_index(request):
@@ -46,7 +47,17 @@ def signup_view(request):
         form = UserCreationForm(request.POST)
         if form.is_valid():
             user = form.save()
+            email = (request.POST.get('email') or '').strip()
+            if email:
+                user.email = email
+                user.save()
             login(request, user)
+            # 註冊時可以選擇性附上頭像（base64 data URI），沒選就先不建立 UserProfile，
+            # 之後 onboarding_view 送出問卷時才會建立那筆——避免這裡跟 onboarding_view
+            # 各自用不同邏輯 create 出兩筆重複的 UserProfile。
+            avatar_base64 = (request.POST.get('avatar_base64') or '').strip()
+            if avatar_base64:
+                UserProfile.objects.using('accountsdb').create(user_id=user.id, avatar_base64=avatar_base64)
             return redirect('/onboarding/')
         error = list(form.errors.values())[0][0]
     return render(request, 'auth/signup.html', {'error': error})
