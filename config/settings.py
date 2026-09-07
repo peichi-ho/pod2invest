@@ -175,6 +175,10 @@ DATABASE_ROUTERS = [
 ]
 
 
+# 大頭貼用 base64 塞進一般 JSON body（沒有設定檔案伺服器），預設 2.5MB 上限對
+# ~2MB 原始圖檔轉出來的 base64 文字太緊，調高到 5MB 給一點餘裕。
+DATA_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024
+
 AUTH_PASSWORD_VALIDATORS = [
     {
         "NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"

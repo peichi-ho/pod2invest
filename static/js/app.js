@@ -115,6 +115,7 @@ function _renderPage(page) {
   document.getElementById('ai-input-bar').classList.add('hidden');
   if (page === 'ai' && typeof onAiPageShow === 'function') onAiPageShow();
   if (page === 'assets' && typeof onAssetsPageShow === 'function') onAssetsPageShow();
+  if (page === 'profile' && typeof onProfilePageShow === 'function') onProfilePageShow();
 }
 
 // ── Accuracy cache (shared by discover, rankings, podcaster) ──
@@ -279,13 +280,182 @@ function renderAssetNameStar(ticker, displayName, nameClass = '') {
   </span>`;
 }
 
+// ── Favorites（收藏單集）── Profile 頁 Saved Insights ／ Deep Dive 書籤按鈕共用
+let _episodeFavoritesCache = null;
+let _episodeFavoritesLoadingPromise = null;
+
+async function _ensureEpisodeFavoritesCache() {
+  if (_episodeFavoritesCache) return _episodeFavoritesCache;
+  if (_episodeFavoritesLoadingPromise) return _episodeFavoritesLoadingPromise;
+  _episodeFavoritesLoadingPromise = (async () => {
+    try {
+      const res = await fetch('/api/accounts/favorites/episodes/');
+      const data = res.ok ? await res.json() : { summary_ids: [] };
+      _episodeFavoritesCache = new Set(data.summary_ids || []);
+    } catch (e) {
+      _episodeFavoritesCache = new Set();
+    }
+    return _episodeFavoritesCache;
+  })();
+  return _episodeFavoritesLoadingPromise;
+}
+
+function _paintEpisodeBookmarkIcon(summaryId, isFav) {
+  document.querySelectorAll(`[data-ep-fav-id="${summaryId}"]`).forEach(el => {
+    const icon = el.querySelector('.material-symbols-outlined');
+    if (icon) icon.style.fontVariationSettings = `'FILL' ${isFav ? 1 : 0}`;
+    el.classList.toggle('text-[#d97f12]', isFav);
+    el.classList.toggle('text-outline/40', !isFav);
+  });
+}
+
+function _setEpisodeFavoriteState(summaryId, isFav) {
+  if (isFav) _episodeFavoritesCache.add(summaryId); else _episodeFavoritesCache.delete(summaryId);
+  _paintEpisodeBookmarkIcon(summaryId, isFav);
+  window.dispatchEvent(new CustomEvent('pod2invest:episode-favorite-toggled', {
+    detail: { summaryId, favorited: isFav },
+  }));
+}
+
+async function toggleEpisodeFavorite(btnEl, summaryId) {
+  await _ensureEpisodeFavoritesCache();
+  const wasFav = _episodeFavoritesCache.has(summaryId);
+  const nextFav = !wasFav;
+  _setEpisodeFavoriteState(summaryId, nextFav);
+  btnEl.disabled = true;
+  try {
+    const res = await fetch('/api/accounts/favorites/episodes/toggle/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ summary_id: summaryId }),
+    });
+    if (res.status === 401) { _setEpisodeFavoriteState(summaryId, wasFav); showToast('請先登入才能收藏'); return; }
+    if (!res.ok) { _setEpisodeFavoriteState(summaryId, wasFav); showToast('操作失敗，請稍後再試'); return; }
+    const data = await res.json();
+    if (data.favorited !== nextFav) _setEpisodeFavoriteState(summaryId, data.favorited);
+  } catch (e) {
+    _setEpisodeFavoriteState(summaryId, wasFav);
+    showToast('網路錯誤，請稍後再試');
+  } finally {
+    btnEl.disabled = false;
+  }
+}
+
+// 書籤造型收藏按鈕，deep_dive.js（單集日期旁邊）／profile.js 共用。
+function renderEpisodeBookmarkButton(summaryId, cls = 'w-8 h-8') {
+  const isFav = !!(_episodeFavoritesCache && _episodeFavoritesCache.has(summaryId));
+  return `<button type="button" data-ep-fav-id="${summaryId}" onclick="event.stopPropagation(); toggleEpisodeFavorite(this, ${summaryId})"
+    class="inline-flex items-center justify-center ${cls} flex-shrink-0 ${isFav ? 'text-[#d97f12]' : 'text-outline/40'} hover:opacity-70 transition-opacity"
+    title="收藏這一集">
+    <span class="material-symbols-outlined text-xl" style="font-variation-settings:'FILL' ${isFav ? 1 : 0}">bookmark</span>
+  </button>`;
+}
+
+// ── Favorites（收藏／追蹤節目）── Profile 頁最愛 Podcast ／ Rankings・Podcaster 頁共用
+let _podcastFavoritesCache = null;
+let _podcastFavoritesLoadingPromise = null;
+
+async function _ensurePodcastFavoritesCache() {
+  if (_podcastFavoritesCache) return _podcastFavoritesCache;
+  if (_podcastFavoritesLoadingPromise) return _podcastFavoritesLoadingPromise;
+  _podcastFavoritesLoadingPromise = (async () => {
+    try {
+      const res = await fetch('/api/accounts/favorites/podcasts/');
+      const data = res.ok ? await res.json() : { podcasters: [] };
+      _podcastFavoritesCache = new Set(data.podcasters || []);
+    } catch (e) {
+      _podcastFavoritesCache = new Set();
+    }
+    return _podcastFavoritesCache;
+  })();
+  return _podcastFavoritesLoadingPromise;
+}
+
+// 用 dataset 比對而不是動態組 CSS attribute selector，避免節目名稱裡的特殊字元
+// （引號等）把 querySelectorAll 的選擇器字串弄壞。
+function _paintPodcastFavoriteIcon(podcaster, isFav) {
+  document.querySelectorAll('[data-podcast-fav]').forEach(el => {
+    if (el.dataset.podcastFav !== podcaster) return;
+    const icon = el.querySelector('.material-symbols-outlined');
+    if (icon) icon.style.fontVariationSettings = `'FILL' ${isFav ? 1 : 0}`;
+    el.classList.toggle('text-[#d97f12]', isFav);
+    el.classList.toggle('text-outline/40', !isFav);
+  });
+}
+
+function _setPodcastFavoriteState(podcaster, isFav) {
+  if (isFav) _podcastFavoritesCache.add(podcaster); else _podcastFavoritesCache.delete(podcaster);
+  _paintPodcastFavoriteIcon(podcaster, isFav);
+  window.dispatchEvent(new CustomEvent('pod2invest:podcast-favorite-toggled', {
+    detail: { podcaster, favorited: isFav },
+  }));
+}
+
+async function toggleFavoritePodcast(btnEl, podcaster) {
+  await _ensurePodcastFavoritesCache();
+  const wasFav = _podcastFavoritesCache.has(podcaster);
+  const nextFav = !wasFav;
+  _setPodcastFavoriteState(podcaster, nextFav);
+  btnEl.disabled = true;
+  try {
+    const res = await fetch('/api/accounts/favorites/podcasts/toggle/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ podcaster }),
+    });
+    if (res.status === 401) { _setPodcastFavoriteState(podcaster, wasFav); showToast('請先登入才能收藏'); return; }
+    if (!res.ok) { _setPodcastFavoriteState(podcaster, wasFav); showToast('操作失敗，請稍後再試'); return; }
+    const data = await res.json();
+    if (data.favorited !== nextFav) _setPodcastFavoriteState(podcaster, data.favorited);
+  } catch (e) {
+    _setPodcastFavoriteState(podcaster, wasFav);
+    showToast('網路錯誤，請稍後再試');
+  } finally {
+    btnEl.disabled = false;
+  }
+}
+
+function renderPodcastFollowButton(podcaster, cls = 'w-8 h-8') {
+  const isFav = !!(_podcastFavoritesCache && _podcastFavoritesCache.has(podcaster));
+  const safe = (podcaster || '').replace(/'/g, "\\'");
+  return `<button type="button" data-podcast-fav="${escapeHtml(podcaster)}" onclick="event.stopPropagation(); toggleFavoritePodcast(this, '${safe}')"
+    class="inline-flex items-center justify-center ${cls} flex-shrink-0 ${isFav ? 'text-[#d97f12]' : 'text-outline/40'} hover:opacity-70 transition-opacity"
+    title="收藏這個節目">
+    <span class="material-symbols-outlined text-xl" style="font-variation-settings:'FILL' ${isFav ? 1 : 0}">bookmark</span>
+  </button>`;
+}
+
+// ── 使用者資料（大頭貼／使用者名稱）── Header 圓框跟 Profile 頁共用 ─────────
+let _userProfile = null;
+
+async function loadUserProfile() {
+  try {
+    const res = await fetch('/api/accounts/profile/');
+    if (!res.ok) { _userProfile = null; return null; }
+    _userProfile = await res.json();
+    renderHeaderAvatar();
+    return _userProfile;
+  } catch (e) {
+    _userProfile = null;
+    return null;
+  }
+}
+
+function renderHeaderAvatar() {
+  const el = document.getElementById('header-avatar-inner');
+  if (!el || !_userProfile) return;
+  el.innerHTML = _userProfile.avatar_base64
+    ? `<img src="${_userProfile.avatar_base64}" alt="${escapeHtml(_userProfile.username || '')}" class="w-full h-full object-cover"/>`
+    : `<div class="w-full h-full flex items-center justify-center" style="background:#e5e3d9"><span class="material-symbols-outlined text-white/70 text-2xl" style="font-variation-settings:'FILL' 1">person</span></div>`;
+}
+
 // ── Boot ─────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   loadPodcastImages();
   loadDiscoverData();
   loadHotTags();
   loadRankings();
-  loadPreferences();
+  loadUserProfile();
 
   // disc-audio progress
   const discAudio = document.getElementById('disc-audio');

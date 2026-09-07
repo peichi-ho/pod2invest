@@ -261,7 +261,17 @@ async function loadDeepDive(summaryId) {
       dateSpan.textContent = ' · ' + s.published_at.slice(0, 10);
       podcasterEl.appendChild(dateSpan);
     }
+    // 節目日期右邊的書籤收藏按鈕——await 快取才畫，不然已收藏的集數會先閃一下未收藏的樣式。
+    await _ensureEpisodeFavoritesCache();
+    podcasterEl.insertAdjacentHTML('beforeend', renderEpisodeBookmarkButton(s.id, 'w-6 h-6 -mt-1 ml-1.5 align-middle'));
     document.getElementById('dd-one-sentence').textContent = '"' + s.one_sentence_summary + '"';
+
+    // 打開單集頁面自動記一筆觀看紀錄（同一集重複打開後端會 upsert，不會累加重複項目）。
+    fetch('/api/accounts/history/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ summary_id: s.id }),
+    }).catch(() => {});
 
     const audioEl  = document.getElementById('dd-audio');
     const playerEl = document.getElementById('dd-audio-player');
