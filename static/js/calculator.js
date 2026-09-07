@@ -1084,12 +1084,19 @@ function renderStockChart(data, ids = {}) {
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
   svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
   const ns   = 'http://www.w3.org/2000/svg';
-  const minP = Math.min(...prices.map(d => d.close));
-  const maxP = Math.max(...prices.map(d => d.close));
-  const n    = prices.length;
-  const toX  = i => padL + (i / (n - 1)) * (W - padL - padR);
-  const toY  = v => padT + (1 - (v - minP) / (maxP - minP + 0.01)) * (H - padT - padB);
-  const isUp = prices[n - 1].close >= prices[0].close;
+  // K 線的高低點範圍比單純收盤價寬，Y 軸要照 high/low 抓範圍，不然影線會被裁掉。
+  // 少數舊快取資料可能沒有 open/high/low（只有 close），fallback 回 close 讓影線退化成一個點，
+  // 不會整張圖壞掉。
+  const highs = prices.map(d => d.high ?? d.close);
+  const lows  = prices.map(d => d.low  ?? d.close);
+  const minP  = Math.min(...lows);
+  const maxP  = Math.max(...highs);
+  const n     = prices.length;
+  const toX   = i => padL + (i / (n - 1)) * (W - padL - padR);
+  const toY   = v => padT + (1 - (v - minP) / (maxP - minP + 0.01)) * (H - padT - padB);
+  const isUp  = prices[n - 1].close >= prices[0].close;
+  // 台股慣例漲＝紅、跌＝綠（跟美股相反），沿用這個 function 下面 change/histReturn 已經在用的配色。
+  const CANDLE_UP = '#ba1a1a', CANDLE_DOWN = '#1e8e3e';
   const lineColor = isUp ? '#113236' : '#ba1a1a';
 
   [0, 0.25, 0.5, 0.75, 1].forEach(r => {
@@ -1109,13 +1116,34 @@ function renderStockChart(data, ids = {}) {
     svg.appendChild(gt);
   });
 
-  let d = '';
-  prices.forEach((p, i) => { d += (i === 0 ? 'M' : ' L') + `${toX(i)},${toY(p.close)}`; });
-  const path = document.createElementNS(ns, 'path');
-  path.setAttribute('d', d); path.setAttribute('fill', 'none');
-  path.setAttribute('stroke', lineColor); path.setAttribute('stroke-width', '2.5');
-  path.setAttribute('stroke-linecap', 'round');
-  svg.appendChild(path);
+  // ── K 線（每一根：上下影線 + 開收實體）───────────────────────────────
+  const slotW     = n > 1 ? (W - padL - padR) / (n - 1) : (W - padL - padR);
+  const bodyWidth = Math.max(1.5, Math.min(8, slotW * 0.6));
+  prices.forEach((p, i) => {
+    const open  = p.open  ?? p.close;
+    const high  = p.high  ?? p.close;
+    const low   = p.low   ?? p.close;
+    const close = p.close;
+    const x     = toX(i);
+    const up    = close >= open;
+    const color = up ? CANDLE_UP : CANDLE_DOWN;
+
+    const wick = document.createElementNS(ns, 'line');
+    wick.setAttribute('x1', x); wick.setAttribute('x2', x);
+    wick.setAttribute('y1', toY(high)); wick.setAttribute('y2', toY(low));
+    wick.setAttribute('stroke', color); wick.setAttribute('stroke-width', '1');
+    svg.appendChild(wick);
+
+    const bodyTop    = toY(Math.max(open, close));
+    const bodyBottom = toY(Math.min(open, close));
+    const body = document.createElementNS(ns, 'rect');
+    body.setAttribute('x', x - bodyWidth / 2);
+    body.setAttribute('y', bodyTop);
+    body.setAttribute('width', bodyWidth);
+    body.setAttribute('height', Math.max(1, bodyBottom - bodyTop)); // 平盤（開=收）也要看得到一條線
+    body.setAttribute('fill', color);
+    svg.appendChild(body);
+  });
 
   for (let i = 0; i <= 4; i++) {
     const idx = Math.round(i * (n - 1) / 4);
@@ -1167,6 +1195,11 @@ function renderStockChart(data, ids = {}) {
   ttPrice.setAttribute('font-size', '13'); ttPrice.setAttribute('font-weight', '700');
   chGroup.appendChild(ttPrice);
 
+  const ttOhl = document.createElementNS(ns, 'text');
+  ttOhl.setAttribute('fill', '#b0ecf9'); ttOhl.setAttribute('font-family', 'Manrope');
+  ttOhl.setAttribute('font-size', '10'); ttOhl.setAttribute('font-weight', '600');
+  chGroup.appendChild(ttOhl);
+
   svg.appendChild(chGroup);
 
   function moveCrosshairTo(clientX) {
@@ -1186,12 +1219,19 @@ function renderStockChart(data, ids = {}) {
     vLine.setAttribute('x1', px); vLine.setAttribute('x2', px);
     chDot.setAttribute('cx', px); chDot.setAttribute('cy', py);
 
-    ttDate.textContent  = prices[idx].date;
-    ttPrice.textContent = 'NT$' + prices[idx].close.toFixed(2);
+    const cur = prices[idx];
+    const hasOhl = cur.open != null && cur.high != null && cur.low != null;
+
+    ttDate.textContent  = cur.date;
+    ttPrice.textContent = '收 NT$' + cur.close.toFixed(2);
+    ttOhl.textContent   = hasOhl
+      ? `開 ${cur.open.toFixed(1)}　高 ${cur.high.toFixed(1)}　低 ${cur.low.toFixed(1)}`
+      : '';
     ttDate.setAttribute('x', 0); ttDate.setAttribute('y', 16);
     ttPrice.setAttribute('x', 0); ttPrice.setAttribute('y', 34);
-    const boxW = Math.max(ttDate.getBBox().width, ttPrice.getBBox().width) + 20;
-    const boxH = 42;
+    ttOhl.setAttribute('x', 0); ttOhl.setAttribute('y', 48);
+    const boxW = Math.max(ttDate.getBBox().width, ttPrice.getBBox().width, ttOhl.getBBox().width) + 20;
+    const boxH = hasOhl ? 58 : 42;
     let boxX = px + 12;
     if (boxX + boxW > W - padR) boxX = px - boxW - 12; // 靠右邊界時翻到左邊，避免被裁掉
     boxX = Math.max(padL, boxX);
@@ -1201,6 +1241,7 @@ function renderStockChart(data, ids = {}) {
     ttBg.setAttribute('width', boxW); ttBg.setAttribute('height', boxH);
     ttDate.setAttribute('x', boxX + 10); ttDate.setAttribute('y', boxY + 16);
     ttPrice.setAttribute('x', boxX + 10); ttPrice.setAttribute('y', boxY + 34);
+    ttOhl.setAttribute('x', boxX + 10); ttOhl.setAttribute('y', boxY + 50);
 
     chGroup.style.display = '';
   }

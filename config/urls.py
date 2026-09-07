@@ -19,11 +19,13 @@ from django.urls import path, include
 from django.shortcuts import render, redirect
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.forms import AuthenticationForm, UserCreationForm
-from django.contrib.auth.decorators import login_required
 from apps.accounts.views import onboarding_view
 from apps.accounts.models import UserProfile
 
-@login_required(login_url='/login/')
+# 訪客可以直接瀏覽首頁（探索、排行榜、搜尋都不擋），只有打開單集深度摘要時才會被要求
+# 登入——見 static/js/deep_dive.js 的 openDeepDive()。其餘 API（summaries/podcasts/...）
+# 本來就沒有做登入檢查，只有 apps/accounts 這幾支會自己判斷 request.user.is_authenticated，
+# 所以拿掉這裡的 @login_required 不會讓其他功能對訪客壞掉。
 def frontend_index(request):
     return render(request, 'index.html')
 

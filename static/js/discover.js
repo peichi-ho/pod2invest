@@ -9,9 +9,33 @@ let _signalRecordsByAssetWeek = {};
 let _signalWeeks = [];
 let _signalWeekIndex = 0;
 
+// 抓使用者「最近一次看的單集」（watch_history 最新一筆）顯示在首頁，跟以前拿
+// 「推薦排序後的第一筆」完全是兩回事——那個其實是推薦內容，不是使用者真的看過的東西。
+async function loadContinueReading() {
+  try {
+    const res = await fetch('/api/accounts/history/?limit=1');
+    if (!res.ok) { renderContinueListening(null); return; } // 401（訪客/未登入）一律當作沒紀錄
+    const data = await res.json();
+    const item = (data.items || [])[0];
+    if (!item) { renderContinueListening(null); return; }
+    const sRes = await fetch(`/api/summaries/?ids=${item.summary_id}`);
+    const list = sRes.ok ? await sRes.json() : [];
+    renderContinueListening(list[0] || null);
+  } catch (e) {
+    renderContinueListening(null);
+  }
+}
+
 function renderContinueListening(s) {
   const el = document.getElementById('continue-listening-card');
-  if (!s) { el.innerHTML = '<p class="text-outline text-sm">暫無資料</p>'; return; }
+  if (!s) {
+    el.innerHTML = `
+      <div class="bg-surface-container-lowest p-8 rounded-lg text-center space-y-2">
+        <p class="text-on-surface-variant text-sm font-medium">您尚未閱讀摘要，立即開始！</p>
+        <button onclick="document.getElementById('recommended-section')?.scrollIntoView({behavior:'smooth'})" class="text-secondary text-sm font-bold hover:underline">看看為你推薦的節目 →</button>
+      </div>`;
+    return;
+  }
   const st = cardStyle(s.podcaster || s.source_filename);
   const title = (s.source_filename || '').replace(/\.srt$/i, '') || s.one_sentence_summary?.slice(0, 40);
   _discCurrentId = s.id;
@@ -161,7 +185,7 @@ async function loadDiscoverData() {
       ? [..._discoverCache].sort((a, b) => _prefScore(b, _userPrefs) - _prefScore(a, _userPrefs))
       : _discoverCache;
 
-    renderContinueListening(sorted[0] || null);
+    loadContinueReading();
     renderRecommended(sorted.slice(0, 10));
   } catch(e) { console.error('loadDiscoverData failed', e); }
 }

@@ -2,10 +2,18 @@
 <div id="page-discover" class="page active pt-24 px-6 max-w-5xl mx-auto space-y-10">
   <section>
     <div class="relative">
+      <!-- 誘餌欄位：Chrome 的自動填入不完全遵守下面搜尋欄的 autocomplete="off"，
+           會把這個網站記住的帳號名稱自動塞進頁面上第一個文字輸入框。這兩個隱藏欄位
+           放在搜尋欄前面，讓 Chrome 把「想自動填入」的衝動吸收到這裡，不會影響搜尋欄。 -->
+      <input type="text" name="username" autocomplete="username" tabindex="-1" aria-hidden="true"
+        style="position:absolute;width:1px;height:1px;opacity:0;pointer-events:none;"/>
+      <input type="password" name="password" autocomplete="current-password" tabindex="-1" aria-hidden="true"
+        style="position:absolute;width:1px;height:1px;opacity:0;pointer-events:none;"/>
       <input id="discover-search"
         oninput="onSearchInput()"
         onkeydown="onSearchKeydown(event)"
         autocomplete="off"
+        name="discover-search-q"
         class="w-full h-14 pl-14 pr-6 bg-surface-container-high rounded-full border-none focus:ring-2 focus:ring-secondary font-body text-on-surface-variant"
         placeholder="搜尋股票代號、公司名稱、節目或集數"
         type="text"/>
@@ -28,9 +36,8 @@
   </section>
 
   <section id="continue-listening-section">
-    <div class="flex justify-between items-end mb-6">
-      <h2 class="text-3xl font-bold tracking-tight text-tertiary-container font-['Epilogue']">繼續收聽</h2>
-      <span class="text-secondary text-sm font-semibold cursor-pointer underline decoration-2 underline-offset-4">查看紀錄</span>
+    <div class="mb-6">
+      <h2 class="text-3xl font-bold tracking-tight text-tertiary-container font-['Epilogue']">繼續閱讀</h2>
     </div>
     <div id="continue-listening-card"><p class="text-outline text-sm">載入中...</p></div>
   </section>
