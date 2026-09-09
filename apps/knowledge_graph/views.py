@@ -522,23 +522,14 @@ def basket_purposes_api(request):
     return JsonResponse({"purposes": PURPOSE_CHOICES}, json_dumps_params={"ensure_ascii": False})
 
 
-@csrf_exempt
-def basket_api(request):
+def _parse_basket_params(request):
     """
-    輸入 seed（標的名稱）+ purpose（投資目的 key），回傳對應策略算出的 basket。
-
-    Query params:
-      - seed        : 必填，標的名稱（需與知識圖譜節點名稱一致）
-      - purpose     : 必填，見 basket_purpose.PURPOSE_CHOICES 的 key
-      - end_date    : 選填，YYYY-MM-DD，預設今天
-      - window_days : 選填，預設 30
+    共用參數解析：成功時回傳 (params_dict, None)，失敗時回傳 (None, JsonResponse)。
+    basket_api 和 basket_stream_api 共用同一組參數規則，避免兩邊各自驗證、
+    之後改規則只改到其中一邊而悄悄不一致。
     """
     import datetime as _dt
     from .services.basket_purpose import get_strategy_for_purpose
-    from .services.strategy_supply import supply_candidates
-    from .services.strategy_substitute import substitute_candidates
-    from .services.strategy_coimpact import co_impact_candidates
-    from .services.basket_selection import select_basket, seed_exists, suggest_similar_seeds
 
     seed = request.GET.get("seed", "").strip()
     purpose = request.GET.get("purpose", "").strip()
@@ -547,14 +538,14 @@ def basket_api(request):
     risk_tier = request.GET.get("risk_tier", "").strip() or None
 
     if not seed or not purpose:
-        return JsonResponse({"error": "需提供 seed 與 purpose"}, status=400)
+        return None, JsonResponse({"error": "需提供 seed 與 purpose"}, status=400)
 
     if risk_tier and risk_tier not in ("保守", "均衡", "積極"):
-        return JsonResponse({"error": "risk_tier 須為 保守/均衡/積極 其中之一"}, status=400)
+        return None, JsonResponse({"error": "risk_tier 須為 保守/均衡/積極 其中之一"}, status=400)
 
     strategy = get_strategy_for_purpose(purpose)
     if not strategy:
-        return JsonResponse({"error": f"未知的 purpose: {purpose}"}, status=400)
+        return None, JsonResponse({"error": f"未知的 purpose: {purpose}"}, status=400)
 
     try:
         end_date = (
@@ -562,47 +553,133 @@ def basket_api(request):
             if end_date_str else _dt.date.today()
         )
     except ValueError:
-        return JsonResponse({"error": "end_date 格式須為 YYYY-MM-DD"}, status=400)
+        return None, JsonResponse({"error": "end_date 格式須為 YYYY-MM-DD"}, status=400)
 
+    return {
+        "seed": seed, "purpose": purpose, "strategy": strategy,
+        "end_date": end_date, "window_days": window_days, "risk_tier": risk_tier,
+    }, None
+
+
+def _run_basket_search(params, on_progress=None):
+    """
+    實際跑候選產生 + Selection pipeline，回傳跟 basket_api 回應同樣格式的 dict。
+    basket_api（一次性回傳）和 basket_stream_api（SSE 即時進度）共用這個函式，
+    差別只在有沒有傳 on_progress。
+    """
+    from .services.strategy_supply import supply_candidates
+    from .services.strategy_substitute import substitute_candidates
+    from .services.strategy_coimpact import co_impact_candidates
+    from .services.basket_selection import select_basket, seed_exists, suggest_similar_seeds
+
+    seed, strategy = params["seed"], params["strategy"]
+    end_date, window_days, risk_tier = params["end_date"], params["window_days"], params["risk_tier"]
+
+    if strategy in ("supply_upstream", "supply_downstream"):
+        result = supply_candidates(seed, end_date, window_days)
+        direction = "upstream" if strategy == "supply_upstream" else "downstream"
+        candidates = result[direction]
+    elif strategy == "substitute":
+        candidates = substitute_candidates(seed, end_date, window_days)
+    elif strategy == "co_impact":
+        candidates = co_impact_candidates(seed, end_date, window_days)
+    else:
+        candidates = []
+
+    selection = select_basket(
+        candidates, strategy=strategy, seed=seed, window_days=window_days,
+        risk_tier=risk_tier, as_of_date=end_date, on_progress=on_progress,
+    )
+
+    seed_suggestions = []
+    if not candidates and not seed_exists(seed):
+        seed_suggestions = suggest_similar_seeds(seed)
+
+    return {
+        "seed": seed,
+        "purpose": params["purpose"],
+        "strategy": strategy,
+        "window_days": window_days,
+        "end_date": end_date.isoformat(),
+        "risk_tier": risk_tier,
+        "candidate_count": len(candidates),
+        "basket": selection["basket"],
+        "funnel": selection["funnel"],
+        "seed_suggestions": seed_suggestions,
+    }
+
+
+@csrf_exempt
+def basket_api(request):
+    """
+    輸入 seed（標的名稱）+ purpose（投資目的 key），回傳對應策略算出的 basket。
+    一次性回傳完整結果；查詢過程中的即時進度見 basket_stream_api。
+
+    Query params:
+      - seed        : 必填，標的名稱（需與知識圖譜節點名稱一致）
+      - purpose     : 必填，見 basket_purpose.PURPOSE_CHOICES 的 key
+      - end_date    : 選填，YYYY-MM-DD，預設今天
+      - window_days : 選填，預設 30
+    """
+    params, err = _parse_basket_params(request)
+    if err:
+        return err
     try:
-        if strategy in ("supply_upstream", "supply_downstream"):
-            result = supply_candidates(seed, end_date, window_days)
-            direction = "upstream" if strategy == "supply_upstream" else "downstream"
-            candidates = result[direction]
-            selection = select_basket(
-                candidates, strategy=strategy, seed=seed, window_days=window_days,
-                risk_tier=risk_tier, as_of_date=end_date,
-            )
-        elif strategy == "substitute":
-            candidates = substitute_candidates(seed, end_date, window_days)
-            selection = select_basket(
-                candidates, strategy=strategy, seed=seed, window_days=window_days,
-                risk_tier=risk_tier, as_of_date=end_date,
-            )
-        elif strategy == "co_impact":
-            candidates = co_impact_candidates(seed, end_date, window_days)
-            selection = select_basket(
-                candidates, strategy=strategy, seed=seed, window_days=window_days,
-                risk_tier=risk_tier, as_of_date=end_date,
-            )
-        else:
-            candidates, selection = [], {"basket": [], "funnel": []}
-
-        seed_suggestions = []
-        if not candidates and not seed_exists(seed):
-            seed_suggestions = suggest_similar_seeds(seed)
-
-        return JsonResponse({
-            "seed": seed,
-            "purpose": purpose,
-            "strategy": strategy,
-            "window_days": window_days,
-            "end_date": end_date.isoformat(),
-            "risk_tier": risk_tier,
-            "candidate_count": len(candidates),
-            "basket": selection["basket"],
-            "funnel": selection["funnel"],
-            "seed_suggestions": seed_suggestions,
-        }, json_dumps_params={"ensure_ascii": False})
+        result = _run_basket_search(params)
+        return JsonResponse(result, json_dumps_params={"ensure_ascii": False})
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)
+
+
+@csrf_exempt
+def basket_stream_api(request):
+    """
+    basket_api 的 SSE 版本：查詢通常要跑好幾個 LLM 判斷 + 逐檔財務資料 API，
+    可能要等 30 秒以上，前端需要能顯示「現在跑到哪一步、還要等多久」而不是
+    乾等一個轉圈圈。
+
+    做法：查詢邏輯丟到背景 thread 跑，用 queue.Queue 當橋接——select_basket()
+    內部呼叫 on_progress 時把訊息放進 queue，這裡的 generator 在主 thread
+    不斷從 queue 取出訊息轉成 SSE 格式吐給前端，直到收到 done/error 為止。
+    沒有另外引入 Celery/Redis 之類的排隊系統，單一查詢的量體不需要。
+
+    Query params 跟 basket_api 相同。回應格式（text/event-stream，每則一個
+    JSON object）：
+      - {"type": "progress", "stage", "label", "percent", "item_current", "item_total"}
+      - {"type": "done", "result": {...跟 basket_api 回應格式相同...}}
+      - {"type": "error", "error": "..."}
+    """
+    import json as _json
+    import queue
+    import threading
+    from django.http import StreamingHttpResponse
+
+    params, err = _parse_basket_params(request)
+    if err:
+        return err
+
+    q: queue.Queue = queue.Queue()
+
+    def emit(**kwargs):
+        q.put({"type": "progress", **kwargs})
+
+    def worker():
+        try:
+            result = _run_basket_search(params, on_progress=emit)
+            q.put({"type": "done", "result": result})
+        except Exception as e:
+            q.put({"type": "error", "error": str(e)})
+
+    threading.Thread(target=worker, daemon=True).start()
+
+    def event_stream():
+        while True:
+            msg = q.get()
+            yield f"data: {_json.dumps(msg, ensure_ascii=False)}\n\n"
+            if msg["type"] in ("done", "error"):
+                break
+
+    response = StreamingHttpResponse(event_stream(), content_type="text/event-stream")
+    response["Cache-Control"] = "no-cache"
+    response["X-Accel-Buffering"] = "no"
+    return response

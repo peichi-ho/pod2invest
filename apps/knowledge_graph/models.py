@@ -49,6 +49,7 @@ class FinancialMetricsCache(models.Model):
     operating_cash_flow = models.FloatField(null=True)
     shares_outstanding = models.FloatField(null=True)
     eps = models.FloatField(null=True)
+    price_at_period_end = models.FloatField(null=True)  # 財報期末日附近收盤價，算P/S用
 
     fetched_at = models.DateTimeField(auto_now=True)
 

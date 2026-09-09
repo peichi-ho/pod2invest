@@ -26,6 +26,40 @@ from apps.summaries.services.backtesting import resolve_ticker
 from apps.knowledge_graph.generate import _call_gemini_with_retry
 
 
+class ProgressReporter:
+    """
+    把 select_basket() 內部這些「跑起來快慢差很多、部分階段依情境會整段跳過」
+    的步驟，換算成一條 0-100 累積進度給前端顯示。每個階段依預期耗時給一個
+    相對權重（LLM/網路 I/O 重的階段權重高），只有這次真的會跑到的階段會被
+    放進 stages，跳過的階段不佔用進度區間，最後一個階段結束一定會落在 100。
+    """
+
+    def __init__(self, stages: list[tuple[str, str, float]], emit_fn):
+        self._emit = emit_fn
+        total = sum(w for _, _, w in stages) or 1.0
+        cum = 0.0
+        self._ranges: dict[str, tuple[float, float, str]] = {}
+        for key, label, weight in stages:
+            start = cum / total * 100
+            cum += weight
+            end = cum / total * 100
+            self._ranges[key] = (start, end, label)
+
+    def stage_start(self, key: str):
+        start, _end, label = self._ranges[key]
+        self._emit(stage=key, label=label, percent=round(start, 1), item_current=None, item_total=None)
+
+    def stage_item(self, key: str, current: int, total: int):
+        start, end, label = self._ranges[key]
+        frac = current / total if total else 1.0
+        percent = start + (end - start) * frac
+        self._emit(stage=key, label=label, percent=round(percent, 1), item_current=current, item_total=total)
+
+    def stage_done(self, key: str):
+        start, end, label = self._ranges[key]
+        self._emit(stage=key, label=label, percent=round(end, 1), item_current=None, item_total=None)
+
+
 def seed_exists(seed: str) -> bool:
     with connections["knowledge_graphdb"].cursor() as cursor:
         cursor.execute("SELECT 1 FROM nodes WHERE name = %s", [seed])
@@ -85,23 +119,30 @@ _VAGUE_REASON_PATTERNS = [
 
 # ── 1. 節點類型過濾 ──────────────────────────────────────────────────────
 
-def filter_node_type(candidates: list[dict]) -> list[dict]:
+def filter_node_type(candidates: list[dict], on_progress=None) -> list[dict]:
     kept = []
-    for c in candidates:
+    total = len(candidates)
+    for i, c in enumerate(candidates):
+        # on_progress 要不管這筆候選最後有沒有被留下都回報，代表「處理到第幾筆」，
+        # 不是「留下第幾筆」——如果只在 kept.append() 之後才回報，被過濾掉的候選
+        # 會讓進度卡住不動，最後一筆被排除的話進度甚至永遠到不了 100%。
         name = c["node"]
+        keep = True
         if name in _VERIFIED_FALSE_POSITIVE_NODES:
-            continue
-        try:
-            ticker = resolve_ticker(name)
-        except Exception:
-            ticker = ""
-        if not ticker:
-            continue
-        if _is_non_company_ticker(ticker):
-            continue
-        if _TICKER_SHAPE_RE.match(name) and not _verify_ticker_live(ticker):
-            continue
-        kept.append(c)
+            keep = False
+        else:
+            try:
+                ticker = resolve_ticker(name)
+            except Exception:
+                ticker = ""
+            if not ticker or _is_non_company_ticker(ticker):
+                keep = False
+            elif _TICKER_SHAPE_RE.match(name) and not _verify_ticker_live(ticker):
+                keep = False
+        if keep:
+            kept.append(c)
+        if on_progress:
+            on_progress(i + 1, total)
     return kept
 
 
@@ -140,7 +181,7 @@ def _llm_check_direction(reason: str, expected_supplier: str, expected_customer:
         return True
 
 
-def check_supply_direction(candidates: list[dict], seed: str, direction: str) -> list[dict]:
+def check_supply_direction(candidates: list[dict], seed: str, direction: str, on_progress=None) -> list[dict]:
     """
     direction: "upstream"（每一段代表 to 供應 from）或 "downstream"（每一段代表 from 供應 to）
 
@@ -150,12 +191,9 @@ def check_supply_direction(candidates: list[dict], seed: str, direction: str) ->
     reason 的段落無法驗證，不計入失敗，避免多跳候選被過度懲罰。
     """
     kept = []
-    for c in candidates:
+    total = len(candidates)
+    for i, c in enumerate(candidates):
         segments = c.get("path_reasons", [])
-        if not segments:
-            kept.append(c)
-            continue
-
         all_pass = True
         for seg in segments:
             seg_reasons = seg.get("reasons", [])
@@ -175,6 +213,8 @@ def check_supply_direction(candidates: list[dict], seed: str, direction: str) ->
 
         if all_pass:
             kept.append(c)
+        if on_progress:
+            on_progress(i + 1, total)
 
     return kept
 
@@ -196,7 +236,7 @@ def _llm_check_substitution(reason: str, node_a: str, node_b: str) -> bool:
         return True
 
 
-def check_substitution_relevance(candidates: list[dict], seed: str) -> list[dict]:
+def check_substitution_relevance(candidates: list[dict], seed: str, on_progress=None) -> list[dict]:
     """
     relation_type 標成 Substitution 不保證內容真的在講競爭/替代關係——實測發現
     LLM 抽取階段會把供應鏈敘述（例如「Intel 搶走部分台積電的蘋果訂單」）或甚至
@@ -204,13 +244,13 @@ def check_substitution_relevance(candidates: list[dict], seed: str) -> list[dict
     每個候選的 reason 文字重新判斷一次，過濾掉標籤跟內容對不上的候選。
     """
     kept = []
-    for c in candidates:
+    total = len(candidates)
+    for i, c in enumerate(candidates):
         reasons = c.get("reasons", [])
-        if not reasons:
+        if not reasons or _llm_check_substitution(reasons[0], seed, c["node"]):
             kept.append(c)
-            continue
-        if _llm_check_substitution(reasons[0], seed, c["node"]):
-            kept.append(c)
+        if on_progress:
+            on_progress(i + 1, total)
     return kept
 
 
@@ -293,6 +333,13 @@ def _get_industries(node_names: list[str]) -> dict[str, str]:
 
 # ── 6. 主流程 ─────────────────────────────────────────────────────────────
 
+_RELATION_CHECK_LABELS = {
+    "supply_upstream": "AI 驗證供應方向",
+    "supply_downstream": "AI 驗證供應方向",
+    "substitute": "AI 驗證替代關係",
+}
+
+
 def select_basket(
     candidates: list[dict],
     *,
@@ -303,21 +350,39 @@ def select_basket(
     max_basket_size: int = 8,
     risk_tier: str | None = None,
     as_of_date=None,
+    on_progress=None,
 ) -> dict:
     """
     回傳 {"basket": [...], "funnel": [...]}。
     funnel 記錄每一關過濾前後的候選數，讓使用者看得到「623 個候選怎麼變成 2 個」，
     不是黑盒結果；relative_strength（0-100）則是把候選池裡最高分正規化成 100，
     取代對使用者沒有意義的原始 PPR 浮點數分數。
+
+    on_progress：選填，簽章 (stage, label, percent, item_current, item_total) 的
+    callback，用來讓呼叫端（例如 SSE streaming view）即時回報進度。權重依各階段
+    預期耗時給定——LLM/網路 I/O 重的階段（AI 判斷、財務體質篩選）權重最高，只有
+    這次策略/風險分級實際會跑到的階段才會佔用進度區間。
     """
     funnel = [{"stage": "候選產生（PPR / 1-hop / 社群偵測）", "count": len(candidates)}]
 
     if not candidates:
         return {"basket": [], "funnel": funnel}
 
+    needs_relation_check = strategy in _RELATION_CHECK_LABELS
+    stage_defs = [("candidate_prep", "整理候選標的", 2.0)]
+    if needs_relation_check:
+        stage_defs.append(("relation_check", _RELATION_CHECK_LABELS[strategy], 6.0))
+    stage_defs.append(("synthesize", "生成關聯說明", 3.0))
+    if risk_tier:
+        stage_defs.append(("financial_screen", f"財務體質評分（{risk_tier}）", 6.0))
+    reporter = ProgressReporter(stage_defs, on_progress) if on_progress else None
+
     max_score = max(c["score"] for c in candidates) or 1
 
-    candidates = filter_node_type(candidates)
+    if reporter:
+        reporter.stage_start("candidate_prep")
+    node_type_progress = (lambda i, n: reporter.stage_item("candidate_prep", i, n)) if reporter else None
+    candidates = filter_node_type(candidates, on_progress=node_type_progress)
     funnel.append({"stage": "節點類型過濾（排除非真實標的）", "count": len(candidates)})
 
     candidates = sorted(candidates, key=lambda c: -c["score"])[:top_n_prefilter]
@@ -325,14 +390,20 @@ def select_basket(
 
     candidates = filter_reason_quality(candidates)
     funnel.append({"stage": "Reason 品質過濾", "count": len(candidates)})
+    if reporter:
+        reporter.stage_done("candidate_prep")
 
-    if strategy in ("supply_upstream", "supply_downstream"):
-        direction = "upstream" if strategy == "supply_upstream" else "downstream"
-        candidates = check_supply_direction(candidates, seed, direction)
-        funnel.append({"stage": "供應方向 AI 判斷", "count": len(candidates)})
-    elif strategy == "substitute":
-        candidates = check_substitution_relevance(candidates, seed)
-        funnel.append({"stage": "替代關係 AI 判斷", "count": len(candidates)})
+    if needs_relation_check:
+        relation_progress = (lambda i, n: reporter.stage_item("relation_check", i, n)) if reporter else None
+        if strategy in ("supply_upstream", "supply_downstream"):
+            direction = "upstream" if strategy == "supply_upstream" else "downstream"
+            candidates = check_supply_direction(candidates, seed, direction, on_progress=relation_progress)
+            funnel.append({"stage": "供應方向 AI 判斷", "count": len(candidates)})
+        elif strategy == "substitute":
+            candidates = check_substitution_relevance(candidates, seed, on_progress=relation_progress)
+            funnel.append({"stage": "替代關係 AI 判斷", "count": len(candidates)})
+        if reporter:
+            reporter.stage_done("relation_check")
 
     candidates = sorted(candidates, key=lambda c: -c["score"])[:max_basket_size]
     funnel.append({"stage": "Basket 大小上限", "count": len(candidates)})
@@ -342,7 +413,10 @@ def select_basket(
         for c in candidates:
             c["industry"] = industries.get(c["node"], "其他")
 
-    for c in candidates:
+    if reporter:
+        reporter.stage_start("synthesize")
+    n_candidates = len(candidates)
+    for i, c in enumerate(candidates):
         # reasons 前端會用「展開」收合，不用強壓在 5 條，但 mention_count
         # 高的候選可能累積上百條，還是要有上限避免回應過大。
         if c.get("reasons"):
@@ -350,14 +424,23 @@ def select_basket(
         c["relative_strength"] = round(100 * c["score"] / max_score)
         # 只對最終進入 basket 的少數候選做整合，不是對大量候選逐一呼叫 LLM。
         c["synthesized_reason"] = synthesize_reason(c, seed, window_days)
+        if reporter:
+            reporter.stage_item("synthesize", i + 1, n_candidates)
+    if reporter:
+        reporter.stage_done("synthesize")
 
     if risk_tier and candidates:
         import datetime as _dt
         from .fundamental_score import annotate_basket_with_scores
 
+        if reporter:
+            reporter.stage_start("financial_screen")
+        screen_progress = (lambda i, n: reporter.stage_item("financial_screen", i, n)) if reporter else None
         candidates = annotate_basket_with_scores(
-            candidates, risk_tier, as_of_date or _dt.date.today()
+            candidates, risk_tier, as_of_date or _dt.date.today(), on_progress=screen_progress
         )
         funnel.append({"stage": f"財務體質篩選（{risk_tier}）", "count": len(candidates)})
+        if reporter:
+            reporter.stage_done("financial_screen")
 
     return {"basket": candidates, "funnel": funnel}

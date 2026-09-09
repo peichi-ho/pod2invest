@@ -32,13 +32,13 @@ from apps.knowledge_graph.models import FinancialMetricsCache
 
 FINMIND_URL = "https://api.finmindtrade.com/api/v4/data"
 
-# F-score 計算需要的最小欄位集合。任一項缺失，這一期就視為不完整，
-# 整期改用下一個資料來源重抓，不用其他來源的欄位去補這一期的缺口。
-REQUIRED_FIELDS = [
-    "total_assets", "current_assets", "current_liabilities", "total_liabilities",
-    "working_capital", "retained_earnings", "ebit", "revenue", "gross_profit",
-    "operating_income", "net_income", "operating_cash_flow", "shares_outstanding", "eps",
-]
+# 一期資料算不算完整，只看revenue在不在——這是幾乎每項F-score檢查都會用到
+# 的最基本欄位。不要求其他欄位（EPS、資產負債表項目等）都齊全才收這一期：
+# 實測發現yfinance偶爾會單一期只缺一兩個欄位（例如2330.TW的2025Q3只缺
+# EPS，其他都正常），照舊規則整期直接丟掉太浪費。其餘欄位個別缺值時，
+# 交給各自的檢查函式自然判斷成「資料不足、這項無法判斷」（本來就有的
+# 機制），不會被當成沒通過，也不會拿別的source來湊這一期缺的欄位（同一
+# 期的所有欄位還是只來自單一source）。
 
 _NUMERIC_RE = re.compile(r"^\d{4,6}$")
 _LETTER_RE = re.compile(r"^[A-Z]{1,6}$")
@@ -163,6 +163,28 @@ def _extract_yf_period(bs, inc, cf, period_end) -> dict | None:
     }
 
 
+def _fetch_price_near_period_end(ticker: str, period_end: date) -> float | None:
+    """
+    財報期末日（或最近交易日）的收盤價，算P/S用。這裡不需要像回測那樣抓
+    一整段連續的每日序列，只需要單一時間點——用yfinance抓期末日後7天內
+    的價格，取離期末日最近的那個交易日（期末日常常是假日，當天不一定有
+    交易）。同一個ticker、同一期只會抓一次，之後靠FinancialMetricsCache
+    快取，不會重複打API。價格是客觀市場事實，不像財報數字有認列範圍差異
+    的問題，這裡不follow「同一期所有欄位只能來自同一個source」那條規則，
+    不管財報是yfinance還是FinMind抓到的，價格一律用yfinance抓。
+    """
+    try:
+        import yfinance as yf
+        hist = yf.Ticker(ticker).history(
+            start=period_end, end=period_end + timedelta(days=7), auto_adjust=True
+        )
+    except Exception:
+        return None
+    if hist.empty:
+        return None
+    return float(hist["Close"].iloc[0])
+
+
 def _nearest_disclosure_date(earnings_dates, period_end: date) -> date | None:
     """
     t.earnings_dates 是「公告日 → 財報內容」的表，用期末日往後找最近一筆
@@ -197,8 +219,8 @@ def _fetch_yfinance_periods(ticker: str) -> list[dict]:
     for period_end_ts in bs.columns:
         period_end = period_end_ts.date()
         fields = _extract_yf_period(bs, inc, cf, period_end_ts)
-        if any(fields.get(f) is None for f in REQUIRED_FIELDS if f != "total_liabilities"):
-            continue  # 這一期資料不完整，整期跳過（不跨來源補欄位）
+        if fields.get("revenue") is None:
+            continue  # 連最基本的營收欄位都沒有，這期真的抓不到，跳過
         if fields.get("total_liabilities") is None and fields.get("current_liabilities") is not None:
             # Total Liabilities Net Minority Interest 偶爾缺，退回用歷史欄位近似（流動+非流動）
             continue
@@ -211,6 +233,7 @@ def _fetch_yfinance_periods(ticker: str) -> list[dict]:
             "fiscal_period_end": period_end,
             "disclosure_date": disclosure_date,
             "data_source": "yfinance",
+            "price_at_period_end": _fetch_price_near_period_end(ticker, period_end),
             **fields,
         })
 
@@ -325,14 +348,15 @@ def _fetch_finmind_periods(ticker: str, start_date: date, end_date: date) -> lis
             "shares_outstanding": shares_outstanding,
             "eps": inc_row.get("EPS"),
         }
-        if any(fields.get(f) is None for f in REQUIRED_FIELDS):
-            continue  # 不完整，跳過（FinMind 已經是最後一層，這一期直接視為抓不到）
+        if fields.get("revenue") is None:
+            continue  # 連最基本的營收欄位都沒有（FinMind已經是最後一層），這期視為抓不到
 
         periods.append({
             "fiscal_period_end": period_end,
             # FinMind 沒有公告日欄位，用假設延遲天數。
             "disclosure_date": period_end + timedelta(days=_assumed_disclosure_lag_days(period_end)),
             "data_source": "finmind",
+            "price_at_period_end": _fetch_price_near_period_end(ticker, period_end),
             **fields,
         })
 
@@ -356,7 +380,7 @@ def _load_cached(ticker: str) -> list[dict]:
             "ebit": r.ebit, "revenue": r.revenue, "gross_profit": r.gross_profit,
             "operating_income": r.operating_income, "net_income": r.net_income,
             "operating_cash_flow": r.operating_cash_flow, "shares_outstanding": r.shares_outstanding,
-            "eps": r.eps,
+            "eps": r.eps, "price_at_period_end": r.price_at_period_end,
         })
     out.sort(key=lambda p: p["fiscal_period_end"], reverse=True)
     return out
@@ -375,7 +399,7 @@ def _save_cache(ticker: str, periods: list[dict]) -> None:
             ebit=p.get("ebit"), revenue=p.get("revenue"), gross_profit=p.get("gross_profit"),
             operating_income=p.get("operating_income"), net_income=p.get("net_income"),
             operating_cash_flow=p.get("operating_cash_flow"), shares_outstanding=p.get("shares_outstanding"),
-            eps=p.get("eps"),
+            eps=p.get("eps"), price_at_period_end=p.get("price_at_period_end"),
         )
         for p in periods
     ]
@@ -385,27 +409,59 @@ def _save_cache(ticker: str, periods: list[dict]) -> None:
 
 # ── 主入口 ───────────────────────────────────────────────────────────────
 
+def _has_yoy_gap(periods: list[dict]) -> bool:
+    """
+    最新一期是否連「跟去年同一季比」的資料都湊不齊——這是F-score五個YoY
+    檢查項共用的最基本需求，缺了等於直接砍掉大半張檢查表。也順便檢查
+    期數是否太少（<4期，QoQ／YoY能用的組合本來就有限）。
+    """
+    if len(periods) < 4:
+        return True
+    latest = periods[0]["fiscal_period_end"]
+    target_year, target_month = latest.year - 1, latest.month
+    return not any(p["fiscal_period_end"].year == target_year and p["fiscal_period_end"].month == target_month for p in periods)
+
+
 def get_financial_history(ticker: str, as_of_date: date) -> dict:
     """
     回傳 {"data_source", "quarterly": [...], "annual_revenue": [...]}。
     quarterly 只包含 disclosure_date <= as_of_date 的期別（避免用到 as_of_date
     當下還沒公告的資料），依期末日新到舊排序。data_source 為 None 代表兩邊
     都抓不到可用資料，呼叫端應標記「無法評估」。
+
+    yfinance 對台股偶爾會缺特定幾季（例如某一季EPS欄位是NaN，或整季直接
+    不在回傳的DataFrame欄位裡——實測發現的真實案例：2330.TW的2025Q1在
+    yfinance整季全空，2025Q3則單獨缺EPS），但這種缺口通常剛好是FinMind
+    有的（兩邊台股資料最終都來自同一份公開申報，同一期重疊欄位比對過
+    數值幾乎一致）。所以台股標的如果yfinance湊不齊YoY比較所需的期數，
+    會額外打一次FinMind、把yfinance沒有的期別（用期末日比對，不是覆蓋
+    既有期別）補進來——同一期的所有欄位還是只會來自單一source，只是不同
+    期別可以分別來自不同source，跟「同一期不跨source混用」的原則不衝突。
+    非台股（FinMind沒有對應代號）不受影響，維持原本只在yfinance完全抓
+    不到時才 fallback 到FinMind的行為。
     """
     cached = _load_cached(ticker)
     usable = [p for p in cached if p["disclosure_date"] and p["disclosure_date"] <= as_of_date]
 
     if not usable:
         fresh = _fetch_yfinance_periods(ticker)
-        source = "yfinance"
         if not fresh:
             start = as_of_date.replace(year=as_of_date.year - 4)
             fresh = _fetch_finmind_periods(ticker, start, as_of_date)
-            source = "finmind" if fresh else None
         if fresh:
             _save_cache(ticker, fresh)
         usable = [p for p in fresh if p["disclosure_date"] and p["disclosure_date"] <= as_of_date]
         cached = fresh
+
+    if usable and usable[0]["data_source"] == "yfinance" and _finmind_stock_id(ticker) and _has_yoy_gap(usable):
+        start = as_of_date.replace(year=as_of_date.year - 4)
+        finmind_periods = _fetch_finmind_periods(ticker, start, as_of_date)
+        existing_dates = {p["fiscal_period_end"] for p in cached}
+        gap_fill = [p for p in finmind_periods if p["fiscal_period_end"] not in existing_dates]
+        if gap_fill:
+            _save_cache(ticker, gap_fill)
+            cached = sorted(cached + gap_fill, key=lambda p: p["fiscal_period_end"], reverse=True)
+            usable = [p for p in cached if p["disclosure_date"] and p["disclosure_date"] <= as_of_date]
 
     if not usable:
         return {"data_source": None, "quarterly": [], "annual_revenue": []}
