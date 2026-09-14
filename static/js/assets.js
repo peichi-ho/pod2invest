@@ -442,9 +442,6 @@ function _renderAssetBasicInfoTiles(category, d) {
   return [
     _assetInfoTile('市值', d.market_cap != null ? _fmtNum(d.market_cap, 0) : '—'),
     _assetInfoTile('本益比', d.pe_ratio != null ? Number(d.pe_ratio).toFixed(1) : '—'),
-    _assetInfoTile('殖利率', d.dividend_yield != null ? Number(d.dividend_yield).toFixed(2) + '%' : '—'),
-    _assetInfoTile('52週高', d.week52_high != null ? Number(d.week52_high).toFixed(1) : '—'),
-    _assetInfoTile('52週低', d.week52_low != null ? Number(d.week52_low).toFixed(1) : '—'),
     _assetInfoTile('產業', d.industry || d.sector || '—'),
   ].join('');
 }
