@@ -427,9 +427,19 @@ function _assetInfoTile(label, value) {
   </div>`;
 }
 
+function _assetEtfClassificationValue(d) {
+  // 分類先靠 etf_classification.py 的手動對照表（etfdb 撈不到完整清單前的過渡做法），
+  // 兩個維度都有值才疊兩行顯示，只有一個就單行顯示，都沒有就是「—」。
+  if (d.strategy_type && d.theme) {
+    return `${d.strategy_type}<div class="text-xs font-normal normal-case tracking-normal text-outline mt-1">${d.theme}</div>`;
+  }
+  return d.strategy_type || d.theme || '—';
+}
+
 function _renderAssetBasicInfoTiles(category, d) {
   if (category === 'tw_etf') {
     return [
+      _assetInfoTile('分類', _assetEtfClassificationValue(d)),
       _assetInfoTile('追蹤指數', d.tracking_index_name || '—'),
       _assetInfoTile('配息政策', d.distribution_policy || '—'),
       _assetInfoTile('規模 (AUM)', d.aum != null ? _fmtNum(d.aum, 0) : '—'),
