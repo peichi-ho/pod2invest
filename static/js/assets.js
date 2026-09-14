@@ -112,6 +112,15 @@ function _fmtVolume(v) {
 // 主排名列表跟「我的最愛」區塊共用同一份卡片樣式，只有 rankLabel（序號 vs ★）
 // 跟點擊行為不一樣，避免兩份重複的 HTML。data-row-fav-key 讓「我的最愛」清單
 // 可以在收藏/取消收藏時直接找到整列做新增/移除，不用重新打 API。
+function _assetStarButton(category, symbol) {
+  const key = _favKey(category, symbol);
+  const isFav = !!(_favoritesCache && _favoritesCache.has(key));
+  return `<button type="button" data-fav-key="${key}" onclick="event.stopPropagation(); toggleFavoriteStar(this, '${category}', '${symbol}')"
+    class="asset-star-btn inline-flex items-center justify-center w-6 h-6 flex-shrink-0 ${isFav ? 'text-[#d97f12]' : 'text-outline/40'} hover:opacity-70 transition-opacity">
+    <span class="material-symbols-outlined text-base" style="font-variation-settings:'FILL' ${isFav ? 1 : 0}">star</span>
+  </button>`;
+}
+
 function _assetRowHtml(r, rankLabel, onclickExpr) {
   const pct = r.change_pct;
   const changeAbs = r.change_abs;
@@ -127,9 +136,10 @@ function _assetRowHtml(r, rankLabel, onclickExpr) {
   return `
     <div data-row-fav-key="${rowKey}" onclick="${onclickExpr}" class="flex items-center gap-4 px-5 py-5 rounded-lg bg-surface-container-lowest hover:bg-surface-container-low transition-colors cursor-pointer border border-transparent hover:border-outline-variant/20">
       <div class="w-8 text-outline text-sm font-bold">${rankLabel}</div>
-      <div class="flex-1 min-w-0">
-        <div class="font-['Epilogue'] font-bold text-lg text-tertiary-container truncate">${renderAssetNameStar(`${r.symbol}.TW`, r.name || r.symbol)}</div>
-        <div class="text-sm text-outline">${r.symbol}</div>
+      <div class="flex-1 min-w-0 flex items-center gap-2">
+        <div class="font-['Epilogue'] font-bold text-lg text-tertiary-container truncate">${escapeHtml(r.name || r.symbol)}</div>
+        <div class="text-sm text-outline flex-shrink-0">${r.symbol}</div>
+        ${_assetStarButton(_assetsCategory, r.symbol)}
       </div>
       <div class="flex items-baseline gap-2">
         <div class="font-['Epilogue'] font-bold text-lg text-on-surface">${r.close != null ? r.close.toFixed(2) : '—'}</div>
@@ -178,34 +188,47 @@ function _closeAssetSearch() {
   document.getElementById('assets-search').value = '';
 }
 
+// 搜尋不分「台股」／「台股ETF」目前選哪個 tab，兩個分類都查、結果混在一起顯示
+// （並各自標註分類），不然使用者在台股 tab 搜 0050 會因為分類被鎖死而找不到結果。
 async function _runAssetSearch(q) {
   const dd = document.getElementById('assets-search-dropdown');
   dd.innerHTML = '<p class="text-outline text-sm p-4 text-center">搜尋中...</p>';
   dd.classList.remove('hidden');
   try {
-    const url = `/api/assets/rankings/?category=${_assetsCategory}&q=${encodeURIComponent(q)}&sort=volume&direction=desc&limit=8`;
-    const res = await fetch(url);
-    const data = await res.json();
-    if (!res.ok) {
-      dd.innerHTML = `<p class="text-error text-sm p-4 text-center">${data.error || '搜尋失敗'}</p>`;
+    const results = await Promise.all(ASSET_CATEGORIES.map(async c => {
+      const url = `/api/assets/rankings/?category=${c.key}&q=${encodeURIComponent(q)}&sort=volume&direction=desc&limit=8`;
+      const res = await fetch(url);
+      const data = await res.json();
+      return { category: c.key, ok: res.ok, data, rows: res.ok ? (data.data || []) : [] };
+    }));
+
+    if (results.every(r => !r.ok)) {
+      dd.innerHTML = `<p class="text-error text-sm p-4 text-center">${results[0].data.error || '搜尋失敗'}</p>`;
       return;
     }
-    const rows = data.data || [];
+
+    const rows = results
+      .flatMap(r => r.rows.map(row => ({ ...row, category: r.category })))
+      .sort((a, b) => (b.volume ?? 0) - (a.volume ?? 0))
+      .slice(0, 8);
+
     if (!rows.length) {
       dd.innerHTML = '<p class="text-outline text-sm p-4 text-center">找不到相關標的</p>';
       return;
     }
     dd.innerHTML = rows.map(r => {
       const name = (r.name || r.symbol).replace(/'/g, "\\'");
+      const categoryLabel = ASSET_CATEGORIES.find(c => c.key === r.category)?.label || r.category;
       const pct = r.change_pct;
       const isUp = pct != null && pct > 0;
       const isDown = pct != null && pct < 0;
       const pctColor = pct == null ? 'text-outline' : (isUp ? 'text-[#ba1a1a]' : isDown ? 'text-[#1e8e3e]' : 'text-outline');
       const pctLabel = pct == null ? '—' : `${isUp ? '▲' : isDown ? '▼' : ''} ${Math.abs(pct).toFixed(2)}%`;
       return `
-        <div onclick="openAssetDetailBySymbol('${r.symbol}', '${_assetsCategory}', '${name}'); _closeAssetSearch();"
+        <div onclick="openAssetDetailBySymbol('${r.symbol}', '${r.category}', '${name}'); _closeAssetSearch();"
           class="flex items-center justify-between gap-3 px-4 py-4 hover:bg-surface-container-highest cursor-pointer border-b border-outline-variant/10 last:border-0 transition-colors">
           <div class="flex items-baseline gap-2 min-w-0">
+            <span class="text-[10px] font-bold text-outline uppercase tracking-wider flex-shrink-0 px-1.5 py-0.5 rounded bg-surface-container-highest">${categoryLabel}</span>
             <span class="text-base font-bold text-tertiary-container truncate">${r.name || r.symbol}</span>
             <span class="text-sm text-outline flex-shrink-0">${r.symbol}</span>
           </div>

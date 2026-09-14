@@ -222,9 +222,23 @@ function showToast(msg) {
   el._hideTimer = setTimeout(() => { el.style.opacity = '0'; }, 2000);
 }
 
+// renderAssetNameStar() 在 discover.js/rankings.js/deep_dive.js 都有用，名稱文字統一
+// 點進來走這支——記一下「點下去之前在哪一頁」，讓 Assets 詳情頁的「返回列表」（見
+// assets.js 的 closeAssetDetail）能透過 _backOverride 機制真的回到原本那一頁，
+// 而不是每次都固定收合回 Assets 清單頁。跟 discover.js 的 _goToAssetFromSearch()
+// 是同一套機制，只是那邊是手動設、這裡集中在共用入口處理，不用每個呼叫點都重複設一次。
 function onAssetNameClick(ticker, displayName) {
   const resolved = resolveAssetCategory(ticker);
   if (!resolved) { showToast('尚未支援此標的'); return; }
+
+  const currentActive = document.querySelector('.page.active');
+  const currentPage = currentActive ? currentActive.id.replace('page-', '') : null;
+  if (currentPage && currentPage !== 'assets') {
+    _backOverride = currentPage;
+    _backOverrideOwner = 'assets';
+    _backOverrideArmed = false;
+  }
+
   showPage('assets');
   openAssetDetail({ symbol: resolved.symbol, category: resolved.category, name: displayName || resolved.symbol });
 }
@@ -305,7 +319,11 @@ function renderAssetNameStar(ticker, displayName, nameClass = '') {
       class="asset-star-btn inline-flex items-center justify-center w-6 h-6 flex-shrink-0 ${isFav ? 'text-[#d97f12]' : 'text-outline/40'} hover:opacity-70 transition-opacity">
       <span class="material-symbols-outlined text-base" style="font-variation-settings:'FILL' ${isFav ? 1 : 0}">star</span>
     </button>` : '';
-  return `<span class="inline-flex items-center gap-1">
+  // 這個 span 是塞進外層純文字的 inline-flex：vertical-align:middle 是用外層宣告字體
+  // （Epilogue，只有拉丁字）的 x-height 去算置中位置，但顯示的中文字實際上是瀏覽器
+  // fallback 到系統中文字體去畫的，兩者字體度量對不上，星星按鈕會比文字稍微偏低。
+  // 疊一個 -2px 的位移校正，實測跟中文字視覺置中最接近（見 app.js 對齊測試）。
+  return `<span class="inline-flex items-center gap-1 align-middle -translate-y-0.5">
     <span class="${nameClass} cursor-pointer hover:underline decoration-dotted underline-offset-2" onclick="event.stopPropagation(); onAssetNameClick('${safeTicker}', '${safeDisplay}')">${safeName}</span>
     ${star}
   </span>`;
