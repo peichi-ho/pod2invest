@@ -10,6 +10,9 @@ apps/calculator/views.py 的 _get_display_name() 也是同樣的容錯做法）�
 import yfinance as yf
 from django.db import connections
 
+from .industry_zh import translate_industry
+from .etf_classification import classify_etf
+
 DB = "etfdb"
 
 
@@ -29,7 +32,7 @@ def get_tw_stock_basic_info(symbol: str) -> dict | None:
         'week52_high': info.get('fiftyTwoWeekHigh'),
         'week52_low': info.get('fiftyTwoWeekLow'),
         'sector': info.get('sector'),
-        'industry': info.get('industry'),
+        'industry': translate_industry(info.get('industry'), info.get('sector')),
     }
 
 
@@ -60,9 +63,12 @@ def get_tw_etf_basic_info(symbol: str) -> dict | None:
         columns = [c[0] for c in cur.description]
 
     r = dict(zip(columns, row))
+    classification = classify_etf(r['symbol']) or {}
     return {
         'symbol': r['symbol'],
         'name': r['name'] or '',
+        'strategy_type': classification.get('strategy_type'),
+        'theme': classification.get('theme'),
         'tracking_index_name': r['tracking_index_name'],
         'distribution_policy': r['distribution_policy'],
         'inception_date': r['inception_date'].isoformat() if r['inception_date'] else None,
