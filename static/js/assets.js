@@ -443,11 +443,134 @@ function _fmtNum(v, digits = 2) {
   return v == null ? '—' : Number(v).toLocaleString(undefined, { maximumFractionDigits: digits });
 }
 
-function _assetInfoTile(label, value) {
-  return `<div class="bg-surface-container-lowest rounded-lg p-4 text-center">
+// 市值原始數字對台股大型股（動輒兆元）來說位數太多不好讀，改用中文單位簡寫。
+function _fmtMarketCap(v) {
+  if (v == null) return '—';
+  const abs = Math.abs(v);
+  if (abs >= 1e12) return (v / 1e12).toFixed(2) + '兆';
+  if (abs >= 1e8) return (v / 1e8).toFixed(2) + '億';
+  if (abs >= 1e4) return (v / 1e4).toFixed(1) + '萬';
+  return v.toLocaleString();
+}
+
+function _assetInfoTile(label, value, sub = '', valueSizeCls = 'text-lg') {
+  // 同一列裡有的格子多一行提示（sub）、有的沒有，grid 會把每列撐到最高格子的高度；
+  // 標題一律留在頂端對齊，沒有 sub 的格子則把數值置中在標題下方剩餘的空間裡，
+  // 不然數值會看起來卡在上緣、下面留一大塊空白。
+  const valueBlock = sub
+    ? `<div class="${valueSizeCls} font-bold text-tertiary-container">${value}</div>${sub}`
+    : `<div class="flex-1 flex flex-col justify-center"><div class="${valueSizeCls} font-bold text-tertiary-container">${value}</div></div>`;
+  return `<div class="bg-surface-container-lowest rounded-lg p-4 text-center flex flex-col">
     <div class="text-xs text-outline font-bold uppercase tracking-widest mb-1.5">${label}</div>
-    <div class="text-lg font-bold text-tertiary-container">${value}</div>
+    ${valueBlock}
   </div>`;
+}
+
+// 台股慣例是漲／增＝紅、跌／減＝綠，跟 _assetRowHtml 的 pctColor 用同一套配色，
+// 讓市值年變化、EPS年增率、營收成長這些提示跟排名列表的漲跌顏色是同一套邏輯。
+function _trendArrowColor(value) {
+  if (value == null) return { arrow: '', color: 'text-outline' };
+  if (value > 0) return { arrow: '▲', color: 'text-[#ba1a1a]' };
+  if (value < 0) return { arrow: '▼', color: 'text-[#1e8e3e]' };
+  return { arrow: '', color: 'text-outline' };
+}
+
+function _marketCapSubline(d) {
+  if (d.market_cap_change_1y == null) return '';
+  const { arrow, color } = _trendArrowColor(d.market_cap_change_1y);
+  const pct = Math.abs(d.market_cap_change_1y * 100).toFixed(1);
+  return `<div class="text-xs font-semibold mt-1"><span class="text-outline font-normal">近一年</span> <span class="${color}">${arrow} ${pct}%</span></div>`;
+}
+
+function _epsSubline(d) {
+  const parts = [];
+  if (d.eps_yoy_change != null) {
+    const { arrow, color } = _trendArrowColor(d.eps_yoy_change);
+    const pct = Math.abs(d.eps_yoy_change * 100).toFixed(1);
+    parts.push(`<span class="text-outline font-normal">近一年</span> <span class="${color}">${arrow} ${pct}%</span>`);
+  }
+  if (d.eps != null && d.eps < 0) {
+    parts.push(`<span class="text-error font-bold">虧損</span>`);
+  }
+  if (!parts.length) return '';
+  return `<div class="text-xs font-semibold mt-1">${parts.join(' ')}</div>`;
+}
+
+function _revenueGrowthMainValue(d) {
+  if (d.revenue_growth == null) return '—';
+  const pct = Number(d.revenue_growth) * 100;
+  const sign = pct > 0 ? '+' : '';
+  const { color } = _trendArrowColor(d.revenue_growth);
+  return `<span class="${color}">${sign}${pct.toFixed(1)}%</span>`;
+}
+
+// 跟同產業基準比，在 ±10% 以內算「接近」，避免兩個數字只差一點點卻被貼上「高於/低於」的標籤。
+function _industryCompareLabel(value, benchmark) {
+  if (value == null || !benchmark || benchmark.value == null) return null;
+  const diffRatio = (value - benchmark.value) / benchmark.value;
+  if (Math.abs(diffRatio) <= 0.1) return { arrow: '', color: 'text-outline', text: '接近產業平均' };
+  return diffRatio > 0
+    ? { arrow: '▲', color: 'text-[#ba1a1a]', text: '高於產業平均' }
+    : { arrow: '▼', color: 'text-[#1e8e3e]', text: '低於產業平均' };
+}
+
+function _peSubline(d) {
+  const cmp = _industryCompareLabel(d.pe_ratio, d.pe_industry_benchmark);
+  if (!cmp) return '';
+  return `<div class="text-xs font-semibold mt-1 ${cmp.color}">${cmp.arrow ? cmp.arrow + ' ' : ''}${cmp.text}</div>`;
+}
+
+// 金融業不適用的說明泡泡改用滑入/滑出顯示，且用 fixed 定位 + 動態掛到 <body> 下，
+// 跳脫負債比格子本身（那格外面還包著「查看更多」的滑出動畫容器，設了 overflow-hidden
+// 才能做出收合效果，泡泡如果還是格子內的子元素會被這層 overflow-hidden 裁掉），
+// 也不會撐大負債比那格的高度。
+function showDebtRatioFinanceNote(event) {
+  let note = document.getElementById('debt-ratio-finance-note');
+  if (!note) {
+    note = document.createElement('div');
+    note.id = 'debt-ratio-finance-note';
+    note.className = 'hidden fixed z-50 w-80 max-w-[calc(100vw-16px)] text-sm text-left bg-surface-container-high rounded-lg p-4 text-on-surface-variant leading-relaxed shadow-lg pointer-events-none';
+    note.innerHTML = `
+      <div id="debt-ratio-finance-note-arrow" class="absolute -top-1 -translate-x-1/2 w-2 h-2 bg-surface-container-high rotate-45"></div>
+      銀行、保險、金控等金融業的負債比天生偏高（存款、保單準備金在會計上都算負債），不適合跟一般產業比較。
+    `;
+    document.body.appendChild(note);
+  }
+  // 視窗沒展開全螢幕時，泡泡如果還是固定用觸發元素置中會超出畫面右（或左）邊，
+  // 所以改成量完泡泡實際寬度後夾在視窗範圍內，箭頭再另外算偏移量跟著指回觸發文字。
+  note.classList.remove('hidden');
+  const rect = event.currentTarget.getBoundingClientRect();
+  const margin = 8;
+  const noteWidth = note.offsetWidth;
+  const centerX = rect.left + rect.width / 2;
+  const left = Math.max(margin, Math.min(centerX - noteWidth / 2, window.innerWidth - noteWidth - margin));
+  note.style.left = `${left}px`;
+  note.style.top = `${rect.bottom + 8}px`;
+  note.style.transform = 'none';
+
+  const arrow = document.getElementById('debt-ratio-finance-note-arrow');
+  if (arrow) {
+    arrow.style.left = `${Math.max(12, Math.min(centerX - left, noteWidth - 12))}px`;
+  }
+}
+
+function hideDebtRatioFinanceNote() {
+  const note = document.getElementById('debt-ratio-finance-note');
+  if (note) note.classList.add('hidden');
+}
+
+function _debtRatioSubline(d) {
+  if (d.is_finance_industry) {
+    return `<div class="mt-1">
+      <span class="text-xs font-semibold text-outline inline-flex items-center justify-center gap-0.5 cursor-help"
+        onmouseenter="showDebtRatioFinanceNote(event)" onmouseleave="hideDebtRatioFinanceNote()">
+        金融業不適用<span class="material-symbols-outlined text-sm leading-none">info</span>
+      </span>
+    </div>`;
+  }
+  const cmp = _industryCompareLabel(d.debt_ratio, d.debt_ratio_industry_benchmark);
+  if (!cmp) return '';
+  return `<div class="text-xs font-semibold mt-1 ${cmp.color}">${cmp.arrow ? cmp.arrow + ' ' : ''}${cmp.text}</div>`;
 }
 
 function _assetEtfClassificationValue(d) {
@@ -459,9 +582,33 @@ function _assetEtfClassificationValue(d) {
   return d.strategy_type || d.theme || '—';
 }
 
+// 個股基本資料第二排（營收成長率／本益比／負債比）預設收合，只留產業／市值／EPS
+// 這種第一眼最想看的資訊，其餘靠「查看更多」按鈕展開，避免詳情頁一開就塞六格資訊。
+function _assetBasicInfoToggleBtn() {
+  return `<button type="button" onclick="toggleAssetBasicInfoMore()"
+    class="w-full flex items-center justify-center gap-1 py-2 mt-2 text-sm font-semibold text-outline hover:text-tertiary-container transition-colors">
+    <span id="asset-basic-info-toggle-label">查看更多</span>
+    <span class="material-symbols-outlined text-lg" id="asset-basic-info-toggle-icon">expand_more</span>
+  </button>`;
+}
+
+// 用 CSS grid 的 grid-template-rows: 0fr → 1fr 做滑出效果，不用 JS 量測高度；
+// 外層 wrap 負責動畫，裡面再包一層 overflow-hidden 才能在 0fr 時真的把內容裁掉。
+function toggleAssetBasicInfoMore() {
+  const wrap = document.getElementById('asset-basic-info-row2-wrap');
+  const label = document.getElementById('asset-basic-info-toggle-label');
+  const icon = document.getElementById('asset-basic-info-toggle-icon');
+  if (!wrap) return;
+  const willExpand = wrap.classList.contains('grid-rows-[0fr]');
+  wrap.classList.toggle('grid-rows-[0fr]', !willExpand);
+  wrap.classList.toggle('grid-rows-[1fr]', willExpand);
+  label.textContent = willExpand ? '收起清單' : '查看更多';
+  icon.textContent = willExpand ? 'expand_less' : 'expand_more';
+}
+
 function _renderAssetBasicInfoTiles(category, d) {
   if (category === 'tw_etf') {
-    return [
+    return `<div class="grid grid-cols-3 gap-3">${[
       _assetInfoTile('分類', _assetEtfClassificationValue(d)),
       _assetInfoTile('追蹤指數', d.tracking_index_name || '—'),
       _assetInfoTile('配息政策', d.distribution_policy || '—'),
@@ -470,13 +617,31 @@ function _renderAssetBasicInfoTiles(category, d) {
       _assetInfoTile('經理費', d.mgmt_fee != null ? d.mgmt_fee.toFixed(2) + '%' : '—'),
       _assetInfoTile('保管費', d.custody_fee != null ? d.custody_fee.toFixed(2) + '%' : '—'),
       _assetInfoTile('成立日', d.inception_date || '—'),
-    ].join('');
+    ].join('')}</div>`;
   }
-  return [
-    _assetInfoTile('市值', d.market_cap != null ? _fmtNum(d.market_cap, 0) : '—'),
-    _assetInfoTile('本益比', d.pe_ratio != null ? Number(d.pe_ratio).toFixed(1) : '—'),
-    _assetInfoTile('產業', d.industry || d.sector || '—'),
+  const row1 = [
+    _assetInfoTile('產業', d.industry || d.sector || '—', '', 'text-xl'),
+    _assetInfoTile(
+      '市值',
+      d.market_cap != null
+        ? `<span class="text-outline text-sm align-middle mr-1">NT$</span>${_fmtMarketCap(d.market_cap)}`
+        : '—',
+      _marketCapSubline(d)
+    ),
+    _assetInfoTile('EPS', d.eps != null ? Number(d.eps).toFixed(2) : '—', _epsSubline(d)),
   ].join('');
+  const row2 = [
+    _assetInfoTile('營收成長率', _revenueGrowthMainValue(d), '', 'text-xl'),
+    _assetInfoTile('本益比', d.pe_ratio != null ? Number(d.pe_ratio).toFixed(1) : '—', _peSubline(d)),
+    _assetInfoTile('負債比', d.debt_ratio != null ? Number(d.debt_ratio).toFixed(1) + '%' : '—', _debtRatioSubline(d)),
+  ].join('');
+  return `<div class="grid grid-cols-3 gap-3">${row1}</div>
+    <div id="asset-basic-info-row2-wrap" class="grid grid-rows-[0fr] transition-[grid-template-rows] duration-300 ease-in-out">
+      <div class="overflow-hidden">
+        <div class="grid grid-cols-3 gap-3 pt-3">${row2}</div>
+      </div>
+    </div>
+    ${_assetBasicInfoToggleBtn()}`;
 }
 
 async function _loadAssetBasicInfo(category, symbol) {
