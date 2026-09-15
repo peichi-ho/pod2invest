@@ -12,28 +12,60 @@ from django.db import connections
 
 from .industry_zh import translate_industry
 from .etf_classification import classify_etf
+from .industry_benchmarks import get_industry_benchmarks
 
 DB = "etfdb"
 
 
 def get_tw_stock_basic_info(symbol: str) -> dict | None:
     try:
-        info = yf.Ticker(f"{symbol}.TW").info
+        ticker = yf.Ticker(f"{symbol}.TW")
+        info = ticker.info
     except Exception:
         return None
     if not info:
         return None
+
+    # 產業分類、同業本益比／負債比基準都改用 TWSE 官方資料（見 industry_benchmarks.py）；
+    # 查不到（例如還沒被 TWSE 基本資料收錄的新股）才退回 yfinance 的 sector/industry 翻譯。
+    industry = get_industry_benchmarks(symbol)
+    debt_ratio = industry['own_debt_ratio'] if industry else None
+    if debt_ratio is None:
+        debt_ratio = _get_debt_ratio(ticker)
+
     return {
         'symbol': symbol,
         'name': info.get('longName') or info.get('shortName') or symbol,
         'market_cap': info.get('marketCap'),
+        'market_cap_change_1y': info.get('52WeekChange'),
         'pe_ratio': info.get('trailingPE'),
+        'pe_industry_benchmark': industry['pe_benchmark'] if industry else None,
+        'eps': info.get('trailingEps'),
+        'eps_yoy_change': info.get('earningsQuarterlyGrowth') if info.get('earningsQuarterlyGrowth') is not None else info.get('earningsGrowth'),
+        'revenue_growth': info.get('revenueGrowth'),
+        'debt_ratio': debt_ratio,
+        'debt_ratio_industry_benchmark': industry['debt_ratio_benchmark'] if industry else None,
+        'is_finance_industry': industry['is_finance'] if industry else False,
         'dividend_yield': info.get('dividendYield'),
         'week52_high': info.get('fiftyTwoWeekHigh'),
         'week52_low': info.get('fiftyTwoWeekLow'),
         'sector': info.get('sector'),
-        'industry': translate_industry(info.get('industry'), info.get('sector')),
+        'industry': industry['industry_name'] if industry else translate_industry(info.get('industry'), info.get('sector')),
     }
+
+
+def _get_debt_ratio(ticker: yf.Ticker) -> float | None:
+    """負債比（%）＝總負債／總資產，查資產負債表算，比 yfinance .info 的
+    debtToEquity（負債權益比，定義不同）更貼近台灣慣用的負債比。"""
+    try:
+        bs = ticker.balance_sheet
+        liabilities = bs.loc['Total Liabilities Net Minority Interest'].iloc[0]
+        assets = bs.loc['Total Assets'].iloc[0]
+        if not assets:
+            return None
+        return float(liabilities) / float(assets) * 100
+    except Exception:
+        return None
 
 
 _ETF_INFO_SQL = """
