@@ -44,8 +44,9 @@ def _to_int(s):
         return None
 
 
-def _parse_roc_date(roc_str: str):
-    """TWSE 回傳的 Date 是民國年，如 '1150814' -> 2026-08-14。解析失敗回傳 None。"""
+def parse_roc_date(roc_str: str):
+    """TWSE 回傳的 Date 是民國年，如 '1150814' -> 2026-08-14。解析失敗回傳 None。
+    共用給 etf_twse_meta.py 解析基金成立日／上市日，格式規則一樣。"""
     try:
         roc_str = str(roc_str)
         year = int(roc_str[:-4]) + 1911
@@ -78,7 +79,7 @@ def _fetch_and_parse():
         change_pct = (change_abs / prev_close * 100) if (change_abs is not None and prev_close) else None
 
         if as_of_date is None:
-            as_of_date = _parse_roc_date(item.get('Date'))
+            as_of_date = parse_roc_date(item.get('Date'))
 
         rows.append({
             'symbol': code,
