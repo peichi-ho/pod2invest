@@ -439,10 +439,6 @@ async function _fetchAndRenderAssetChart(symbol, period) {
   }
 }
 
-function _fmtNum(v, digits = 2) {
-  return v == null ? '—' : Number(v).toLocaleString(undefined, { maximumFractionDigits: digits });
-}
-
 // 市值原始數字對台股大型股（動輒兆元）來說位數太多不好讀，改用中文單位簡寫。
 function _fmtMarketCap(v) {
   if (v == null) return '—';
@@ -453,15 +449,22 @@ function _fmtMarketCap(v) {
   return v.toLocaleString();
 }
 
-function _assetInfoTile(label, value, sub = '', valueSizeCls = 'text-lg') {
+function _assetInfoTile(label, value, sub = '', valueSizeCls = 'text-lg', noteKey = '') {
   // 同一列裡有的格子多一行提示（sub）、有的沒有，grid 會把每列撐到最高格子的高度；
   // 標題一律留在頂端對齊，沒有 sub 的格子則把數值置中在標題下方剩餘的空間裡，
   // 不然數值會看起來卡在上緣、下面留一大塊空白。
   const valueBlock = sub
     ? `<div class="${valueSizeCls} font-bold text-tertiary-container">${value}</div>${sub}`
     : `<div class="flex-1 flex flex-col justify-center"><div class="${valueSizeCls} font-bold text-tertiary-container">${value}</div></div>`;
+  // 有 noteKey 的標題旁加 info 圖示，滑過去顯示該指標的白話說明（見 _ASSET_INFO_NOTES）。
+  const labelHtml = noteKey
+    ? `<span class="inline-flex items-center justify-center gap-0.5 cursor-help"
+        onmouseenter="showAssetInfoNote(event, '${noteKey}')" onmouseleave="hideAssetInfoNote()">
+        ${label}<span class="material-symbols-outlined text-sm leading-none normal-case">info</span>
+      </span>`
+    : label;
   return `<div class="bg-surface-container-lowest rounded-lg p-4 text-center flex flex-col">
-    <div class="text-xs text-outline font-bold uppercase tracking-widest mb-1.5">${label}</div>
+    <div class="text-xs text-outline font-bold uppercase tracking-widest mb-1.5">${labelHtml}</div>
     ${valueBlock}
   </div>`;
 }
@@ -496,12 +499,18 @@ function _epsSubline(d) {
   return `<div class="text-xs font-semibold mt-1">${parts.join(' ')}</div>`;
 }
 
-function _revenueGrowthMainValue(d) {
-  if (d.revenue_growth == null) return '—';
-  const pct = Number(d.revenue_growth) * 100;
+// 個股「營收成長率」、ETF「近一年報酬」都是同一種呈現：帶正負號的百分比＋台股漲跌色，
+// 抽成共用 helper 避免兩份幾乎一樣的格式化邏輯。
+function _pctMainValue(value) {
+  if (value == null) return '—';
+  const pct = Number(value) * 100;
   const sign = pct > 0 ? '+' : '';
-  const { color } = _trendArrowColor(d.revenue_growth);
+  const { color } = _trendArrowColor(value);
   return `<span class="${color}">${sign}${pct.toFixed(1)}%</span>`;
+}
+
+function _revenueGrowthMainValue(d) {
+  return _pctMainValue(d.revenue_growth);
 }
 
 // 跟同產業基準比，在 ±10% 以內算「接近」，避免兩個數字只差一點點卻被貼上「高於/低於」的標籤。
@@ -520,22 +529,107 @@ function _peSubline(d) {
   return `<div class="text-xs font-semibold mt-1 ${cmp.color}">${cmp.arrow ? cmp.arrow + ' ' : ''}${cmp.text}</div>`;
 }
 
-// 金融業不適用的說明泡泡改用滑入/滑出顯示，且用 fixed 定位 + 動態掛到 <body> 下，
-// 跳脫負債比格子本身（那格外面還包著「查看更多」的滑出動畫容器，設了 overflow-hidden
-// 才能做出收合效果，泡泡如果還是格子內的子元素會被這層 overflow-hidden 裁掉），
-// 也不會撐大負債比那格的高度。
-function showDebtRatioFinanceNote(event) {
-  let note = document.getElementById('debt-ratio-finance-note');
+// 個股基本資料各指標的白話說明：這是什麼、上升/下降或高於/低於產業平均大致代表什麼。
+// 目的是讓使用者看到「近一年 ▲120%」「高於產業平均」這類提示時知道該怎麼解讀，
+// 所以刻意寫成一般通則，並提醒單一指標不能直接判斷好壞。
+const _ASSET_INFO_NOTES = {
+  market_cap: {
+    title: '市值',
+    body: '股價 × 發行股數，代表市場認為這家公司整體值多少錢，也反映公司規模大小。',
+    points: [
+      ['▲ 近一年上升', '市場給的評價變高（主要來自股價上漲），通常是正面訊號。', 'up'],
+      ['▼ 近一年下降', '評價縮水，可能是獲利轉差或市場信心減弱，值得了解原因。', 'down'],
+    ],
+    footer: '大型股通常較穩定、波動較小；小型股成長空間可能較大，但風險也較高。',
+  },
+  eps: {
+    title: 'EPS（每股盈餘）',
+    body: '公司每一股賺了多少錢，是衡量獲利能力最直接的指標。',
+    points: [
+      ['▲ 比去年同期上升', '獲利成長，通常是好事。', 'up'],
+      ['▼ 比去年同期下降', '獲利衰退，要留意是一次性因素還是本業轉弱。', 'down'],
+      ['負數', '代表公司處於虧損。', 'warn'],
+    ],
+  },
+  revenue_growth: {
+    title: '營收成長率',
+    body: '最近一季營收跟去年同期相比增加了多少，反映公司生意有沒有變好。',
+    points: [
+      ['▲ 正數', '賣得比去年多，業務在擴張，通常是好事。', 'up'],
+      ['▼ 負數', '營收衰退，可能是產業景氣轉弱或競爭加劇。', 'down'],
+    ],
+    footer: '營收成長不等於更賺錢，建議搭配 EPS 一起看。',
+  },
+  pe_ratio: {
+    title: '本益比',
+    body: '股價 ÷ EPS，約略代表用現在的價格買進，要靠幾年的獲利才能「回本」，常用來判斷股價貴或便宜。',
+    points: [
+      ['▲ 高於產業平均', '市場對它的成長期待較高，但也可能代表股價偏貴。', 'up'],
+      ['▼ 低於產業平均', '股價相對便宜，但也可能是市場不看好它的前景。', 'down'],
+    ],
+    footer: '本益比沒有絕對的好壞，要搭配公司成長性判斷；虧損時無法計算。',
+  },
+  debt_ratio: {
+    title: '負債比',
+    body: '總負債 ÷ 總資產，代表公司的資產中有多少是借來的，用來看財務是否穩健。',
+    points: [
+      ['▲ 高於產業平均', '借錢比例較高，景氣變差或利率上升時壓力較大，風險較高。', 'up'],
+      ['▼ 低於產業平均', '財務結構較穩健，通常是好事；但過低也可能代表資金運用較保守。', 'down'],
+    ],
+    footer: '銀行、保險等金融業的負債比天生偏高，不適用這個比較。',
+  },
+  debt_ratio_finance: {
+    body: '銀行、保險、金控等金融業的負債比天生偏高（存款、保單準備金在會計上都算負債），不適合跟一般產業比較。',
+  },
+};
+
+// 泡泡裡每條解讀的配色跟格子裡的提示同一套：上升/高於＝紅、下降/低於＝綠（台股慣例），
+// 虧損另外用警示色；底色用同色系的淡色，讓使用者一眼對上格子裡看到的是哪一條。
+const _ASSET_INFO_NOTE_TONES = {
+  up: { text: 'text-[#ba1a1a]', bg: 'bg-[#ba1a1a]/10' },
+  down: { text: 'text-[#1e8e3e]', bg: 'bg-[#1e8e3e]/10' },
+  warn: { text: 'text-error', bg: 'bg-error/10' },
+};
+
+function _assetInfoNoteHtml(key) {
+  const n = _ASSET_INFO_NOTES[key];
+  if (!n) return '';
+  const title = n.title
+    ? `<div class="flex items-center gap-1 font-bold text-base text-tertiary-container mb-1">
+        <span class="material-symbols-outlined text-lg leading-none">info</span>${n.title}
+      </div>`
+    : '';
+  const points = n.points
+    ? `<ul class="mt-2 space-y-1.5">${n.points.map(([k, v, tone]) => {
+        const t = _ASSET_INFO_NOTE_TONES[tone] || { text: 'text-on-surface', bg: 'bg-surface-container' };
+        return `<li class="rounded-md px-2.5 py-1.5 ${t.bg}"><div class="font-bold ${t.text}">${k}</div><div>${v}</div></li>`;
+      }).join('')}</ul>`
+    : '';
+  const footer = n.footer
+    ? `<div class="mt-2 flex items-start gap-1 text-xs text-outline">
+        <span class="material-symbols-outlined text-sm leading-none">lightbulb</span><span>${n.footer}</span>
+      </div>`
+    : '';
+  return `${title}<div>${n.body}</div>${points}${footer}`;
+}
+
+// 說明泡泡用滑入/滑出顯示，且用 fixed 定位 + 動態掛到 <body> 下，跳脫格子本身
+// （第二排格子外面還包著「查看更多」的滑出動畫容器，設了 overflow-hidden 才能做出
+// 收合效果，泡泡如果還是格子內的子元素會被這層 overflow-hidden 裁掉），也不會撐大格子高度。
+// 所有指標共用同一個泡泡元素，只依 key 換內容。
+function showAssetInfoNote(event, key) {
+  let note = document.getElementById('asset-info-note');
   if (!note) {
     note = document.createElement('div');
-    note.id = 'debt-ratio-finance-note';
-    note.className = 'hidden fixed z-50 w-80 max-w-[calc(100vw-16px)] text-sm text-left bg-surface-container-high rounded-lg p-4 text-on-surface-variant leading-relaxed shadow-lg pointer-events-none';
+    note.id = 'asset-info-note';
+    note.className = 'hidden fixed z-50 w-80 max-w-[calc(100vw-16px)] text-sm text-left normal-case tracking-normal font-normal bg-surface-container-high rounded-lg p-4 text-on-surface-variant leading-relaxed shadow-lg pointer-events-none';
     note.innerHTML = `
-      <div id="debt-ratio-finance-note-arrow" class="absolute -top-1 -translate-x-1/2 w-2 h-2 bg-surface-container-high rotate-45"></div>
-      銀行、保險、金控等金融業的負債比天生偏高（存款、保單準備金在會計上都算負債），不適合跟一般產業比較。
+      <div id="asset-info-note-arrow" class="absolute -top-1 -translate-x-1/2 w-2 h-2 bg-surface-container-high rotate-45"></div>
+      <div id="asset-info-note-content"></div>
     `;
     document.body.appendChild(note);
   }
+  document.getElementById('asset-info-note-content').innerHTML = _assetInfoNoteHtml(key);
   // 視窗沒展開全螢幕時，泡泡如果還是固定用觸發元素置中會超出畫面右（或左）邊，
   // 所以改成量完泡泡實際寬度後夾在視窗範圍內，箭頭再另外算偏移量跟著指回觸發文字。
   note.classList.remove('hidden');
@@ -548,14 +642,14 @@ function showDebtRatioFinanceNote(event) {
   note.style.top = `${rect.bottom + 8}px`;
   note.style.transform = 'none';
 
-  const arrow = document.getElementById('debt-ratio-finance-note-arrow');
+  const arrow = document.getElementById('asset-info-note-arrow');
   if (arrow) {
     arrow.style.left = `${Math.max(12, Math.min(centerX - left, noteWidth - 12))}px`;
   }
 }
 
-function hideDebtRatioFinanceNote() {
-  const note = document.getElementById('debt-ratio-finance-note');
+function hideAssetInfoNote() {
+  const note = document.getElementById('asset-info-note');
   if (note) note.classList.add('hidden');
 }
 
@@ -563,7 +657,7 @@ function _debtRatioSubline(d) {
   if (d.is_finance_industry) {
     return `<div class="mt-1">
       <span class="text-xs font-semibold text-outline inline-flex items-center justify-center gap-0.5 cursor-help"
-        onmouseenter="showDebtRatioFinanceNote(event)" onmouseleave="hideDebtRatioFinanceNote()">
+        onmouseenter="showAssetInfoNote(event, 'debt_ratio_finance')" onmouseleave="hideAssetInfoNote()">
         金融業不適用<span class="material-symbols-outlined text-sm leading-none">info</span>
       </span>
     </div>`;
@@ -574,12 +668,24 @@ function _debtRatioSubline(d) {
 }
 
 function _assetEtfClassificationValue(d) {
-  // 分類先靠 etf_classification.py 的手動對照表（etfdb 撈不到完整清單前的過渡做法），
+  // strategy_type 優先來自 etf_classification.py 的手動對照表（市值型/高股息型…），
+  // 沒有維護到的標的由後端退回 TWSE 官方基金類型字串（見 basic_info.py），所以
+  // strategy_type 一定會有值；theme（大盤/多元、科技…）只有手動對照表才有。
   // 兩個維度都有值才疊兩行顯示，只有一個就單行顯示，都沒有就是「—」。
   if (d.strategy_type && d.theme) {
     return `${d.strategy_type}<div class="text-xs font-normal normal-case tracking-normal text-outline mt-1">${d.theme}</div>`;
   }
   return d.strategy_type || d.theme || '—';
+}
+
+// 主動式基金沒有追蹤指數，「主動式基金」「（無追蹤指數）」分兩行顯示，第二行用跟
+// _assetEtfClassificationValue() 的 theme 副標一樣的字體大小/灰色，維持同一套視覺語言。
+function _etfTrackingIndexValue(d) {
+  if (d.tracking_index_name) return escapeHtml(d.tracking_index_name);
+  if (d.is_active_fund) {
+    return `主動式基金<div class="text-xs font-normal normal-case tracking-normal text-outline mt-1">（無追蹤指數）</div>`;
+  }
+  return '—';
 }
 
 // 個股基本資料第二排（營收成長率／本益比／負債比）預設收合，只留產業／市值／EPS
@@ -608,16 +714,18 @@ function toggleAssetBasicInfoMore() {
 
 function _renderAssetBasicInfoTiles(category, d) {
   if (category === 'tw_etf') {
-    return `<div class="grid grid-cols-3 gap-3">${[
-      _assetInfoTile('分類', _assetEtfClassificationValue(d)),
-      _assetInfoTile('追蹤指數', d.tracking_index_name || '—'),
-      _assetInfoTile('配息政策', d.distribution_policy || '—'),
-      _assetInfoTile('規模 (AUM)', d.aum != null ? _fmtNum(d.aum, 0) : '—'),
-      _assetInfoTile('總開支率 TER', d.ter != null ? d.ter.toFixed(2) + '%' : '—'),
-      _assetInfoTile('經理費', d.mgmt_fee != null ? d.mgmt_fee.toFixed(2) + '%' : '—'),
-      _assetInfoTile('保管費', d.custody_fee != null ? d.custody_fee.toFixed(2) + '%' : '—'),
-      _assetInfoTile('成立日', d.inception_date || '—'),
-    ].join('')}</div>`;
+    // 只留三格都是真的抓得到資料的欄位（投資類型/追蹤指數/資產規模），只有一排不用
+    // 「查看更多」收合。近一年報酬/配息/費用率先拿掉——見 basic_info.py 的註解，
+    // 之後有資料源要恢復顯示時，比照台股個股那樣分兩排即可。
+    const row1 = [
+      _assetInfoTile('投資類型', _assetEtfClassificationValue(d), '', 'text-xl'),
+      _assetInfoTile('追蹤指數', _etfTrackingIndexValue(d)),
+      _assetInfoTile(
+        '資產規模',
+        d.aum != null ? `<span class="text-outline text-sm align-middle mr-1">NT$</span>${_fmtMarketCap(d.aum)}` : '—'
+      ),
+    ].join('');
+    return `<div class="grid grid-cols-3 gap-3">${row1}</div>`;
   }
   const row1 = [
     _assetInfoTile('產業', d.industry || d.sector || '—', '', 'text-xl'),
@@ -626,14 +734,16 @@ function _renderAssetBasicInfoTiles(category, d) {
       d.market_cap != null
         ? `<span class="text-outline text-sm align-middle mr-1">NT$</span>${_fmtMarketCap(d.market_cap)}`
         : '—',
-      _marketCapSubline(d)
+      _marketCapSubline(d),
+      'text-lg',
+      'market_cap'
     ),
-    _assetInfoTile('EPS', d.eps != null ? Number(d.eps).toFixed(2) : '—', _epsSubline(d)),
+    _assetInfoTile('EPS', d.eps != null ? Number(d.eps).toFixed(2) : '—', _epsSubline(d), 'text-lg', 'eps'),
   ].join('');
   const row2 = [
-    _assetInfoTile('營收成長率', _revenueGrowthMainValue(d), '', 'text-xl'),
-    _assetInfoTile('本益比', d.pe_ratio != null ? Number(d.pe_ratio).toFixed(1) : '—', _peSubline(d)),
-    _assetInfoTile('負債比', d.debt_ratio != null ? Number(d.debt_ratio).toFixed(1) + '%' : '—', _debtRatioSubline(d)),
+    _assetInfoTile('營收成長率', _revenueGrowthMainValue(d), '', 'text-xl', 'revenue_growth'),
+    _assetInfoTile('本益比', d.pe_ratio != null ? Number(d.pe_ratio).toFixed(1) : '—', _peSubline(d), 'text-lg', 'pe_ratio'),
+    _assetInfoTile('負債比', d.debt_ratio != null ? Number(d.debt_ratio).toFixed(1) + '%' : '—', _debtRatioSubline(d), 'text-lg', 'debt_ratio'),
   ].join('');
   return `<div class="grid grid-cols-3 gap-3">${row1}</div>
     <div id="asset-basic-info-row2-wrap" class="grid grid-rows-[0fr] transition-[grid-template-rows] duration-300 ease-in-out">
