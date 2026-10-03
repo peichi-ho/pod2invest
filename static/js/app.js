@@ -3,8 +3,13 @@ let _discoverCache = [];
 let _pageHistory = [];
 let _accuracyCache = null;
 let _podcastImages = {};  // show_name → image_url
-let _backOverride = null; // 下一次 goBack() 要去的頁面，用一次就清掉（例如「查看完整摘要」這種
-                           // 跳到 deep-dive 但內容跟共用頁面堆疊裡記的不一樣的入口，避免返回鍵跳錯集數）
+let _backOverride = null;       // 下一次 goBack() 要去的頁面，用一次就清掉（例如「查看完整摘要」這種
+                                 // 跳到 deep-dive 但內容跟共用頁面堆疊裡記的不一樣的入口，避免返回鍵跳錯集數）
+let _backOverrideOwner = null;  // _backOverride 綁定的頁面（設定當下要跳去顯示的目的頁）
+let _backOverrideArmed = false; // 是否已經真的顯示過 owner 頁一次。使用者如果沒有在 owner 頁真的按
+                                 // 返回、而是改用底部導覽列等其他方式離開，_backOverride 會一直卡著沒
+                                 // 被消耗掉，之後在任何頁面按返回都會被劫持跳去過期的目標——showPage()
+                                 // 偵測到「已經 armed 過、卻又被呼叫」時會把過期的 override 清掉，見下方。
 
 async function loadPodcastImages() {
   try {
@@ -57,6 +62,8 @@ function goBack() {
   if (_backOverride) {
     const target = _backOverride;
     _backOverride = null;
+    _backOverrideOwner = null;
+    _backOverrideArmed = false;
     // showPage() 進來時本來就會把同一個頁面名稱再推一次，這裡順便清掉避免多按一次沒反應
     if (_pageHistory.length && _pageHistory[_pageHistory.length - 1] === target) {
       _pageHistory.pop();
@@ -71,12 +78,26 @@ function goBack() {
 }
 
 function showPage(page) {
+  // _backOverride 已經在 owner 頁顯示過一次（armed），卻又被呼叫到 showPage()——代表使用者
+  // 不是按返回鍵離開 owner 頁的（例如改點底部導覽列），override 沒被正常消耗掉、已經過期，
+  // 清掉避免它卡住污染到接下來任何一頁的返回鍵。真正設定 override 當下呼叫的那次 showPage()
+  // 因為 armed 還是 false，不會被這裡誤清掉。
+  if (_backOverride && _backOverrideArmed) {
+    _backOverride = null;
+    _backOverrideOwner = null;
+    _backOverrideArmed = false;
+  }
+
   const currentActive = document.querySelector('.page.active');
   if (currentActive) {
     const currentId = currentActive.id.replace('page-', '');
     if (currentId !== page) _pageHistory.push(currentId);
   }
   _renderPage(page);
+
+  if (_backOverride && page === _backOverrideOwner) {
+    _backOverrideArmed = true;
+  }
 }
 
 function _renderPage(page) {
@@ -94,6 +115,15 @@ function _renderPage(page) {
   document.getElementById('ai-input-bar').classList.add('hidden');
   if (page === 'ai' && typeof onAiPageShow === 'function') onAiPageShow();
   if (page === 'assets' && typeof onAssetsPageShow === 'function') onAssetsPageShow();
+  if (page === 'profile' && typeof onProfilePageShow === 'function') onProfilePageShow();
+
+  // 計算機的返回鍵：從底部導覽列直接點進來（等於在切分頁，不是從某個頁面鑽進來）
+  // 就不需要顯示，其他入口（深度剖析頁的「試算」、Profile 頁的「New Sim」）都是直接呼叫
+  // showPage('calculator')，不會經過 navHome()，所以這個旗標不會被誤設。用完立刻消耗掉，
+  // 不會影響下一次導覽。
+  const calcBackBtn = document.getElementById('calc-back-btn');
+  if (calcBackBtn) calcBackBtn.classList.toggle('hidden', page === 'calculator' && !!window._enteredViaBottomNav);
+  window._enteredViaBottomNav = false;
 }
 
 // ── Accuracy cache (shared by discover, rankings, podcaster) ──
@@ -154,6 +184,29 @@ async function _ensureFavoritesCache() {
   return _favoritesLoadingPromise;
 }
 
+// ── 訪客登入提示（見 templates/base.html 的 #login-prompt-overlay）─────
+// Header 右上角頭像按鈕的入口——訪客沒有帳號，Profile 頁大部分內容都要靠
+// /api/accounts/... 這幾支 API，訪客打這些 API 一律回 401，直接放行進去只會看到
+// 卡在「載入中...」、一堆空白區塊的頁面，體驗很差。跟 openDeepDive() 用同一套
+// 登入提示，不用另外設計一套訊息。
+function openProfilePage() {
+  if (typeof window.IS_AUTHENTICATED !== 'undefined' && !window.IS_AUTHENTICATED) {
+    showLoginPrompt();
+    return;
+  }
+  showPage('profile');
+}
+
+function showLoginPrompt() {
+  const el = document.getElementById('login-prompt-overlay');
+  if (el) el.classList.remove('hidden');
+}
+
+function closeLoginPrompt() {
+  const el = document.getElementById('login-prompt-overlay');
+  if (el) el.classList.add('hidden');
+}
+
 // 極簡共用提示訊息，「尚未支援」跟收藏失敗都用這個，全專案目前沒有 toast 元件。
 function showToast(msg) {
   let el = document.getElementById('app-toast');
@@ -169,9 +222,23 @@ function showToast(msg) {
   el._hideTimer = setTimeout(() => { el.style.opacity = '0'; }, 2000);
 }
 
+// renderAssetNameStar() 在 discover.js/rankings.js/deep_dive.js 都有用，名稱文字統一
+// 點進來走這支——記一下「點下去之前在哪一頁」，讓 Assets 詳情頁的「返回列表」（見
+// assets.js 的 closeAssetDetail）能透過 _backOverride 機制真的回到原本那一頁，
+// 而不是每次都固定收合回 Assets 清單頁。跟 discover.js 的 _goToAssetFromSearch()
+// 是同一套機制，只是那邊是手動設、這裡集中在共用入口處理，不用每個呼叫點都重複設一次。
 function onAssetNameClick(ticker, displayName) {
   const resolved = resolveAssetCategory(ticker);
   if (!resolved) { showToast('尚未支援此標的'); return; }
+
+  const currentActive = document.querySelector('.page.active');
+  const currentPage = currentActive ? currentActive.id.replace('page-', '') : null;
+  if (currentPage && currentPage !== 'assets') {
+    _backOverride = currentPage;
+    _backOverrideOwner = 'assets';
+    _backOverrideArmed = false;
+  }
+
   showPage('assets');
   openAssetDetail({ symbol: resolved.symbol, category: resolved.category, name: displayName || resolved.symbol });
 }
@@ -252,10 +319,183 @@ function renderAssetNameStar(ticker, displayName, nameClass = '') {
       class="asset-star-btn inline-flex items-center justify-center w-6 h-6 flex-shrink-0 ${isFav ? 'text-[#d97f12]' : 'text-outline/40'} hover:opacity-70 transition-opacity">
       <span class="material-symbols-outlined text-base" style="font-variation-settings:'FILL' ${isFav ? 1 : 0}">star</span>
     </button>` : '';
-  return `<span class="inline-flex items-center gap-1">
+  // 這個 span 是塞進外層純文字的 inline-flex：vertical-align:middle 是用外層宣告字體
+  // （Epilogue，只有拉丁字）的 x-height 去算置中位置，但顯示的中文字實際上是瀏覽器
+  // fallback 到系統中文字體去畫的，兩者字體度量對不上，星星按鈕會比文字稍微偏低。
+  // 疊一個 -2px 的位移校正，實測跟中文字視覺置中最接近（見 app.js 對齊測試）。
+  return `<span class="inline-flex items-center gap-1 align-middle -translate-y-0.5">
     <span class="${nameClass} cursor-pointer hover:underline decoration-dotted underline-offset-2" onclick="event.stopPropagation(); onAssetNameClick('${safeTicker}', '${safeDisplay}')">${safeName}</span>
     ${star}
   </span>`;
+}
+
+// ── Favorites（收藏單集）── Profile 頁 Saved Insights ／ Deep Dive 書籤按鈕共用
+let _episodeFavoritesCache = null;
+let _episodeFavoritesLoadingPromise = null;
+
+async function _ensureEpisodeFavoritesCache() {
+  if (_episodeFavoritesCache) return _episodeFavoritesCache;
+  if (_episodeFavoritesLoadingPromise) return _episodeFavoritesLoadingPromise;
+  _episodeFavoritesLoadingPromise = (async () => {
+    try {
+      const res = await fetch('/api/accounts/favorites/episodes/');
+      const data = res.ok ? await res.json() : { summary_ids: [] };
+      _episodeFavoritesCache = new Set(data.summary_ids || []);
+    } catch (e) {
+      _episodeFavoritesCache = new Set();
+    }
+    return _episodeFavoritesCache;
+  })();
+  return _episodeFavoritesLoadingPromise;
+}
+
+function _paintEpisodeBookmarkIcon(summaryId, isFav) {
+  document.querySelectorAll(`[data-ep-fav-id="${summaryId}"]`).forEach(el => {
+    const icon = el.querySelector('.material-symbols-outlined');
+    if (icon) icon.style.fontVariationSettings = `'FILL' ${isFav ? 1 : 0}`;
+    el.classList.toggle('text-[#d97f12]', isFav);
+    el.classList.toggle('text-outline/40', !isFav);
+  });
+}
+
+function _setEpisodeFavoriteState(summaryId, isFav) {
+  if (isFav) _episodeFavoritesCache.add(summaryId); else _episodeFavoritesCache.delete(summaryId);
+  _paintEpisodeBookmarkIcon(summaryId, isFav);
+  window.dispatchEvent(new CustomEvent('pod2invest:episode-favorite-toggled', {
+    detail: { summaryId, favorited: isFav },
+  }));
+}
+
+async function toggleEpisodeFavorite(btnEl, summaryId) {
+  await _ensureEpisodeFavoritesCache();
+  const wasFav = _episodeFavoritesCache.has(summaryId);
+  const nextFav = !wasFav;
+  _setEpisodeFavoriteState(summaryId, nextFav);
+  btnEl.disabled = true;
+  try {
+    const res = await fetch('/api/accounts/favorites/episodes/toggle/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ summary_id: summaryId }),
+    });
+    if (res.status === 401) { _setEpisodeFavoriteState(summaryId, wasFav); showToast('請先登入才能收藏'); return; }
+    if (!res.ok) { _setEpisodeFavoriteState(summaryId, wasFav); showToast('操作失敗，請稍後再試'); return; }
+    const data = await res.json();
+    if (data.favorited !== nextFav) _setEpisodeFavoriteState(summaryId, data.favorited);
+  } catch (e) {
+    _setEpisodeFavoriteState(summaryId, wasFav);
+    showToast('網路錯誤，請稍後再試');
+  } finally {
+    btnEl.disabled = false;
+  }
+}
+
+// 書籤造型收藏按鈕，deep_dive.js（單集日期旁邊）／profile.js 共用。
+function renderEpisodeBookmarkButton(summaryId, cls = 'w-8 h-8') {
+  const isFav = !!(_episodeFavoritesCache && _episodeFavoritesCache.has(summaryId));
+  return `<button type="button" data-ep-fav-id="${summaryId}" onclick="event.stopPropagation(); toggleEpisodeFavorite(this, ${summaryId})"
+    class="inline-flex items-center justify-center ${cls} flex-shrink-0 ${isFav ? 'text-[#d97f12]' : 'text-outline/40'} hover:opacity-70 transition-opacity"
+    title="收藏這一集">
+    <span class="material-symbols-outlined text-xl" style="font-variation-settings:'FILL' ${isFav ? 1 : 0}">bookmark</span>
+  </button>`;
+}
+
+// ── Favorites（收藏／追蹤節目）── Profile 頁最愛 Podcast ／ Rankings・Podcaster 頁共用
+let _podcastFavoritesCache = null;
+let _podcastFavoritesLoadingPromise = null;
+
+async function _ensurePodcastFavoritesCache() {
+  if (_podcastFavoritesCache) return _podcastFavoritesCache;
+  if (_podcastFavoritesLoadingPromise) return _podcastFavoritesLoadingPromise;
+  _podcastFavoritesLoadingPromise = (async () => {
+    try {
+      const res = await fetch('/api/accounts/favorites/podcasts/');
+      const data = res.ok ? await res.json() : { podcasters: [] };
+      _podcastFavoritesCache = new Set(data.podcasters || []);
+    } catch (e) {
+      _podcastFavoritesCache = new Set();
+    }
+    return _podcastFavoritesCache;
+  })();
+  return _podcastFavoritesLoadingPromise;
+}
+
+// 用 dataset 比對而不是動態組 CSS attribute selector，避免節目名稱裡的特殊字元
+// （引號等）把 querySelectorAll 的選擇器字串弄壞。
+function _paintPodcastFavoriteIcon(podcaster, isFav) {
+  document.querySelectorAll('[data-podcast-fav]').forEach(el => {
+    if (el.dataset.podcastFav !== podcaster) return;
+    const icon = el.querySelector('.material-symbols-outlined');
+    if (icon) icon.style.fontVariationSettings = `'FILL' ${isFav ? 1 : 0}`;
+    el.classList.toggle('text-[#d97f12]', isFav);
+    el.classList.toggle('text-outline/40', !isFav);
+  });
+}
+
+function _setPodcastFavoriteState(podcaster, isFav) {
+  if (isFav) _podcastFavoritesCache.add(podcaster); else _podcastFavoritesCache.delete(podcaster);
+  _paintPodcastFavoriteIcon(podcaster, isFav);
+  window.dispatchEvent(new CustomEvent('pod2invest:podcast-favorite-toggled', {
+    detail: { podcaster, favorited: isFav },
+  }));
+}
+
+async function toggleFavoritePodcast(btnEl, podcaster) {
+  await _ensurePodcastFavoritesCache();
+  const wasFav = _podcastFavoritesCache.has(podcaster);
+  const nextFav = !wasFav;
+  _setPodcastFavoriteState(podcaster, nextFav);
+  btnEl.disabled = true;
+  try {
+    const res = await fetch('/api/accounts/favorites/podcasts/toggle/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ podcaster }),
+    });
+    if (res.status === 401) { _setPodcastFavoriteState(podcaster, wasFav); showToast('請先登入才能收藏'); return; }
+    if (!res.ok) { _setPodcastFavoriteState(podcaster, wasFav); showToast('操作失敗，請稍後再試'); return; }
+    const data = await res.json();
+    if (data.favorited !== nextFav) _setPodcastFavoriteState(podcaster, data.favorited);
+  } catch (e) {
+    _setPodcastFavoriteState(podcaster, wasFav);
+    showToast('網路錯誤，請稍後再試');
+  } finally {
+    btnEl.disabled = false;
+  }
+}
+
+function renderPodcastFollowButton(podcaster, cls = 'w-8 h-8') {
+  const isFav = !!(_podcastFavoritesCache && _podcastFavoritesCache.has(podcaster));
+  const safe = (podcaster || '').replace(/'/g, "\\'");
+  return `<button type="button" data-podcast-fav="${escapeHtml(podcaster)}" onclick="event.stopPropagation(); toggleFavoritePodcast(this, '${safe}')"
+    class="inline-flex items-center justify-center ${cls} flex-shrink-0 ${isFav ? 'text-[#d97f12]' : 'text-outline/40'} hover:opacity-70 transition-opacity"
+    title="收藏這個節目">
+    <span class="material-symbols-outlined text-xl" style="font-variation-settings:'FILL' ${isFav ? 1 : 0}">bookmark</span>
+  </button>`;
+}
+
+// ── 使用者資料（大頭貼／使用者名稱）── Header 圓框跟 Profile 頁共用 ─────────
+let _userProfile = null;
+
+async function loadUserProfile() {
+  try {
+    const res = await fetch('/api/accounts/profile/');
+    if (!res.ok) { _userProfile = null; return null; }
+    _userProfile = await res.json();
+    renderHeaderAvatar();
+    return _userProfile;
+  } catch (e) {
+    _userProfile = null;
+    return null;
+  }
+}
+
+function renderHeaderAvatar() {
+  const el = document.getElementById('header-avatar-inner');
+  if (!el || !_userProfile) return;
+  el.innerHTML = _userProfile.avatar_base64
+    ? `<img src="${_userProfile.avatar_base64}" alt="${escapeHtml(_userProfile.username || '')}" class="w-full h-full object-cover"/>`
+    : `<div class="w-full h-full flex items-center justify-center" style="background:#e5e3d9"><span class="material-symbols-outlined text-white/70 text-2xl" style="font-variation-settings:'FILL' 1">person</span></div>`;
 }
 
 // ── Boot ─────────────────────────────────────────────────────
@@ -264,7 +504,7 @@ document.addEventListener('DOMContentLoaded', () => {
   loadDiscoverData();
   loadHotTags();
   loadRankings();
-  loadPreferences();
+  loadUserProfile();
 
   // disc-audio progress
   const discAudio = document.getElementById('disc-audio');

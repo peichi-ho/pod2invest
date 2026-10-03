@@ -80,6 +80,7 @@ async function loadRankings() {
       fetch('/api/summaries/podcasters/?limit=50'),
       fetch(`/api/summaries/accuracy-ranking/${sectorParam}`),
       loadPodcastImages(),
+      _ensurePodcastFavoritesCache(),
     ]);
 
     const podData = podRes.ok ? await podRes.json() : [];
@@ -144,7 +145,10 @@ async function loadRankings() {
               <p class="text-xl text-on-tertiary-container mt-1">${epStr}</p>
               <p class="text-xl font-bold text-on-tertiary-container/80 mt-0.5">準確率 ${accDisp}</p>
             </div>
-            <button onclick="openRankedPodcaster(${origIdx})" class="px-4 py-1.5 bg-on-primary-container text-white rounded-full font-label text-xl font-bold uppercase tracking-widest hover:opacity-90 transition-all">More</button>
+            <div class="flex items-center gap-1.5">
+              <button onclick="openRankedPodcaster(${origIdx})" class="px-4 py-1.5 bg-on-primary-container text-white rounded-full font-label text-xl font-bold uppercase tracking-widest hover:opacity-90 transition-all">More</button>
+              ${renderPodcastFollowButton(p.podcaster, 'w-8 h-8')}
+            </div>
           </div>`;
       } else {
         return `
@@ -158,7 +162,10 @@ async function loadRankings() {
               <p class="text-xl text-outline mt-1">${epStr}</p>
               <p class="text-xl font-bold text-secondary mt-0.5">準確率 ${accDisp}</p>
             </div>
-            <button onclick="openRankedPodcaster(${origIdx})" class="px-4 py-1.5 border border-secondary text-secondary rounded-full font-label text-xl font-bold uppercase tracking-widest hover:bg-secondary hover:text-white transition-all">More</button>
+            <div class="flex items-center gap-1.5">
+              <button onclick="openRankedPodcaster(${origIdx})" class="px-4 py-1.5 border border-secondary text-secondary rounded-full font-label text-xl font-bold uppercase tracking-widest hover:bg-secondary hover:text-white transition-all">More</button>
+              ${renderPodcastFollowButton(p.podcaster, 'w-8 h-8')}
+            </div>
           </div>`;
       }
     }).join('');
@@ -185,7 +192,10 @@ async function loadRankings() {
               <p class="text-base text-outline font-medium">${epStr} · 準確率 ${accDisp}</p>
             </div>
           </div>
-          <button onclick="openRankedPodcaster(${dataIdx})" class="px-5 py-2 border border-secondary text-secondary rounded-full font-label text-base font-bold uppercase tracking-widest hover:bg-secondary hover:text-white transition-all">More</button>
+          <div class="flex items-center gap-2 flex-shrink-0">
+            <button onclick="openRankedPodcaster(${dataIdx})" class="px-5 py-2 border border-secondary text-secondary rounded-full font-label text-base font-bold uppercase tracking-widest hover:bg-secondary hover:text-white transition-all">More</button>
+            ${renderPodcastFollowButton(p.podcaster, 'w-9 h-9')}
+          </div>
         </div>`;
     }).join('') || '<p class="text-outline text-sm">暫無更多資料</p>';
 
@@ -200,8 +210,11 @@ async function showPodcaster(name, episodeCount, accuracy, bgColor, icon) {
   document.getElementById('podcaster-name').textContent = name;
   document.getElementById('podcaster-episode-count').textContent = episodeCount;
   document.getElementById('podcaster-accuracy').textContent = accuracy;
-  document.getElementById('podcaster-avatar-inner').style.background = bgColor;
-  document.getElementById('podcaster-avatar-icon').textContent = icon;
+  // 用真正的節目封面圖（有的話），沒有才退回背景色+icon——不要固定只顯示 icon。
+  document.getElementById('podcaster-avatar-inner').innerHTML = podcastAvatar(name, bgColor, icon);
+  _ensurePodcastFavoritesCache().then(() => {
+    document.getElementById('podcaster-favorite-slot').innerHTML = renderPodcastFollowButton(name, 'w-9 h-9');
+  });
 
   const epList   = document.getElementById('podcaster-episodes-list');
   const viewList = document.getElementById('podcaster-views-list');
@@ -230,8 +243,8 @@ async function showPodcaster(name, episodeCount, accuracy, bgColor, icon) {
           return `
             <div onclick="openDeepDive(${ep.id})" class="flex items-center justify-between p-4 bg-surface-container-low rounded-lg hover:bg-surface-container-highest transition-all cursor-pointer">
               <div class="flex items-center gap-4">
-                <div class="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0" style="background:${bgColor}">
-                  <span class="material-symbols-outlined text-white/80 text-lg" style="font-variation-settings:'FILL' 1">${icon}</span>
+                <div class="w-10 h-10 rounded-lg overflow-hidden flex-shrink-0">
+                  ${podcastAvatar(name, bgColor, icon)}
                 </div>
                 <div>
                   <h4 class="font-bold text-tertiary-container text-sm leading-snug line-clamp-2">${title}</h4>

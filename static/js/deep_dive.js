@@ -3,13 +3,22 @@ let ddSummaryData = {};
 let ddCurrentMode = 'novice';
 let _ddAutoPlay   = false;
 let _ddTargetBacktestId = null;
+let _ddTargetArgTerms   = null;  // 從搜尋結果點進來時帶的命中字串，見 renderDdModeContent()
 
-function openDeepDive(summaryId, autoPlay = false, targetBacktestId = null) {
+function openDeepDive(summaryId, autoPlay = false, targetBacktestId = null, targetArgTerms = null) {
+  // 訪客（未登入）可以自由瀏覽首頁/排行榜/搜尋，但打開單集深度摘要要先登入——
+  // openDeepDive() 是全站唯一「開啟單集」的入口，所有進入點（推薦卡片、繼續閱讀、
+  // 節目集數列表、搜尋結果…）都會經過這裡，擋這裡就等於全部擋到，不用逐一修改呼叫端。
+  if (typeof window.IS_AUTHENTICATED !== 'undefined' && !window.IS_AUTHENTICATED) {
+    showLoginPrompt();
+    return;
+  }
   currentSummaryId = summaryId;
   ddSummaryData    = {};
   ddCurrentMode    = (_userPrefs && _userPrefs.level === 'Expert') ? 'pro' : 'novice';
   _ddAutoPlay      = autoPlay;
   _ddTargetBacktestId = targetBacktestId;
+  _ddTargetArgTerms   = targetArgTerms;
   showPage('deep-dive');
   loadDeepDive(summaryId);
   loadMindmap(summaryId);
@@ -145,7 +154,7 @@ function renderDdModeContent(mode) {
     }
 
     argHtml += `
-      <div class="${isLast ? '' : 'border-b border-outline-variant/30'} py-8 px-2">
+      <div class="${isLast ? '' : 'border-b border-outline-variant/30'} py-8 px-2 rounded-lg" data-arg-index="${i}">
         <div class="flex flex-col md:flex-row gap-5">
           <div class="md:w-28 flex-shrink-0">
             <button onclick="playAtTimestamp('${timestamp}')" class="bg-secondary-container text-tertiary-container font-bold px-4 py-2 rounded-full text-sm hover:scale-95 transition-transform flex items-center gap-2">
@@ -178,6 +187,37 @@ function renderDdModeContent(mode) {
       </div>`;
   });
   document.getElementById('dd-arguments').innerHTML = argHtml || '<p class="text-outline text-sm">無資料</p>';
+
+  // 從搜尋結果點進來、且目前這個 mode 剛好是命中的那份資料時，直接定位到命中的
+  // Critical Thesis Points 卡片：展開（如果被收合）＋捲過去＋短暫高亮，不用使用者
+  // 自己在整集內容裡找搜尋詞出現在哪裡（跟 dd-viewpoints 那邊 _ddTargetBacktestId
+  // 的「直接跳到該觀點段落」是同一個概念）。這裡在前端重新比對而不是直接用後端算好的
+  // index，是因為 novice/pro 兩個 mode 是不同筆資料、topic 順序不一定一樣，只有拿
+  // 目前實際渲染出來的這份 args 重新找，才能保證跳的位置是對的。
+  if (_ddTargetArgTerms && _ddTargetArgTerms.length) {
+    const termsLower = _ddTargetArgTerms.map(t => t.toLowerCase());
+    const idx = args.findIndex(arg => {
+      const haystacks = [arg.topic || '', arg.summary || ''];
+      (arg.key_data || []).forEach(kd => { haystacks.push(kd.label || ''); haystacks.push(kd.value || ''); });
+      const blob = haystacks.join(' ').toLowerCase();
+      return termsLower.some(t => blob.includes(t));
+    });
+    if (idx !== -1) {
+      _ddTargetArgTerms = null; // 找到了，只跳這一次，避免使用者手動切 mode 時又跳一次
+      const targetCard = document.querySelector(`#dd-arguments [data-arg-index="${idx}"]`);
+      if (targetCard) {
+        const full    = targetCard.querySelector('.thesis-full');
+        const moreBtn = targetCard.querySelector('.btn-label')?.closest('button');
+        // 命中內容如果被摺進「Read More」裡，直接展開，不要讓使用者還要自己點開才看得到
+        if (full && full.classList.contains('hidden') && moreBtn) toggleThesis(moreBtn);
+        requestAnimationFrame(() => {
+          targetCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          targetCard.classList.add('ring-2', 'ring-[#d97f12]', 'ring-offset-2');
+          setTimeout(() => targetCard.classList.remove('ring-2', 'ring-[#d97f12]', 'ring-offset-2'), 2000);
+        });
+      }
+    }
+  }
 }
 
 function updateDdModeButtons() {
@@ -228,7 +268,17 @@ async function loadDeepDive(summaryId) {
       dateSpan.textContent = ' · ' + s.published_at.slice(0, 10);
       podcasterEl.appendChild(dateSpan);
     }
+    // 節目日期右邊的書籤收藏按鈕——await 快取才畫，不然已收藏的集數會先閃一下未收藏的樣式。
+    await _ensureEpisodeFavoritesCache();
+    podcasterEl.insertAdjacentHTML('beforeend', renderEpisodeBookmarkButton(s.id, 'w-6 h-6 -mt-1 ml-1.5 align-middle'));
     document.getElementById('dd-one-sentence').textContent = '"' + s.one_sentence_summary + '"';
+
+    // 打開單集頁面自動記一筆觀看紀錄（同一集重複打開後端會 upsert，不會累加重複項目）。
+    fetch('/api/accounts/history/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ summary_id: s.id }),
+    }).catch(() => {});
 
     const audioEl  = document.getElementById('dd-audio');
     const playerEl = document.getElementById('dd-audio-player');
@@ -353,9 +403,9 @@ async function loadDeepDive(summaryId) {
 
     document.getElementById('dd-ticker-section').classList.add('hidden');
 
-    if (_discoverCache.length) renderRelated(_discoverCache, summaryId);
+    if (_discoverCache.length) renderRelated(_discoverCache, summaryId, s.tags);
     else fetch('/api/summaries/?limit=30').then(r => r.json())
-      .then(all => { _discoverCache = dedupeByEpisode(all); renderRelated(_discoverCache, summaryId); })
+      .then(all => { _discoverCache = dedupeByEpisode(all); renderRelated(_discoverCache, summaryId, s.tags); })
       .catch(() => {});
 
   } catch (e) {
@@ -364,9 +414,23 @@ async function loadDeepDive(summaryId) {
 }
 
 // ── Related ───────────────────────────────────────────────────
-function renderRelated(list, currentId) {
+// 依「領域標籤」重疊數排序，不是單純取最新幾篇——重疊越多代表越相關（跟 discover.js
+// 依偏好排序用的是同一套 tags 詞彙，如台股/總體經濟/個股/ETF 等）。完全沒有重疊的
+// 集數會被排到最後，等於自動退回「最新優先」當保底，不會因為篩太嚴格而開天窗。
+function _tagOverlapCount(tagsA, tagsB) {
+  if (!tagsA || !tagsB || !tagsA.length || !tagsB.length) return 0;
+  const setB = new Set(tagsB);
+  return tagsA.reduce((n, t) => n + (setB.has(t) ? 1 : 0), 0);
+}
+
+function renderRelated(list, currentId, currentTags) {
   const el       = document.getElementById('dd-related-grid');
-  const filtered = list.filter(s => s.id !== currentId).slice(0, 3);
+  const filtered = list
+    .filter(s => s.id !== currentId)
+    .map(s => ({ s, overlap: _tagOverlapCount(currentTags, s.tags) }))
+    .sort((a, b) => b.overlap - a.overlap)
+    .slice(0, 3)
+    .map(x => x.s);
   if (!filtered.length) { el.innerHTML = '<p class="text-outline text-sm col-span-3">暫無資料</p>'; return; }
   el.innerHTML = filtered.map(s => {
     const st    = cardStyle(s.podcaster || s.source_filename);
@@ -374,9 +438,7 @@ function renderRelated(list, currentId) {
     return `
       <div onclick="openDeepDive(${s.id})" class="bg-surface-container-lowest rounded-lg overflow-hidden group hover:shadow-xl transition-shadow border border-outline-variant/10 cursor-pointer">
         <div class="h-48 overflow-hidden">
-          <div class="w-full h-full flex flex-col items-center justify-center gap-2" style="background:${st.bg}">
-            <span class="material-symbols-outlined text-white/70 text-3xl" style="font-variation-settings:'FILL' 1">${st.icon}</span>
-          </div>
+          ${podcastAvatar(s.podcaster, st.bg, st.icon)}
         </div>
         <div class="p-6">
           <span class="font-label text-[10px] font-bold text-secondary uppercase tracking-widest mb-2 block">${s.podcaster || ''}</span>
@@ -697,63 +759,3 @@ function _ddArgAddAI(msgBox, text, followUps, chatEl) {
   msgBox.scrollTop = msgBox.scrollHeight;
 }
 
-// ── Glossary ──────────────────────────────────────────────────
-window._selectedText = '';
-
-document.addEventListener('mouseup', (e) => {
-  if (document.getElementById('glossary-card').contains(e.target)) return;
-  if (document.getElementById('glossary-btn').contains(e.target)) return;
-  if (!document.getElementById('page-deep-dive').classList.contains('active')) {
-    document.getElementById('glossary-btn').classList.add('hidden');
-    return;
-  }
-  const sel  = window.getSelection();
-  const text = sel ? sel.toString().trim() : '';
-  if (text.length >= 2 && text.length <= 20) {
-    window._selectedText = text;
-    const range = sel.getRangeAt(0).getBoundingClientRect();
-    const btn   = document.getElementById('glossary-btn');
-    btn.style.top  = (range.bottom + 6) + 'px';
-    btn.style.left = range.left + 'px';
-    btn.classList.remove('hidden');
-  } else {
-    document.getElementById('glossary-btn').classList.add('hidden');
-    window._selectedText = '';
-  }
-});
-
-async function lookupGlossary() {
-  document.getElementById('glossary-btn').classList.add('hidden');
-  const q = window._selectedText;
-  if (!q) return;
-  const card = document.getElementById('glossary-card');
-  try {
-    const res     = await fetch(`/api/glossary/lookup/?q=${encodeURIComponent(q)}`);
-    const data    = await res.json();
-    const results = data.results || [];
-    if (!results.length) {
-      document.getElementById('gc-term').textContent = `「${q}」`;
-      document.getElementById('gc-short').textContent = '目前尚無此詞的解釋。';
-      document.getElementById('gc-long').classList.add('hidden');
-      document.getElementById('gc-more-btn').classList.add('hidden');
-    } else {
-      const t = results[0];
-      document.getElementById('gc-term').textContent  = t.term;
-      document.getElementById('gc-short').textContent = t.short_definition;
-      document.getElementById('gc-long').textContent  = t.long_definition || '';
-      document.getElementById('gc-long').classList.add('hidden');
-      document.getElementById('gc-more-btn').classList.toggle('hidden', !t.long_definition);
-    }
-    card.style.display = 'block';
-  } catch (err) {
-    document.getElementById('gc-term').textContent  = '載入失敗';
-    document.getElementById('gc-short').textContent = err.message || '請稍後再試。';
-    document.getElementById('gc-more-btn').classList.add('hidden');
-    card.style.display = 'block';
-  }
-}
-
-function showGlossaryLong() {
-  document.getElementById('gc-long').classList.remove('hidden');
-  document.getElementById('gc-more-btn').classList.add('hidden');
-}
