@@ -14,18 +14,25 @@ def make_client(api_key: str = "") -> genai.Client:
     project = os.getenv("VERTEX_PROJECT_ID", "").strip()
     location = os.getenv("VERTEX_LOCATION", "us-central1").strip()
 
+    # 實測發現偶爾會遇到某次API呼叫卡住沒有回應也沒有拋出例外(不會觸發上面
+    # gemini_generate_with_retry的重試邏輯，因為根本沒有例外可以catch)，曾經
+    # 造成背景批次工作卡住超過1小時毫無進度。設定timeout讓卡住的請求會確實
+    # 拋出例外，才能被retry邏輯接住。
+    _timeout_ms = 120_000
+
     if project:
         # Vertex AI 模式：透過 GOOGLE_APPLICATION_CREDENTIALS 自動驗證
         return genai.Client(
             vertexai=True,
             project=project,
             location=location,
+            http_options=types.HttpOptions(timeout=_timeout_ms),
         )
 
     # 原本的 Gemini API key 模式
     return genai.Client(
         api_key=api_key,
-        http_options=types.HttpOptions(api_version="v1beta"),
+        http_options=types.HttpOptions(api_version="v1beta", timeout=_timeout_ms),
     )
 
 

@@ -14,6 +14,515 @@ let _lastResolvedInputText = null;  // 股票代號輸入框最後一次成功�
 let _stockInfoInFlight = null;      // { forInput, promise }：目前正在跑的查詢，避免 blur/Enter/試算同時觸發重複打 API
 let _pendingCandidates = [];        // 輸入模糊時（例如「電子」）後端回傳的候選股票清單，等使用者選一個
 
+// ── 試算模擬器：歷史拔靴逐步模擬(B方案，apps/calculator/services/bootstrap_path_simulator.py) ──
+// 每一步都從真實歷史日報酬率隨機抽樣，真的跑N次路徑，不是套公式算出來的。
+// 跟下面 /preview/bootstrap-path/ 完全獨立測試頁用的是同一套後端API跟前端邏輯，
+// 這裡是正式接進calculator.html後的版本。
+const B_API_URL = '/api/calculator/bootstrap-path-preview/';
+const B_EPISODES_URL = '/api/calculator/bootstrap-path-preview/episodes/';
+const B_SOURCE_TEXT_URL = '/api/calculator/bootstrap-path-preview/source-text/';
+
+let mode = 'manual';
+let episodes = [];
+let lastResult = null;
+let sourceTextRequestSeq = 0;  // 避免快速切換節目時，舊的source-text回應蓋掉新選的那一集
+
+function setMode(m) {
+  mode = m;
+  document.getElementById('mode-btn-manual').classList.toggle('active', m === 'manual');
+  document.getElementById('mode-btn-episode').classList.toggle('active', m === 'episode');
+  document.getElementById('panel-manual').classList.toggle('hidden', m !== 'manual');
+  document.getElementById('panel-episode').classList.toggle('hidden', m !== 'episode');
+}
+
+function syncFromSlider(key) {
+  document.getElementById('in-' + key).value = document.getElementById('slider-' + key).value;
+  document.getElementById('lbl-' + key).textContent = document.getElementById('slider-' + key).value;
+}
+function syncFromInput(key) {
+  const v = document.getElementById('in-' + key).value;
+  document.getElementById('slider-' + key).value = v;
+  document.getElementById('lbl-' + key).textContent = v;
+}
+// 風險程度(低/中/高)、市場立場(看空/中立/看多)這兩組用三顆按鈕取代滑桿+數字框，
+// 底層數值(0/0.5/1、-1/0/1)還是寫進同一個in-risk/in-macro(改成hidden input)，
+// runSimulation()讀值的地方完全不用改。
+function setScoreButton(key, value) {
+  document.getElementById('in-' + key).value = value;
+  document.querySelectorAll('#btns-' + key + ' button').forEach(btn => {
+    btn.classList.toggle('active', parseFloat(btn.dataset.value) === value);
+  });
+}
+// 跟三顆按鈕(低/中/高、看空/中立/看多)用同一套文字，純文字顯示(例如選集數後的說明列)
+// 也統一改用這兩個函式，不要再直接印0.5、-1這種原始數字給使用者看。
+function _riskWordLabel(v) {
+  if (v >= 1) return '高';
+  if (v >= 0.5) return '中';
+  return '低';
+}
+function _macroWordLabel(v) {
+  if (v > 0) return '看多';
+  if (v < 0) return '看空';
+  return '中立';
+}
+function syncInvestedFromSlider() {
+  document.getElementById('in-invested').value = document.getElementById('slider-invested').value;
+}
+function syncInvestedFromInput() {
+  const v = document.getElementById('in-invested').value;
+  if (v !== '') document.getElementById('slider-invested').value = v;
+}
+
+async function loadEpisodes() {
+  try {
+    const resp = await fetch(B_EPISODES_URL);
+    const data = await resp.json();
+    episodes = data.episodes || [];
+    const sel = document.getElementById('in-episode');
+    sel.innerHTML = episodes.map(e =>
+      `<option value="${e.score_id}">${e.published_at || '未知日期'}　${e.asset_name}(${e.ticker})　${e.podcaster || ''}</option>`
+    ).join('');
+    if (_pendingCalcTarget) {
+      _applyPendingCalcTarget();
+    } else if (episodes.length) {
+      onEpisodeChange();
+    }
+  } catch (e) {
+    const info = document.getElementById('episode-info');
+    if (info) info.textContent = '載入節目清單失敗: ' + e;
+  }
+}
+loadEpisodes();
+
+// 從 deep_dive「試算」按鈕跳轉過來時，優先用episode_id+ticker精準配對(同一集裡常常
+// 不只討論一支股票，只比episode_id會抓到同一集裡隨便哪一筆、不一定是使用者點的那支
+// ——這是原本就有的bug，只是要同一集裡兩支股票都已經進過清單才會顯現出來)；配不到
+// 就退而求其次只配ticker(可能配到別集同一支股票的資料)。這兩種都配不到，原本會直接
+// 放棄、默默維持上一次選到的舊資料，使用者完全看不出來哪裡出錯(這一集這支股票剛好
+// 還沒被批次分類算過分數時就會這樣)——改成配不到時呼叫 ensure-episode-score 即時算
+// 一次，跟另一套「podcast驅動情境」系統(_loadScenarioForEpisode)的fallback邏輯一致，
+// 不要讓兩套入口對同一種情況的處理不一樣。
+async function _applyPendingCalcTarget() {
+  if (!_pendingCalcTarget || !episodes.length) return;
+  const target = _pendingCalcTarget;
+  _pendingCalcTarget = null;
+  let match = episodes.find(e => target.episodeId != null && e.episode_id === target.episodeId && e.ticker === target.ticker)
+    || episodes.find(e => e.ticker === target.ticker);
+  if (!match && target.episodeId != null) {
+    try {
+      const res = await fetch(`/api/calculator/ensure-episode-score/?episode_id=${encodeURIComponent(target.episodeId)}&ticker=${encodeURIComponent(target.ticker)}`);
+      const data = await res.json();
+      if (res.ok) {
+        match = data;
+        if (!episodes.some(e => e.score_id === data.score_id)) {
+          episodes = [data, ...episodes];
+          const sel = document.getElementById('in-episode');
+          const opt = document.createElement('option');
+          opt.value = data.score_id;
+          opt.textContent = `${data.published_at || '未知日期'}　${data.asset_name}(${data.ticker})　${data.podcaster || ''}`;
+          sel.insertBefore(opt, sel.firstChild);
+        }
+      } else {
+        console.warn('ensure-episode-score失敗:', data.error);
+      }
+    } catch (e) {
+      console.warn('ensure-episode-score呼叫失敗:', e);
+    }
+  }
+  if (match) {
+    document.getElementById('in-episode').value = match.score_id;
+  }
+  onEpisodeChange();
+}
+
+function onEpisodeChange() {
+  const scoreId = document.getElementById('in-episode').value;
+  const ep = episodes.find(e => String(e.score_id) === String(scoreId));
+  if (!ep) return;
+  let info = `${ep.asset_name}(${ep.ticker})　發布於${ep.published_at}　風險：${_riskWordLabel(ep.risk_score)}　立場：${_macroWordLabel(ep.macro_score)}`;
+  if (ep.default_months) info += `　｜　該集backtesting時間範圍約${ep.default_months}個月`;
+  document.getElementById('episode-info').textContent = info;
+
+  const sourceLink = document.getElementById('episode-source-link');
+  if (ep.summary_id) {
+    sourceLink.href = '/?open_summary=' + ep.summary_id;
+    sourceLink.classList.remove('hidden');
+  } else {
+    sourceLink.classList.add('hidden');
+  }
+
+  setScoreButton('risk', ep.risk_score);
+  setScoreButton('macro', ep.macro_score);
+
+  if (ep.default_months) {
+    const m = Math.min(60, ep.default_months);
+    document.getElementById('in-months').value = m;
+    document.getElementById('slider-months').value = Math.min(36, m);
+    document.getElementById('lbl-months').textContent = m;
+  }
+
+  document.getElementById('episode-rationale').textContent = ep.rationale || '(無)';
+  loadSourceText(scoreId);
+}
+
+async function loadSourceText(scoreId) {
+  const mySeq = ++sourceTextRequestSeq;
+  const el = document.getElementById('episode-source-text');
+  el.textContent = '載入中...';
+  try {
+    const resp = await fetch(B_SOURCE_TEXT_URL + '?score_id=' + encodeURIComponent(scoreId));
+    const data = await resp.json();
+    if (mySeq !== sourceTextRequestSeq) return;
+    el.textContent = resp.ok ? (data.full_context || data.topic_summary || '(這集沒有找到對應的原始段落)') : ('載入失敗: ' + data.error);
+  } catch (e) {
+    if (mySeq !== sourceTextRequestSeq) return;
+    el.textContent = '載入失敗: ' + e;
+  }
+}
+
+async function runSimulation() {
+  const months = document.getElementById('in-months').value;
+  const risk = document.getElementById('in-risk').value;
+  const macro = document.getElementById('in-macro').value;
+  const nsim = document.getElementById('in-nsim').value;
+
+  const statusEl = document.getElementById('status-text');
+  const panel = document.getElementById('result-panel');
+  const placeholder = document.getElementById('calc-placeholder');
+  statusEl.textContent = '跑模擬中...(要抓歷史股價+跑模擬，可能要幾秒)';
+  panel.classList.add('hidden');
+
+  const params = new URLSearchParams({ months, risk_score: risk, macro_score: macro, n_simulations: nsim });
+  if (mode === 'episode') {
+    const scoreId = document.getElementById('in-episode').value;
+    if (!scoreId) { statusEl.textContent = '請先選一集'; return; }
+    params.set('score_id', scoreId);
+  } else {
+    const ticker = document.getElementById('in-ticker').value.trim();
+    if (!ticker) { statusEl.textContent = '請輸入股票代號'; return; }
+    params.set('ticker', ticker);
+  }
+
+  try {
+    const resp = await fetch(B_API_URL + '?' + params.toString());
+    const data = await resp.json();
+    if (!resp.ok) {
+      statusEl.textContent = '錯誤: ' + (data.error || resp.statusText);
+      return;
+    }
+    statusEl.textContent = '';
+    lastResult = data;
+    renderResult(data);
+    placeholder.classList.add('hidden');
+    placeholder.hidden = true; // space-y-6只認原生hidden屬性，不認class="hidden"，
+    // 只加class的話space-y-6還是會把它當成「存在」的前一個手足元素，在它跟
+    // result-panel之間插入多的上邊距，造成兩欄卡片頂端對不齊
+    panel.classList.remove('hidden');
+  } catch (e) {
+    statusEl.textContent = '請求失敗: ' + e;
+  }
+}
+
+function fmtPct(x) {
+  return (x * 100 >= 0 ? '+' : '') + (x * 100).toFixed(1) + '%';
+}
+function fmtMoney(x) {
+  return 'NT$' + Math.round(x).toLocaleString();
+}
+
+function renderResult(data) {
+  document.getElementById('stat-start').textContent = data.start_price.toFixed(2);
+  // 「保守情境/積極情境」這兩個數字用conservative_return/aggressive_return(P25/P75)，
+  // 不是p10_return/p90_return——灰色區間帶(下面renderChart用的band_low/band_high)
+  // 維持P10~P90，兩者刻意脫鉤，見bootstrap_path_simulator_v2.py docstring。
+  document.getElementById('stat-p10').textContent = fmtPct(data.conservative_return);
+  document.getElementById('stat-median').textContent = fmtPct(data.median_return);
+  document.getElementById('stat-p90').textContent = fmtPct(data.aggressive_return);
+
+  renderChart(data);
+  renderMoneyStats();
+}
+
+function renderChart(data) {
+  const svg = document.getElementById('chart-svg');
+  svg.innerHTML = '';
+  const ns = 'http://www.w3.org/2000/svg';
+
+  const W = 700, H = 320, padL = 60, padR = 20, padT = 16, padB = 30;
+  const steps = data.time_steps;
+  const n = steps.length;
+
+  const actualVals = (data.actual_line || []).filter(v => v != null);
+  const allVals = [...data.band_low, ...data.band_high, ...data.conservative_path, ...data.aggressive_path, ...actualVals];
+  const vMin = Math.min(...allVals);
+  const vMax = Math.max(...allVals);
+  const pad = (vMax - vMin) * 0.05 || vMax * 0.1;
+  const lo = vMin - pad, hi = vMax + pad;
+
+  const toX = i => padL + (i / (n - 1)) * (W - padL - padR);
+  const toXByMonth = m => padL + (m / data.months) * (W - padL - padR);
+  const toY = v => padT + (1 - (v - lo) / (hi - lo)) * (H - padT - padB);
+
+  function pathFor(arr) {
+    return arr.map((v, i) => `${i === 0 ? 'M' : 'L'}${toX(i).toFixed(1)},${toY(v).toFixed(1)}`).join(' ');
+  }
+
+  for (let k = 0; k <= 4; k++) {
+    const v = lo + (hi - lo) * k / 4;
+    const y = toY(v);
+    const line = document.createElementNS(ns, 'line');
+    line.setAttribute('x1', padL); line.setAttribute('x2', W - padR);
+    line.setAttribute('y1', y); line.setAttribute('y2', y);
+    line.setAttribute('stroke', '#e5e3d9'); line.setAttribute('stroke-width', '1');
+    svg.appendChild(line);
+    const text = document.createElementNS(ns, 'text');
+    text.setAttribute('x', padL - 8); text.setAttribute('y', y + 3);
+    text.setAttribute('text-anchor', 'end'); text.setAttribute('font-family', 'Manrope');
+    text.setAttribute('font-size', '11'); text.setAttribute('font-weight', '600'); text.setAttribute('fill', '#717879');
+    text.textContent = v.toFixed(0);
+    svg.appendChild(text);
+  }
+
+  const bandD = pathFor(data.band_high) + ' L' + toX(n - 1).toFixed(1) + ',' + toY(data.band_low[n - 1]).toFixed(1) + ' '
+    + data.band_low.slice().reverse().map((v, i) => `L${toX(n - 1 - i).toFixed(1)},${toY(v).toFixed(1)}`).join(' ') + ' Z';
+  const bandPath = document.createElementNS(ns, 'path');
+  bandPath.setAttribute('d', bandD);
+  bandPath.setAttribute('fill', '#113236');
+  bandPath.setAttribute('fill-opacity', '0.10');
+  bandPath.setAttribute('stroke', 'none');
+  svg.appendChild(bandPath);
+
+  function drawLine(pathArr, color, dash, width) {
+    const path = document.createElementNS(ns, 'path');
+    path.setAttribute('d', pathFor(pathArr));
+    path.setAttribute('fill', 'none');
+    path.setAttribute('stroke', color);
+    path.setAttribute('stroke-width', width || '2.5');
+    path.setAttribute('stroke-linecap', 'round');
+    if (dash) path.setAttribute('stroke-dasharray', dash);
+    svg.appendChild(path);
+  }
+
+  // 保守/積極這兩條線用跟統計卡片(stat-p10/stat-p90)一樣的顏色(#ba1a1a紅/#286671青)，
+  // 全站對「保守=紅、積極=青」維持一致的視覺語言；虛線、線寬比基準線細一點，
+  // 避免跟基準線搶視覺重心，但又要比灰色區間帶的邊緣更顯眼、看得出這是特別標出來的兩條線。
+  drawLine(data.conservative_path, '#ba1a1a', '5,3', '2');
+  drawLine(data.aggressive_path, '#286671', '5,3', '2');
+  drawLine(data.median_path, '#113236');
+
+  const legend = document.getElementById('chart-legend');
+  legend.innerHTML = `
+    <span class="flex items-center gap-2"><svg width="22" height="4"><line x1="0" y1="2" x2="22" y2="2" stroke="#113236" stroke-width="2.5"/></svg><span class="font-bold text-tertiary-container">模擬基準</span></span>
+    <span class="flex items-center gap-2"><svg width="22" height="4"><line x1="0" y1="2" x2="22" y2="2" stroke="#286671" stroke-width="2" stroke-dasharray="5,3"/></svg><span class="text-outline">積極情境(P75)</span></span>
+    <span class="flex items-center gap-2"><svg width="22" height="4"><line x1="0" y1="2" x2="22" y2="2" stroke="#ba1a1a" stroke-width="2" stroke-dasharray="5,3"/></svg><span class="text-outline">保守情境(P25)</span></span>
+    <span class="flex items-center gap-2"><span class="inline-block w-3 h-2 rounded-sm" style="background:#113236;opacity:0.10;border:1px solid #113236"></span><span class="text-outline">P10~P90統計區間帶</span></span>
+  `;
+
+  if (data.actual_line && data.actual_line.some(v => v != null)) {
+    let segStart = null;
+    let d = '';
+    data.actual_line.forEach((v, i) => {
+      if (v == null) { segStart = null; return; }
+      d += (segStart === null ? 'M' : 'L') + toXByMonth(i).toFixed(1) + ',' + toY(v).toFixed(1) + ' ';
+      segStart = i;
+    });
+    const actualPath = document.createElementNS(ns, 'path');
+    actualPath.setAttribute('d', d.trim());
+    actualPath.setAttribute('fill', 'none');
+    actualPath.setAttribute('stroke', '#d97f12');
+    actualPath.setAttribute('stroke-width', '2.5');
+    actualPath.setAttribute('stroke-linecap', 'round');
+    svg.appendChild(actualPath);
+    legend.innerHTML += `<span class="flex items-center gap-2"><svg width="22" height="4"><line x1="0" y1="2" x2="22" y2="2" stroke="#d97f12" stroke-width="2.5"/></svg><span class="font-bold" style="color:#d97f12">真實股價</span></span>`;
+  }
+
+  const totalMonths = data.months;
+  const xLabelCount = Math.min(6, totalMonths);
+  for (let k = 0; k <= xLabelCount; k++) {
+    const monthVal = Math.round(totalMonths * k / xLabelCount);
+    const idx = Math.round((n - 1) * k / xLabelCount);
+    const text = document.createElementNS(ns, 'text');
+    text.setAttribute('x', toX(idx)); text.setAttribute('y', H - padB + 16);
+    text.setAttribute('text-anchor', 'middle'); text.setAttribute('font-family', 'Manrope');
+    text.setAttribute('font-size', '11'); text.setAttribute('font-weight', '600'); text.setAttribute('fill', '#717879');
+    text.textContent = `第${monthVal}月`;
+    svg.appendChild(text);
+  }
+
+  // 游標懸浮的判斷點是「每個月」，跟上面畫時間軸文字標籤(疏一點，例如每2個月一個)
+  // 是兩件獨立的事——標籤維持原本疏密，但滑鼠移到任何一個月份都要有反應。
+  const hoverPoints = [];
+  for (let m = 0; m <= totalMonths; m++) {
+    const idx = Math.round((n - 1) * m / totalMonths);
+    hoverPoints.push({ monthVal: m, idx });
+  }
+
+  attachChartHover(svg, ns, data, hoverPoints, toX, toY, { W, H, padL, padR, padT, padB });
+}
+
+// 滑鼠移到圖表上時，每個月份都會顯示那個時間點的保守/基準/積極情境數值；
+// 如果那個月剛好有真實股價資料(當集模式、已經走到/過了那個月)，多顯示一行
+// 真實股價，沒有資料的月份就不顯示這行，不是每個月都一定有真實股價可比較。
+function attachChartHover(svg, ns, data, hoverPoints, toX, toY, dims) {
+  const { W, H, padT, padB, padL, padR } = dims;
+
+  const guide = document.createElementNS(ns, 'line');
+  guide.setAttribute('y1', padT); guide.setAttribute('y2', H - padB);
+  guide.setAttribute('stroke', '#717879'); guide.setAttribute('stroke-width', '1');
+  guide.setAttribute('stroke-dasharray', '3,3');
+  guide.setAttribute('opacity', '0');
+  svg.appendChild(guide);
+
+  function makeDot(color) {
+    const dot = document.createElementNS(ns, 'circle');
+    dot.setAttribute('r', '4');
+    dot.setAttribute('fill', color);
+    dot.setAttribute('stroke', '#fff');
+    dot.setAttribute('stroke-width', '1.5');
+    dot.setAttribute('opacity', '0');
+    svg.appendChild(dot);
+    return dot;
+  }
+  // P10/P90是區間帶的邊緣，本身不是重點數字，用中性灰色；保守(P25)/積極(P75)
+  // 才是真正有語意的兩個點，顏色跟統計卡片(stat-p10/stat-p90)、圖表線條保持一致。
+  const dotP10band = makeDot('#a8a49a');
+  const dotMedian = makeDot('#113236');
+  const dotP90band = makeDot('#a8a49a');
+  const dotConservative = makeDot('#ba1a1a');
+  const dotAggressive = makeDot('#286671');
+  const dotActual = makeDot('#d97f12');
+
+  const tooltip = document.createElementNS(ns, 'g');
+  tooltip.setAttribute('opacity', '0');
+  tooltip.style.pointerEvents = 'none';
+  const tooltipBg = document.createElementNS(ns, 'rect');
+  tooltipBg.setAttribute('rx', '6');
+  tooltipBg.setAttribute('fill', '#182422');
+  tooltipBg.setAttribute('fill-opacity', '0.92');
+  tooltip.appendChild(tooltipBg);
+
+  // 順序由高到低：月份標題、P90路徑(灰)、積極情境P75(青)、基準(白)、
+  // 保守情境P25(紅)、P10路徑(灰)——顏色盡量貼近對應的點/線顏色，方便對照。
+  const lineColors = ['#c8d0ce', '#c8d0ce', '#8fd4cb', '#ffffff', '#ff9b9b', '#c8d0ce'];
+  const textEls = lineColors.map(color => {
+    const t = document.createElementNS(ns, 'text');
+    t.setAttribute('font-family', 'Manrope'); t.setAttribute('font-size', '11'); t.setAttribute('font-weight', '600');
+    t.setAttribute('fill', color);
+    tooltip.appendChild(t);
+    return t;
+  });
+  const actualText = document.createElementNS(ns, 'text');
+  actualText.setAttribute('font-family', 'Manrope'); actualText.setAttribute('font-size', '11'); actualText.setAttribute('font-weight', '600');
+  actualText.setAttribute('fill', '#ffb545');
+  tooltip.appendChild(actualText);
+  svg.appendChild(tooltip);
+
+  const fmt = v => Math.round(v).toString();
+  const boxW = 148;
+
+  function show(point) {
+    const x = toX(point.idx);
+    guide.setAttribute('x1', x); guide.setAttribute('x2', x); guide.setAttribute('opacity', '0.6');
+
+    const yP10 = toY(data.band_low[point.idx]);
+    const yP90 = toY(data.band_high[point.idx]);
+    const yMed = toY(data.median_path[point.idx]);
+    const yCons = toY(data.conservative_path[point.idx]);
+    const yAggr = toY(data.aggressive_path[point.idx]);
+    dotP10band.setAttribute('cx', x); dotP10band.setAttribute('cy', yP10); dotP10band.setAttribute('opacity', '1');
+    dotP90band.setAttribute('cx', x); dotP90band.setAttribute('cy', yP90); dotP90band.setAttribute('opacity', '1');
+    dotMedian.setAttribute('cx', x); dotMedian.setAttribute('cy', yMed); dotMedian.setAttribute('opacity', '1');
+    dotConservative.setAttribute('cx', x); dotConservative.setAttribute('cy', yCons); dotConservative.setAttribute('opacity', '1');
+    dotAggressive.setAttribute('cx', x); dotAggressive.setAttribute('cy', yAggr); dotAggressive.setAttribute('opacity', '1');
+
+    // P10/P90路徑是灰色區間帶的邊緣，跟「保守情境/積極情境」(P25/P75)是兩組
+    // 不同的數字，分開列出來，不要互相混用。
+    textEls[0].textContent = `第${point.monthVal}月`;
+    textEls[1].textContent = `P90路徑　　${fmt(data.band_high[point.idx])}`;
+    textEls[2].textContent = `積極情境　${fmt(data.aggressive_path[point.idx])}`;
+    textEls[3].textContent = `基準　　　　${fmt(data.median_path[point.idx])}`;
+    textEls[4].textContent = `保守情境　${fmt(data.conservative_path[point.idx])}`;
+    textEls[5].textContent = `P10路徑　　${fmt(data.band_low[point.idx])}`;
+
+    const actualVal = data.actual_line ? data.actual_line[point.monthVal] : null;
+    const hasActual = actualVal != null;
+    if (hasActual) {
+      actualText.textContent = `真實股價　${fmt(actualVal)}`;
+      dotActual.setAttribute('cx', x); dotActual.setAttribute('cy', toY(actualVal)); dotActual.setAttribute('opacity', '1');
+    } else {
+      actualText.textContent = '';
+      dotActual.setAttribute('opacity', '0');
+    }
+
+    const lineCount = 6 + (hasActual ? 1 : 0);
+    const boxH = 16 + lineCount * 20;
+
+    let boxX = x + 14;
+    if (boxX + boxW > W - padR) boxX = x - 14 - boxW;
+    const boxY = padT + 4;
+    tooltipBg.setAttribute('x', boxX); tooltipBg.setAttribute('y', boxY);
+    tooltipBg.setAttribute('width', boxW); tooltipBg.setAttribute('height', boxH);
+    [...textEls, actualText].forEach((t, i) => {
+      t.setAttribute('x', boxX + 10);
+      t.setAttribute('y', boxY + 19 + i * 20);
+    });
+    tooltip.setAttribute('opacity', '1');
+  }
+
+  function hide() {
+    guide.setAttribute('opacity', '0');
+    [dotP10band, dotP90band, dotMedian, dotConservative, dotAggressive, dotActual].forEach(d => d.setAttribute('opacity', '0'));
+    tooltip.setAttribute('opacity', '0');
+  }
+
+  hoverPoints.forEach((point, k) => {
+    const x = toX(point.idx);
+    const prevX = k === 0 ? padL : (toX(hoverPoints[k - 1].idx) + x) / 2;
+    const nextX = k === hoverPoints.length - 1 ? (W - padR) : (toX(hoverPoints[k + 1].idx) + x) / 2;
+    const hit = document.createElementNS(ns, 'rect');
+    hit.setAttribute('x', prevX); hit.setAttribute('y', padT);
+    hit.setAttribute('width', Math.max(0, nextX - prevX)); hit.setAttribute('height', H - padT - padB);
+    hit.setAttribute('fill', 'transparent');
+    hit.style.cursor = 'pointer';
+    hit.addEventListener('mouseenter', () => show(point));
+    hit.addEventListener('mouseleave', hide);
+    svg.appendChild(hit);
+  });
+}
+
+function renderMoneyStats() {
+  const investedStr = document.getElementById('in-invested').value;
+  const wrap = document.getElementById('money-stats');
+  const sharesNote = document.getElementById('money-shares-note');
+  if (!lastResult) {
+    wrap.classList.add('hidden'); wrap.hidden = true;
+    sharesNote.classList.add('hidden'); sharesNote.hidden = true;
+    return;
+  }
+  const invested = Math.max(0, Number(investedStr) || 0);
+  document.getElementById('money-start').textContent = fmtMoney(invested);
+  // 跟renderResult()一樣，金額試算的保守/積極用conservative_return/aggressive_return(P25/P75)。
+  document.getElementById('money-p10').textContent = fmtMoney(invested * (1 + lastResult.conservative_return));
+  document.getElementById('money-median').textContent = fmtMoney(invested * (1 + lastResult.median_return));
+  document.getElementById('money-p90').textContent = fmtMoney(invested * (1 + lastResult.aggressive_return));
+  wrap.classList.remove('hidden'); wrap.hidden = false;
+
+  // 只能買整股，投入金額除以起始股價無條件捨去，剩下的零頭顯示出來，
+  // 不然使用者會誤以為市值是用「買得到零股」的連續金額去算的。
+  const startPrice = lastResult.start_price;
+  if (startPrice > 0) {
+    const shares = Math.floor(invested / startPrice);
+    const leftover = invested - shares * startPrice;
+    sharesNote.textContent = `以起始股價試算，約可買 ${shares} 股（找零 ${fmtMoney(leftover)}，實際下單以券商規則為準）`;
+    sharesNote.classList.remove('hidden'); sharesNote.hidden = false;
+  } else {
+    sharesNote.classList.add('hidden'); sharesNote.hidden = true;
+  }
+}
+
+document.getElementById('btn-run').addEventListener('click', runSimulation);
+setMode('manual');
+
 // ── Podcast-driven scenario (apps/calculator/services/scenario.py) ─────
 // 有比對到這支股票的 podcast 分析時，樂觀/保守情境改用真實校準過的公式算，
 // 圖表也改用後端算好的 GBM 模擬（基準區間帶 + 樂觀/保守示範線），
@@ -34,16 +543,6 @@ let _scenarioLoading    = false; // 是否還在抓 timeline/scenario，用來�
 function _currentSimMonths() {
   return Math.max(Math.round(getSimYears() * 12), 1);
 }
-
-function _initSimDates() {
-  const today      = new Date();
-  const oneYearLater = new Date(today);
-  oneYearLater.setFullYear(today.getFullYear() + 1);
-  document.getElementById('sim-start-date').value = today.toISOString().slice(0, 10);
-  document.getElementById('sim-end-date').value   = oneYearLater.toISOString().slice(0, 10);
-}
-
-_initSimDates();
 
 // ── Host calc badge helpers ───────────────────────────────────
 function _checkHostYieldDiff() {
@@ -180,6 +679,22 @@ async function _loadScenarioForScoreId(scoreId, mode, seq, baseOverridePct) {
   }
 }
 
+// B方案(歷史拔靴模擬)的樂觀/基準/保守是模擬跑出來的P70/中位數/P30，不是使用者可以
+// 直接輸入、後端拿去重算的假設值(不像舊版spread/lean公式那樣可以從base反推)，
+// 所以有podcast分析資料時這三個欄位要設成唯讀，只在「完全沒有podcast資料」的
+// 純手動輸入fallback情境才開放編輯（見 _renderScenarioSourceUI 的無資料分支）。
+function _setYieldInputsReadonly(readonly) {
+  ['sim-yield-base', 'sim-yield-bull', 'sim-yield-bear'].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.readOnly = readonly;
+    el.classList.toggle('opacity-60', readonly);
+    el.classList.toggle('cursor-not-allowed', readonly);
+  });
+  const note = document.getElementById('scenario-hint-editable-note');
+  if (note) note.classList.toggle('hidden', readonly);
+}
+
 function _applyScenarioSourceToInputs() {
   if (!_scenarioSource) return;
   const r = _scenarioSource.scenario_returns;
@@ -193,6 +708,7 @@ function _applyScenarioSourceToInputs() {
   document.getElementById('sim-yield-base').value = base;
   document.getElementById('sim-yield-bull').value = bull;
   document.getElementById('sim-yield-bear').value = bear;
+  _setYieldInputsReadonly(true);
   _refreshIfActive();
 }
 
@@ -249,13 +765,14 @@ function _renderScenarioSourceUI() {
     if (hintDefault) hintDefault.classList.remove('hidden');
     if (hintPodcast) hintPodcast.classList.add('hidden');
     if (hintLabel) hintLabel.textContent = '依基準情境自動推算，可自行修改';
+    _setYieldInputsReadonly(false); // 沒有podcast資料時退回純手動輸入，三個欄位都可以編輯
     return;
   }
   empty.classList.add('hidden');
   panel.classList.remove('hidden');
   if (hintDefault) hintDefault.classList.add('hidden');
   if (hintPodcast) hintPodcast.classList.remove('hidden');
-  if (hintLabel) hintLabel.textContent = '依 Podcast 分析自動推算，可自行修改';
+  if (hintLabel) hintLabel.textContent = '依 Podcast 分析歷史拔靴模擬算出，唯讀';
 
   const eligible = _eligibleWeightedNodes(_scenarioAnchorId);
   const weightedDisabled = eligible.length <= 1;
@@ -479,98 +996,10 @@ async function handleCalcClick() {
   document.getElementById('results-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
-function calcWealth() {
-  const capital  = parseFloat(document.getElementById('sim-capital').value) || 0;
-  const baseRate = parseFloat(document.getElementById('sim-yield-base').value);
-  const bullRate = parseFloat(document.getElementById('sim-yield-bull').value);
-  const bearRate = parseFloat(document.getElementById('sim-yield-bear').value);
-  const years    = getSimYears();
-  const months   = Math.max(Math.round(years * 12), 1);
-  const period   = _periodLabel(years);
-
-  if (isNaN(baseRate)) return;
-
-  // Shares & invested capital
-  const shares    = (stockCurrentPrice > 0 && capital > 0) ? Math.floor(capital / stockCurrentPrice) : 0;
-  const invested  = (stockCurrentPrice > 0 && shares > 0)  ? shares * stockCurrentPrice : capital;
-  const remaining = Math.max(capital - invested, 0);
-
-  // Compound interest: final = invested × (1 + annualRate%)^years
-  const baseFinal  = invested * Math.pow(1 + baseRate / 100, years);
-  const baseProfit = baseFinal - invested;
-  const baseTotal  = invested > 0 ? (baseFinal / invested - 1) * 100 : 0;
-  const sign       = v => v >= 0 ? '+' : '';
-  const upColor    = 'text-[#286671]';
-  const downColor  = 'text-[#ba1a1a]';
-  const retColor   = baseRate >= 0 ? upColor : downColor;
-
-  // Show results section
-  document.getElementById('calc-results-placeholder').classList.add('hidden');
-  document.getElementById('results-section').classList.remove('hidden');
-
-  // 輸入條件
-  document.getElementById('res-period').textContent        = period || '—';
-  document.getElementById('res-annual-return').textContent = sign(baseRate) + baseRate.toFixed(1) + '% 年化（基準假設）';
-
-  // 持倉資訊
-  if (stockCurrentPrice > 0 && capital > 0) {
-    document.getElementById('res-shares').textContent   = shares + ' 股';
-    document.getElementById('res-invested').textContent = 'NT$' + Math.round(invested).toLocaleString();
-    document.getElementById('res-remaining').textContent = 'NT$' + Math.round(remaining).toLocaleString();
-  } else {
-    document.getElementById('res-shares').textContent    = '—';
-    document.getElementById('res-invested').textContent  = capital > 0 ? 'NT$' + Math.round(capital).toLocaleString() : '—';
-    document.getElementById('res-remaining').textContent = '—';
-  }
-
-  // 試算結果
-  document.getElementById('res-final-value').textContent = 'NT$' + Math.round(baseFinal).toLocaleString();
-
-  const profitEl = document.getElementById('res-profit');
-  profitEl.textContent = sign(baseProfit) + 'NT$' + Math.round(Math.abs(baseProfit)).toLocaleString();
-  profitEl.className = 'text-sm font-bold ' + retColor;
-
-  const returnEl = document.getElementById('res-total-return');
-  returnEl.textContent = sign(baseTotal) + baseTotal.toFixed(2) + '%';
-  returnEl.className = 'text-sm font-bold ' + retColor;
-
-  const trendIcon = document.getElementById('res-trend-icon');
-  if (trendIcon) trendIcon.textContent = baseRate >= 0 ? 'trending_up' : 'trending_down';
-
-  const dispEl = document.getElementById('sim-period-display');
-  if (dispEl) dispEl.textContent = period ? `投資期間：${period}` : '';
-
-  // 樂觀/保守只要是「使用者自己直接打字改的」（不是改基準帶出來的），GBM圖表就永遠沒有意義：
-  // 使用者這時候要的數字已經不對應任何一組(base, spread, lean)組合，沒有辦法跟後端要到對得上的
-  // 模擬資料，硬要重抓也不會收斂，所以這種情況直接放棄GBM、永遠用複利曲線，不嘗試重抓。
-  const bullBearAutoDerived = !_bullUserEdited && !_bearUserEdited && !!_scenarioDeltas;
-
-  // 基準有沒有跟目前這份GBM資料算的時候用的base一樣（用_scenarioAutoRates.base對照，
-  // 那個值每次成功抓到新資料都會同步更新，見 _applyScenarioSourceToInputs）。
-  const baseMatch = _scenarioAutoRates && Math.abs(baseRate - _scenarioAutoRates.base) < 0.05;
-
-  // GBM模擬的月數要跟這裡算出來的投資期間一致，不一致就重抓（後端會照現在的investment period重新跑）。
-  const monthsMatch = _scenarioChart && (_scenarioChart.months.length - 1) === months;
-
-  // base或月數對不上，但樂觀/保守還是自動算出來的狀態 → 帶著目前的base重抓一次
-  // （即使base沒變也一起傳，避免月數觸發的重抓不小心把之前套用的base覆蓋洗掉）。
-  if (bullBearAutoDerived && _scenarioChart && _scenarioAnchorId && (!baseMatch || !monthsMatch)) {
-    _loadScenarioForScoreId(_scenarioAnchorId, _scenarioMode, undefined, baseRate);
-  }
-
-  const gbmChart = (_scenarioChart && bullBearAutoDerived && baseMatch && monthsMatch) ? _scenarioChart : null;
-
-  // 已知這支股票有 podcast 分析、正確的 GBM 圖正在路上，但現在手上這份還沒對上（正在抓/重抓中）：
-  // 先顯示「圖表載入中」，不要畫還沒套用GBM模擬的複利直線，那條線一閃而過會讓人誤以為故障。
-  // 資料抓回來後 _loadScenarioForScoreId → _applyScenarioSourceToInputs → _refreshIfActive
-  // 會自動重新呼叫一次 calcWealth() 畫出正確的圖。
-  const gbmPending = (_scenarioLoading || (bullBearAutoDerived && _scenarioAnchorId && !gbmChart));
-  if (gbmPending) {
-    _showScenarioChartLoading();
-  } else {
-    renderScenarioChart(invested, months, bullRate, baseRate, bearRate, gbmChart);
-  }
-}
+// 舊版「投入金額×複利」試算已經被B方案(歷史拔靴模擬，見本檔案下方 runSimulation())取代，
+// 這個函式現在什麼都不做——保留空函式只是因為 base.html 開機腳本目前還會呼叫它一次，
+// 拿掉呼叫端之前先留著避免噴錯。
+function calcWealth() {}
 
 function _showScenarioChartLoading() {
   const svg = document.getElementById('scenario-svg');
@@ -1001,11 +1430,6 @@ async function _doFetchStockInfo(ticker) {
     renderStockChart(data);
     _fetchAndRenderChart(ticker, bestPeriod);
     fetchStockNews(ticker);
-    // 這裡要 await：openCalculatorWithTicker() 靠 fetchStockInfo().then(...) 去套用主持人推薦的
-    // expected_return，如果不等這個做完，「查podcast分析」跟「套用主持人數字」兩件事的完成順序
-    // 不固定，有時會讓主持人指定的報酬率被之後才回來的podcast分數蓋掉。
-    // 股價圖/新聞這些可見的畫面已經在上面同步渲染完了，這裡加await不會讓使用者多等待。
-    await _fetchScenarioSource(data.ticker);
   } catch(e) {
     status.textContent = '查詢失敗，請稍後再試';
     status.classList.remove('hidden');
@@ -1023,10 +1447,7 @@ function openGraphForCurrentTicker() {
   if (!_currentTicker) return;
   showPage('graph');
   document.getElementById('stock-chart-subtitle').textContent = document.getElementById('sim-stock-name').textContent || _currentTicker;
-  const bestPeriod = _pickBestPeriod(
-    document.getElementById('sim-start-date').value,
-    document.getElementById('sim-end-date').value
-  );
+  const bestPeriod = '1y'; // 試算模擬器改用拉桿選投資期間(月)，不再有起訖日期，固定用1年當走勢圖預設區間
   stockPeriod = bestPeriod;
   _highlightPeriodBtn(bestPeriod);
   _fetchAndRenderChart(_currentTicker, bestPeriod);
@@ -1342,58 +1763,38 @@ function closeNewsPanel() {
 
 // ── Calculator nav helpers ────────────────────────────────────
 function resetCalculator() {
-  document.getElementById('results-section').classList.add('hidden');
-  document.getElementById('calc-results-placeholder').classList.remove('hidden');
-  document.getElementById('sim-validation-error').classList.add('hidden');
   _currentTicker = '';
   _lastResolvedInputText = null;
   _hideStockCandidates();
-  document.getElementById('sim-ticker').value = '';
-  document.getElementById('sim-stock-name').textContent = '';
-  document.getElementById('sim-current-price-display').textContent = '';
-  document.getElementById('stock-query-status').textContent = '';
-  document.getElementById('stock-query-status').classList.add('hidden');
-  document.getElementById('stock-chart-subtitle').textContent = '查詢個股後顯示走勢';
-  document.getElementById('stock-chart-placeholder').classList.remove('hidden');
-  const svg = document.getElementById('stock-svg');
-  if (svg) { svg.classList.add('hidden'); svg.innerHTML = ''; }
-  document.getElementById('sim-yield-base').value = '';
-  document.getElementById('sim-yield-bull').value = '';
-  document.getElementById('sim-yield-bear').value = '';
-  _bullUserEdited = false;
-  _bearUserEdited = false;
   stockCurrentPrice = 0;
-  _hostYield = null;
-  _hostCalcData = null;
-  _scenarioNodes = null; _scenarioAnchorId = null; _scenarioSource = null;
-  _scenarioChart = null; _scenarioDeltas = null; _scenarioAutoRates = null;
-  _renderScenarioSourceUI();
-  document.getElementById('host-yield-reset').classList.add('hidden');
-  document.getElementById('host-calc-badge').style.display = 'none';
-  _initSimDates();
+
+  // B方案(歷史拔靴模擬)區塊重置回預設狀態
+  setMode('manual');
+  document.getElementById('in-ticker').value = '2330.TW';
+  document.getElementById('in-months').value = 12;
+  document.getElementById('slider-months').value = 12;
+  document.getElementById('lbl-months').textContent = 12;
+  setScoreButton('risk', 0);
+  setScoreButton('macro', 0);
+  document.getElementById('in-invested').value = '';
+  document.getElementById('slider-invested').value = '0';
+  document.getElementById('result-panel').classList.add('hidden');
+  const placeholderEl = document.getElementById('calc-placeholder');
+  placeholderEl.classList.remove('hidden');
+  placeholderEl.hidden = false;
+  document.getElementById('status-text').textContent = '';
+  lastResult = null;
 }
 
+// 從 deep_dive 頁面某一筆待驗證預測的「試算」按鈕跳轉過來：切到B方案的「從節目挑選」
+// 模式，並記下目標episode/ticker，等節目清單載入完成後自動選中對應那一集(見loadEpisodes)。
+let _pendingCalcTarget = null;
+
 function goToCalculatorWithStock(stockName, endDate, originEpisodeId) {
-  _pendingOriginEpisodeId = originEpisodeId != null ? originEpisodeId : null;
-  document.getElementById('sim-yield-base').value = '';
-  document.getElementById('sim-yield-bull').value = '';
-  document.getElementById('sim-yield-bear').value = '';
-  _bullUserEdited = false;
-  _bearUserEdited = false;
-  document.getElementById('sim-capital').value  = '';
-  document.getElementById('slider-capital').value = '0';
-  document.getElementById('results-section').classList.add('hidden');
-  const today       = new Date().toISOString().slice(0, 10);
-  const resolvedEnd = endDate || (() => { const d = new Date(); d.setFullYear(d.getFullYear() + 1); return d.toISOString().slice(0, 10); })();
-  _hostCalcData = { ticker: stockName, endDate: resolvedEnd };
-  const endLabel = endDate ? endDate.replace(/-/g, '/') : '未指定';
-  document.getElementById('host-calc-label').textContent = `主持人：${stockName}　截止 ${endLabel}`;
-  document.getElementById('host-calc-badge').style.display = 'none';
-  document.getElementById('sim-ticker').value     = stockName;
-  document.getElementById('sim-start-date').value = today;
-  document.getElementById('sim-end-date').value   = resolvedEnd;
+  _pendingCalcTarget = { ticker: stockName, episodeId: originEpisodeId != null ? originEpisodeId : null };
   showPage('calculator');
-  fetchStockInfo();
+  setMode('episode');
+  _applyPendingCalcTarget();
 }
 
 function parseYears(timeframe) {

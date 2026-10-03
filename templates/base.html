@@ -47,6 +47,8 @@
   .material-symbols-outlined {
     font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
   }
+  input[type=range] { accent-color: #113236; }
+  .mode-btn.active { background: #113236; color: white; }
   body { min-height: 100dvh; font-family: 'Manrope', sans-serif; background: #fcf9f0; }
   .page { display: none; animation: fadeIn 0.25s ease; }
   .page.active { display: block; }
@@ -180,14 +182,22 @@
 <script src="{% static 'js/discover.js' %}?v=14"></script>
 <script src="{% static 'js/rankings.js' %}?v=14"></script>
 <script src="{% static 'js/deep_dive.js' %}?v=15"></script>
-<script src="{% static 'js/calculator.js' %}?v=27"></script>
+<script src="{% static 'js/calculator.js' %}?v=46"></script>
 <script src="{% static 'js/ai.js' %}?v=10"></script>
 <script src="{% static 'js/assets.js' %}?v=11"></script>
 <script src="{% static 'js/profile.js' %}?v=10"></script>
 <script>
-  calcWealth();
   {# 從 basket.html 等獨立頁面連回來時可帶 #assets 之類的 hash，指定要打開哪個分頁 #}
   (function () {
+    // 從 /preview/ 底下的獨立測試頁面(例如試算模擬器)點「跳轉到原文」連過來時，
+    // 帶 ?open_summary=<summary_id>，直接打開該集的深度摘要頁，不用先手動找到那一集。
+    // 沒有帶這個參數時，行為跟原本完全一樣，不影響其他入口。
+    const params = new URLSearchParams(location.search);
+    const openSummary = params.get('open_summary');
+    if (openSummary && document.getElementById('page-deep-dive') && typeof openDeepDive === 'function') {
+      openDeepDive(parseInt(openSummary, 10));
+      return;
+    }
     const wanted = location.hash.replace('#', '');
     const initial = wanted && document.getElementById('page-' + wanted) ? wanted : 'discover';
     showPage(initial);
