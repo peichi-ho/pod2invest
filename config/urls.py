@@ -69,11 +69,21 @@ def logout_view(request):
         logout(request)
     return redirect('/login/')
 
+def bootstrap_path_preview(request):
+    """試算模擬器(B方案：歷史拔靴逐步模擬)獨立測試頁面，跟正式的 '' (frontend_index) SPA完全分開。"""
+    return render(request, 'preview/bootstrap_path.html')
+
+def preview_index(request):
+    """所有獨立預覽頁面的入口清單，見 templates/preview/index.html。"""
+    return render(request, 'preview/index.html')
+
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('login/',  login_view,  name='login'),
     path('signup/', signup_view, name='signup'),
     path('logout/', logout_view, name='logout'),
+    path('preview/', preview_index, name='preview-index'),
+    path('preview/bootstrap-path/', bootstrap_path_preview, name='bootstrap-path-preview-page'),
     path("api/glossary/", include("apps.glossary.urls")),
     path("api/summaries/", include("apps.summaries.urls")),
     path("api/mindmap/", include("apps.mindmap.urls")),

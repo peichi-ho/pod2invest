@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+{% comment %}
+  templates/preview/index.html — 所有獨立預覽/測試頁面的入口清單。
+  新增一個預覽頁時，在下面 PAGES 陣列加一筆即可，不用改任何其他地方。
+{% endcomment %}
+<html lang="zh-TW">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>預覽頁面清單</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>body { font-family: 'Manrope', system-ui, sans-serif; background: #fcf9f0; }</style>
+</head>
+<body class="min-h-screen p-4 md:p-8">
+<div class="max-w-2xl mx-auto">
+  <h1 class="text-2xl font-bold mb-1">預覽頁面清單</h1>
+  <p class="text-sm text-gray-500 mb-6">這些都是獨立測試用頁面，跟正式的App(/)完全分開，不會互相影響。</p>
+  <div id="list" class="space-y-3"></div>
+</div>
+<script>
+const PAGES = [
+  { url: '/preview/bootstrap-path/', title: '試算模擬器', desc: 'B方案：歷史拔靴逐步模擬，真的跑N次路徑' },
+];
+document.getElementById('list').innerHTML = PAGES.map(p => `
+  <a href="${p.url}" class="block bg-white rounded-2xl shadow-sm p-5 hover:shadow-md transition-shadow">
+    <div class="font-bold">${p.title}</div>
+    <div class="text-sm text-gray-500 mt-1">${p.desc}</div>
+  </a>
+`).join('');
+</script>
+</body>
+</html>

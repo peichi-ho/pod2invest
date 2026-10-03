@@ -1,13 +1,16 @@
 # apps/summaries/services/chunking.py
 import json
+import logging
 from pathlib import Path
 from typing import List, Optional
 
 from google import genai
 
+logger = logging.getLogger(__name__)
+
 from .prompts import build_system_instruction, json_schema_description, build_user_prompt, build_novice_content_schema
 from .gemini import gemini_generate_with_retry, sanitize_json_text, repair_to_valid_json
-from .postprocess import normalize_schema, postprocess_evidence_ranges
+from .postprocess import normalize_schema, postprocess_evidence_ranges, _is_recognized_topic
 from .enrich import enrich_arguments_if_empty, ensure_min_arguments
 from .outlook import extract_outlook_calls
 from .outlook_review import review_outlook_calls
@@ -110,32 +113,72 @@ def summarize_with_optional_chunking(
     outlook_model: Optional[str] = None,
     published_at=None,
     forced_topics: list = None,
+    max_topic_retries: int = 2,
 ) -> dict:
     _outlook_model = outlook_model or model
-    if len(inline_text) <= chunk_threshold_chars:
-        return generate_json_summary(
+
+    def _generate_once() -> dict:
+        if len(inline_text) <= chunk_threshold_chars:
+            return generate_json_summary(
+                client=client,
+                model=model,
+                mode=mode,
+                inline_text=inline_text,
+                raw_save_path=raw_save_path,
+                outlook_model=_outlook_model,
+                published_at=published_at,
+                forced_topics=forced_topics,
+            )
+
+        return map_reduce_summarize(
             client=client,
             model=model,
             mode=mode,
             inline_text=inline_text,
             raw_save_path=raw_save_path,
+            chunk_size_chars=22000,
+            chunk_overlap_chars=800,
             outlook_model=_outlook_model,
             published_at=published_at,
             forced_topics=forced_topics,
         )
 
-    return map_reduce_summarize(
-        client=client,
-        model=model,
-        mode=mode,
-        inline_text=inline_text,
-        raw_save_path=raw_save_path,
-        chunk_size_chars=22000,
-        chunk_overlap_chars=800,
-        outlook_model=_outlook_model,
-        published_at=published_at,
-        forced_topics=forced_topics,
-    )
+    result = _generate_once()
+
+    # forced_topics模式(novice被鎖定要跟pro用同一批標題)不用驗證：novice的topic
+    # 本來就該跟已經驗證過的pro一致，重跑也無法產生不同的topic，驗證沒有意義。
+    if forced_topics:
+        return result
+
+    # topic格式驗證：不符合「總體經濟環境/操作策略與建議/風險提示/個股：.../ETF：.../
+    # 產業：...」這6種既有格式(_is_recognized_topic)就整份重新生成，不是只警告
+    # (跟postprocess.py另外那層「記log但不修正」的監控用途不一樣，這裡是要真的擋下來)。
+    # 常見觸發原因：AI自創了不合規範的分類名稱，或把跟投資完全無關的內容也生成了
+    # argument(違反排除規則)。重試次數有上限，避免真的沒辦法生成合法topic時無限重跑。
+    for attempt in range(max_topic_retries):
+        bad_topics = [
+            a.get("topic", "") for a in (result.get("arguments") or [])
+            if isinstance(a, dict) and a.get("topic") and not _is_recognized_topic(a["topic"])
+        ]
+        if not bad_topics:
+            break
+        logger.warning(
+            "summarize_with_optional_chunking: 第%d次嘗試出現不合規範topic %r，重新生成 (mode=%s)",
+            attempt + 1, bad_topics, mode,
+        )
+        result = _generate_once()
+    else:
+        bad_topics = [
+            a.get("topic", "") for a in (result.get("arguments") or [])
+            if isinstance(a, dict) and a.get("topic") and not _is_recognized_topic(a["topic"])
+        ]
+        if bad_topics:
+            logger.warning(
+                "summarize_with_optional_chunking: 重試%d次後仍有不合規範topic %r，放行但需人工檢查 (mode=%s)",
+                max_topic_retries, bad_topics, mode,
+            )
+
+    return result
 
 
 def map_reduce_summarize(
@@ -171,19 +214,21 @@ def map_reduce_summarize(
             "===END SYSTEM INSTRUCTIONS===\n\n"
             "你現在要做的是『主題筆記蒐集（MAP）』：\n"
             "- 只輸出 JSON，不要 ```json，不要解釋\n"
-            "- 主題切法（topic_key 只能用以下三種類型的命名方式，不可自創其他分類名稱）：\n"
+            "- 主題切法（topic_key 只能用以下四種類型的命名方式，不可自創其他分類名稱）：\n"
             "  【固定結構型】有內容才出現，topic_key 固定用以下名稱：\n"
             "    「總體經濟環境」「操作策略與建議」「風險提示」\n"
             "    整體大盤／指數／台股／美股／港股等非單一公司的市場走勢討論，一律併入「總體經濟環境」；\n"
             "    不涉及特定標的的交易心法、資產配置等策略性內容，一律併入「操作策略與建議」，\n"
             "    不要另外發明新標題。\n"
-            "  【個股型】本段被認真討論（3句以上）的每支股票／ETF／指數各一條，\n"
+            "  【個股型】本段被認真討論（3句以上）的每支股票／指數各一條，\n"
             "    topic_key 統一命名為「個股：[名稱]」，例如「個股：台積電」\n"
             "    不論本段怎麼包裝這段內容（公司分析、個股觀察…），只要是針對單一公司/標的的討論，\n"
             "    一律用「個股：[名稱]」，不可用其他前綴或自訂標題。\n"
+            "  【ETF型】本段被認真討論（3句以上）的每檔ETF各一條，\n"
+            "    topic_key 統一命名為「ETF：[名稱]」，例如「ETF：00961」，不要併入個股型。\n"
             "  【產業型】本段被認真討論（3句以上）的每個產業主題各一條，\n"
             "    topic_key 統一命名為「產業：[主題名稱]」，例如「產業：記憶體漲價」「產業：AI伺服器需求」\n"
-            "  【完整性要求】動筆前先列出本段所有被認真討論（3句以上）、且屬於上述三種類型的主題，\n"
+            "  【完整性要求】動筆前先列出本段所有被認真討論（3句以上）、且屬於上述四種類型的主題，\n"
             "    再逐一確認每個都有對應 topic_note，不可因為想省事就遺漏\n"
             "  【排除規則】本段若有跟投資／市場／公司／總體經濟完全無關的內容\n"
             "    （例如主持人的個人生活、育兒經驗、興趣嗜好、名人八卦閒聊等），不要為此建立 topic_note，\n"
@@ -193,7 +238,13 @@ def map_reduce_summarize(
             "- topic 是給人看的標題（可與 topic_key 相同）\n"
             "- position 用一句話寫 podcaster 對該主題的明確立場，不可只描述內容\n"
             "- bullets 是重點條列（可 3–8 條）\n"
-            "- key_data 只收『明確數字/百分比/日期/指數』，每筆獨立一個物件 {label,value,context}，不可合併成一個字串\n"
+            "- key_data 不確定要不要收的話，一律收，只排除明確屬於「純技術規格」的數字\n"
+            "  （晶圓/封裝/產品的物理尺寸、規格比例、面積、跑分benchmark等，跟財務數字無直接關聯）\n"
+            "  以下都要收：財務數據、總經指標(GDP/CPI/PCE/失業率/利率/關稅稅率，不論哪一國哪個年份，\n"
+            "  包含歷史類比數據)、股價/估值(本益比/營收倍數/目標價/市值)、市場資金流向、\n"
+            "  產業數字(市占率/出貨量/產能/成長率)。整段主題若是回顧過去某年代的總經週期，\n"
+            "  裡面的歷史GDP/CPI/利率數字依然要收，不可因為是歷史回顧就整組不收\n"
+            "  每筆獨立一個物件 {label,value,context}，不可合併成一個字串\n"
             "- evidence_timestamps 從逐字稿中的（m:ss）挑 1–3 個最相關的\n"
             "- 同時抽取 entities 與 classification\n"
             "- classification 各欄位只能從白名單中選，不得自創\n"
@@ -445,14 +496,15 @@ def generate_json_summary(
         "- classification 必須使用固定欄位輸出\n"
         "- classification 每個欄位的值只能從白名單中選，不得自創\n"
         "- tags 固定輸出 []\n"
-        "- arguments 切法（topic 只能用以下三種類型的命名方式，不可自創其他分類名稱）：\n"
+        "- arguments 切法（topic 只能用以下四種類型的命名方式，不可自創其他分類名稱）：\n"
         "  固定結構型（有內容才出現）：「總體經濟環境」「操作策略與建議」「風險提示」\n"
         "    整體大盤／指數／台股／美股／港股等非單一公司的市場走勢討論，一律併入「總體經濟環境」；\n"
         "    不涉及特定標的的交易心法、資產配置等策略性內容，一律併入「操作策略與建議」，不要另創新標題\n"
-        "  個股型：每支被認真討論（3句以上）的股票各一條，topic 命名為「個股：XXX」，\n"
+        "  個股型：每支被認真討論（3句以上）的股票／指數各一條，topic 命名為「個股：XXX」，\n"
         "    不論怎麼包裝這段內容，只要是針對單一公司/標的的討論，一律用「個股：XXX」，不可自訂其他標題\n"
+        "  ETF型：每檔被認真討論（3句以上）的ETF各一條，topic 命名為「ETF：XXX」，不要併入個股型\n"
         "  產業型：每個被認真討論的產業主題各一條，topic 命名為「產業：XXX」，例如「產業：記憶體漲價」「產業：PCB族群」\n"
-        "  完整性：動筆前先列出本段所有被認真討論（3句以上）、且屬於上述三種類型的主題，\n"
+        "  完整性：動筆前先列出本段所有被認真討論（3句以上）、且屬於上述四種類型的主題，\n"
         "    再逐一確認每個都有對應 argument，不可因為想省事就遺漏\n"
         "  排除規則：跟投資／市場／公司／總體經濟完全無關的內容（主持人個人生活、興趣嗜好、閒聊八卦等），\n"
         "    不要為此建立 argument，直接略過，這不算違反完整性規則\n"
@@ -509,7 +561,7 @@ def generate_json_summary(
         "- 每一個 arguments.summary 都必須是『詳細段落型摘要』，至少 120字以上，220字以下\n"
         "- arguments 依主題式合併、補充 key_data、related_concepts、evidence_timestamps\n"
         "- 不可新增或改名 topic：topic 只能是「總體經濟環境」「操作策略與建議」「風險提示」、\n"
-        "  「個股：XXX」、「產業：XXX」這幾種既有格式，若要合併主題也必須合併到符合這個格式的既有 topic 上，\n"
+        "  「個股：XXX」、「ETF：XXX」、「產業：XXX」這幾種既有格式，若要合併主題也必須合併到符合這個格式的既有 topic 上，\n"
         "  不可自創其他分類名稱（例如不可出現「金融市場」「科技趨勢」這類標題）\n"
         "- entities/classification 補齊\n"
         "- classification 各欄位只能從白名單中選，不得自創\n"

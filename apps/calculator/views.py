@@ -1093,6 +1093,72 @@ class StockTimelineAPIView(APIView):
         return Response({'ticker': ticker, 'nodes': nodes})
 
 
+def _resample_daily_to_monthly(daily_values: list, months: int) -> list:
+    """
+    B方案模擬輸出是「每日一筆」(time_steps/band_low/band_high/median_path)，
+    但前端 renderScenarioChart() 是照「每月一筆」的格線畫圖(跟actual_line的月粒度
+    對齊)，所以要先把每日陣列取樣成 months+1 筆(第0~第months個月)，直接複用前端
+    既有的畫圖邏輯，不用為了B方案另外重寫一套繪圖程式碼。
+    """
+    n = len(daily_values) - 1
+    return [daily_values[round(m / months * n)] for m in range(months + 1)]
+
+
+def _annualize_return(total_return: float, months: int) -> float:
+    """B方案算出來的是整個投資期間的總報酬率，這裡換算成年化，跟前端「XX% 年化」的既有標示語意一致。"""
+    years = months / 12
+    return (1 + total_return) ** (1 / years) - 1 if years > 0 else total_return
+
+
+def _build_bootstrap_scenario_chart(ticker: str, asof_date, start_price: float, months: int,
+                                     risk_score: float, macro_score: float, seed: int) -> dict:
+    """
+    B方案(apps/calculator/services/bootstrap_path_simulator_v2.py)版本的情境圖表，
+    回傳的dict形狀比照舊版 scenario.py 的 build_scenario_chart()，讓
+    ScenarioAPIView/WeightedScenarioAPIView 不用改前端就能直接切換底層引擎。
+
+    2026-10-01起改用v2(log空間逐日套用shift/widen、保證單日不超過台股漲跌停10%、
+    CRPS重新校準過、P10~P90取代原本的P30~P70)，不是原本的v1。
+
+    bull_line/base_line/bear_line 直接對應P90/中位數/P10路徑(每日重新取樣成每月)，
+    base_band_low/base_band_high 刻意設成跟bear_line/bull_line同一組數字——B方案的
+    P10~P90本身就是真正跑1000次模擬出來的統計範圍，不像舊版是「獨立的示範路徑」外面
+    再包一層「獨立的統計區間帶」，兩者本來就是同一件事，不用假裝是兩種不同資訊。
+
+    2026-10-01再改動：returns.bull/returns.bear 改用conservative_return/
+    aggressive_return(P25/P75)，不是p10_return/p90_return——跟正式計算機頁面
+    同一套「圖表線條維持P10~P90、具體數字改用P25~P75」的脫鉤設計(見
+    bootstrap_path_simulator_v2.py docstring「2026-10-01再改動」)，bull_line/
+    bear_line(畫圖用的路徑)不受影響，仍然是P90/P10。
+    """
+    from apps.calculator.services.bootstrap_path_simulator_v2 import run_bootstrap_path_simulation_v2
+
+    result = run_bootstrap_path_simulation_v2(
+        ticker=ticker, start_price=start_price, horizon_months=months,
+        risk_score=risk_score, macro_score=macro_score, n_simulations=1000,
+        as_of_date=asof_date.date() if hasattr(asof_date, "date") else asof_date,
+        seed=seed,
+    )
+
+    bull_line = _resample_daily_to_monthly(result.band_high, months)
+    base_line = _resample_daily_to_monthly(result.median_path, months)
+    bear_line = _resample_daily_to_monthly(result.band_low, months)
+
+    return {
+        "months": months,
+        "bull_line": bull_line,
+        "base_line": base_line,
+        "bear_line": bear_line,
+        "base_band_low": bear_line,
+        "base_band_high": bull_line,
+        "returns": {
+            "bull": _annualize_return(result.aggressive_return, months),
+            "base": _annualize_return(result.median_return, months),
+            "bear": _annualize_return(result.conservative_return, months),
+        },
+    }
+
+
 def _parse_months_param(request, default=12, lo=1, hi=60):
     """
     讓GBM模擬的月數跟前端「投資期間」對齊，而不是永遠固定12個月。
@@ -1157,17 +1223,26 @@ class EnsureEpisodeScoreAPIView(APIView):
             'summary_id': score.summary_id,
             'episode_id': record.episode_id,
             'asset_name': score.asset_name,
+            'ticker': score.ticker,
             'published_at': record.published_at.date().isoformat() if record.published_at else None,
             'podcaster': record.podcaster,
             'macro_score': score.macro_score,
             'risk_score': score.risk_score,
+            'rationale': score.rationale,
         })
 
 
 class ScenarioAPIView(APIView):
     """
-    給定某一筆 StockSentimentScore（score_id），算出樂觀/基準/悲觀情境 + GBM 區間帶資料。
+    給定某一筆 StockSentimentScore（score_id），算出樂觀/基準/悲觀情境 + 歷史拔靴模擬區間帶資料。
     只做「當集原始預測」模式；「最新綜合預測」(時間加權) 是獨立的另一個 endpoint。
+
+    底層引擎是 apps/calculator/services/bootstrap_path_simulator_v2.py(B方案：每一步從真實歷史
+    日報酬率隨機抽樣、真的跑1000次路徑)，不是舊版 scenario.py 的閉式公式+GBM——樂觀/基準/悲觀
+    數字是模擬跑出來的P75/中位數/P25，圖表上bull_line/bear_line線條畫的則是P90/P10(比數字
+    本身寬，刻意脫鉤，見 _build_bootstrap_scenario_chart docstring)，不是套公式算出來再回頭
+    畫線，也因此不支援使用者手動覆寫「基準情境」(B方案沒有可以外部注入的base參數，報酬率是
+    模擬的輸出，不是輸入)。
     """
     def get(self, request):
         score_id = request.query_params.get('score_id', '').strip()
@@ -1175,7 +1250,6 @@ class ScenarioAPIView(APIView):
             return Response({'error': '請提供 score_id'}, status=400)
 
         from apps.summaries.models import StockSentimentScore
-        from apps.calculator.services.scenario import build_scenario_chart, compute_index_score
 
         try:
             score = (
@@ -1190,19 +1264,7 @@ class ScenarioAPIView(APIView):
             return Response({'error': '這筆紀錄還沒有歷史股價資料'}, status=422)
 
         months = _parse_months_param(request)
-        base_override = _parse_base_override_param(request)
-        effective_base = base_override if base_override is not None else score.base
         asof_date = score.summary.published_at
-
-        # 大改版：大盤指數獨立信號，預設關閉（跟現行版本行為完全一樣），
-        # 只有明確帶 ?use_index=1 才會多打一次yfinance查大盤、把index_score算進lean。
-        use_index = request.query_params.get('use_index', '').strip() in ('1', 'true', 'yes')
-        index_momentum = None
-        index_score = 0.0
-        if use_index:
-            index_momentum = _fetch_index_momentum(score.ticker, asof_date)
-            if index_momentum is not None:
-                index_score = compute_index_score(index_momentum)
 
         try:
             actual_line = _fetch_actual_price_path(score.ticker, asof_date, months)
@@ -1217,59 +1279,43 @@ class ScenarioAPIView(APIView):
         matched_topic = next((t for t in topics if t['asset_name'] == score.asset_name), None)
         topic_summary = matched_topic['topic'].get('summary', '') if matched_topic else ''
 
-        # GBM模擬的震盪來源：優先借用這支股票真實的歷史月報酬（bootstrap），
-        # 抓不到/歷史不足就自動退回常態隨機數，不會讓請求失敗。
-        return_pool = _fetch_historical_return_pool(score.ticker, asof_date)
-
-        chart = build_scenario_chart(
-            base=effective_base,
-            annual_vol=score.annual_vol,
-            risk_score=score.risk_score,
-            macro_score=score.macro_score,
-            start_price=start_price,
-            seed=score.id,  # 同一筆分數每次呼叫畫出來的示範線一致，不會每次刷新都亂跳
-            return_pool=return_pool,
-            months=months,
-            index_score=index_score,
-        )
+        try:
+            chart = _build_bootstrap_scenario_chart(
+                ticker=score.ticker, asof_date=asof_date, start_price=start_price, months=months,
+                risk_score=score.risk_score, macro_score=score.macro_score,
+                seed=score.id,  # 同一筆分數每次呼叫結果一致，不會每次刷新都亂跳
+            )
+        except ValueError as e:
+            return Response({'error': f'模擬失敗: {e}'}, status=422)
 
         return Response({
             'asset_name': score.asset_name,
             'ticker': score.ticker,
             'summary_id': score.summary_id,
             'published_at': asof_date.date().isoformat() if asof_date else None,
-            'base': score.base,  # 這筆紀錄真實的歷史base，不受base覆蓋影響，給前端顯示「原始數字」用
-            'base_overridden': base_override is not None,
+            'base': score.base,  # 這筆紀錄真實的歷史base，僅供參考顯示，不會餵進模擬
             'annual_vol': score.annual_vol,
             'macro_score': score.macro_score,
             'risk_score': score.risk_score,
             'rationale': score.rationale,
             'topic_summary': topic_summary,
-            'index_used': use_index,
-            'index_momentum': index_momentum,
-            'index_score': index_score,
             'start_price': start_price,
-            'scenario_returns': {
-                'bull': chart.returns.bull,
-                'base': chart.returns.base,
-                'bear': chart.returns.bear,
-            },
-            'months': chart.months,
-            'bull_line': chart.bull_line,
-            'base_line': chart.base_line,
-            'bear_line': chart.bear_line,
-            'base_band_low': chart.base_band_low,
-            'base_band_high': chart.base_band_high,
+            'scenario_returns': chart['returns'],
+            'months': chart['months'],
+            'bull_line': chart['bull_line'],
+            'base_line': chart['base_line'],
+            'bear_line': chart['bear_line'],
+            'base_band_low': chart['base_band_low'],
+            'base_band_high': chart['base_band_high'],
             'actual_line': actual_line,  # 實際股價路徑，還沒到的月份是 None
-            'is_preliminary_calibration': True,  # 前端要用這個標示「初步校準版本」
         })
 
 
 class WeightedScenarioAPIView(APIView):
     """
-    「最新綜合預測」模式：base/annual_vol/start_price 維持選定那一集的真實數字，
+    「最新綜合預測」模式：start_price 維持選定那一集的真實數字，
     macro_score/risk_score 改用「這一集到最新一集之間，所有討論過這支股票的集數」
-    時間加權算出來的綜合值，代入跟 ScenarioAPIView 完全相同的公式 + GBM 邏輯。
+    時間加權算出來的綜合值，代入跟 ScenarioAPIView 相同的B方案模擬引擎。
     """
     def get(self, request):
         score_id = request.query_params.get('score_id', '').strip()
@@ -1277,7 +1323,7 @@ class WeightedScenarioAPIView(APIView):
             return Response({'error': '請提供 score_id'}, status=400)
 
         from apps.summaries.models import StockSentimentScore
-        from apps.calculator.services.scenario import build_scenario_chart, compute_time_weighted_scores, compute_index_score
+        from apps.calculator.services.scenario import compute_time_weighted_scores
 
         try:
             score = (
@@ -1297,16 +1343,6 @@ class WeightedScenarioAPIView(APIView):
             return Response({'error': '找不到可加權的集數'}, status=422)
 
         months = _parse_months_param(request)
-        base_override = _parse_base_override_param(request)
-        effective_base = base_override if base_override is not None else score.base
-
-        use_index = request.query_params.get('use_index', '').strip() in ('1', 'true', 'yes')
-        index_momentum = None
-        index_score = 0.0
-        if use_index:
-            index_momentum = _fetch_index_momentum(score.ticker, score.summary.published_at)
-            if index_momentum is not None:
-                index_score = compute_index_score(index_momentum)
 
         try:
             actual_line = _fetch_actual_price_path(score.ticker, score.summary.published_at, months)
@@ -1316,29 +1352,20 @@ class WeightedScenarioAPIView(APIView):
         if start_price is None:
             return Response({'error': f'抓不到 {score.ticker} 當時的股價'}, status=502)
 
-        return_pool = _fetch_historical_return_pool(score.ticker, score.summary.published_at)
-
-        chart = build_scenario_chart(
-            base=effective_base,
-            annual_vol=score.annual_vol,
-            risk_score=weighted['risk_score'],
-            macro_score=weighted['macro_score'],
-            start_price=start_price,
-            seed=score.id,
-            return_pool=return_pool,
-            months=months,
-            index_score=index_score,
-        )
+        try:
+            chart = _build_bootstrap_scenario_chart(
+                ticker=score.ticker, asof_date=score.summary.published_at, start_price=start_price,
+                months=months, risk_score=weighted['risk_score'], macro_score=weighted['macro_score'],
+                seed=score.id,
+            )
+        except ValueError as e:
+            return Response({'error': f'模擬失敗: {e}'}, status=422)
 
         return Response({
             'asset_name': score.asset_name,
             'ticker': score.ticker,
             'published_at': selected_date.isoformat(),
-            'index_used': use_index,
-            'index_momentum': index_momentum,
-            'index_score': index_score,
             'base': score.base,
-            'base_overridden': base_override is not None,
             'annual_vol': score.annual_vol,
             'macro_score': weighted['macro_score'],
             'risk_score': weighted['risk_score'],
@@ -1346,19 +1373,14 @@ class WeightedScenarioAPIView(APIView):
             'latest_date': weighted['latest_date'],
             'top_contributors': weighted['top_contributors'],
             'start_price': start_price,
-            'scenario_returns': {
-                'bull': chart.returns.bull,
-                'base': chart.returns.base,
-                'bear': chart.returns.bear,
-            },
-            'months': chart.months,
-            'bull_line': chart.bull_line,
-            'base_line': chart.base_line,
-            'bear_line': chart.bear_line,
-            'base_band_low': chart.base_band_low,
-            'base_band_high': chart.base_band_high,
+            'scenario_returns': chart['returns'],
+            'months': chart['months'],
+            'bull_line': chart['bull_line'],
+            'base_line': chart['base_line'],
+            'bear_line': chart['bear_line'],
+            'base_band_low': chart['base_band_low'],
+            'base_band_high': chart['base_band_high'],
             'actual_line': actual_line,
-            'is_preliminary_calibration': True,
         })
 
 
