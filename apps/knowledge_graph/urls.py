@@ -17,6 +17,8 @@ urlpatterns = [
     path("analyze-episode/",          views.analyze_episode_api),
     path("generate/",                 views.generate_graph),
     path("generate-from-summaries/",  views.generate_graph_from_summaries),
+    path("generate-from-episode/",    views.generate_graph_from_episode),
+    path("generate-from-episodes/",   views.generate_graph_from_episodes),
     path("generate-narrative/",       views.generate_narrative_graph),
     path("narrative-cluster/",            views.narrative_cluster_page),
     path("narrative-cluster-data/",       views.narrative_cluster_api),

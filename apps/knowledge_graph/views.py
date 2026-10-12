@@ -7,6 +7,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.db import connections
 
 from .generate import process_new_podcast, process_all_summaries
+from .generate_by_podcast import process_new_episode, process_all_episodes
 from .filter import (
     get_graph_data, generate_graph_narrative, get_latest_date_in_db,
     get_graph_diff, generate_graph_diff_narrative, _get_client,
@@ -683,3 +684,59 @@ def basket_stream_api(request):
     response["Cache-Control"] = "no-cache"
     response["X-Accel-Buffering"] = "no"
     return response
+
+
+@csrf_exempt
+def generate_graph_from_episode(request):
+    """
+    以逐字稿為來源，觸發單一 PodcastEpisode 的知識圖譜生成
+    （generate_by_podcast.py：三步驟抽取 + 規則過濾）。
+    Body: { "episode_id": 123 }
+    """
+    if request.method != "POST":
+        return JsonResponse({"error": "POST required"}, status=405)
+
+    try:
+        body = json.loads(request.body)
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+
+    episode_id = body.get("episode_id")
+    if not episode_id:
+        return JsonResponse({"error": "episode_id is required"}, status=400)
+
+    try:
+        process_new_episode(int(episode_id))
+        return JsonResponse({"message": "知識圖譜生成成功", "episode_id": episode_id})
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+
+
+@csrf_exempt
+def generate_graph_from_episodes(request):
+    """
+    以逐字稿為來源，批次生成知識圖譜（generate_by_podcast.py）。
+    Body（皆可選）：
+    - limit             (int) : 限制處理筆數，供小範圍測試
+    - published_after    (str) : YYYY-MM-DD，篩選 published_at 下限
+    - published_before   (str) : YYYY-MM-DD，篩選 published_at 上限
+    """
+    if request.method != "POST":
+        return JsonResponse({"error": "POST required"}, status=405)
+
+    try:
+        body = json.loads(request.body) if request.body else {}
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+
+    limit = body.get("limit")
+
+    try:
+        process_all_episodes(
+            limit=int(limit) if limit else None,
+            published_after=body.get("published_after"),
+            published_before=body.get("published_before"),
+        )
+        return JsonResponse({"message": "批次知識圖譜生成完成（逐字稿來源）"})
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)

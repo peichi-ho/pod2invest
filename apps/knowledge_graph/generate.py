@@ -2,8 +2,10 @@ import json
 import re
 import os
 import time
+import unicodedata
 import concurrent.futures
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 from google import genai
 from google.genai import errors as genai_errors
@@ -32,22 +34,70 @@ def get_client():
 
 _GEMINI_TIMEOUT = 90  # 秒，單次 API 呼叫超過此時間視為 hang
 
+# 429 RESOURCE_EXHAUSTED（配額耗盡）跟其他錯誤性質不同：它不代表程式有問題，
+# 純粹是「這段時間用太多，等配額回補就會恢復」，所以給它自己一組獨立、更有
+# 耐心的重試預算，不跟 max_retries 共用。這樣長時間跑的大批次（例如一次處理
+# 幾百集逐字稿）遇到配額限制時會自動睡過冷卻期、睡醒繼續跑，不需要人發現
+# 「腳本停了」之後再手動重新執行。
+# 20 次、每次等待隨次數遞增但上限 600 秒，總計最長可以自動撐約 2.4 小時的
+# 配額冷卻（多數常見的分鐘/小時級配額都在這範圍內會自動恢復；如果配額是
+# 天級的重置週期，20 次仍會耗盡並往上拋出，交由外層（例如 process_all_episodes
+# 逐集的 try/except）跳過這一筆，下次重新執行整個批次時會自動接續處理）。
+_QUOTA_MAX_RETRIES = 20
+_QUOTA_WAIT_CAP = 600
 
-def _call_gemini_with_retry(contents: str, max_retries: int = 5) -> str:
+
+def _call_gemini_with_retry(
+    contents: str,
+    max_retries: int = 5,
+    temperature: float = 0.0,
+    response_schema: Optional[dict] = None,
+    model: Optional[str] = None,
+    max_output_tokens: Optional[int] = None,
+) -> str:
     """
     呼叫 Gemini API。
-    - 超過 90 秒沒回應（hang）：重試，等待 30 → 60 → 90 秒
-    - 429 RESOURCE_EXHAUSTED：等待 60 → 120 → 180 秒
-    - 其他錯誤：等待 2 → 4 → 8 秒
-    """
-    client = get_client()
-    model_name = getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash-lite")
+    - 超過 90 秒沒回應（hang）：重試 max_retries 次，等待 30 → 60 → 90 秒...
+    - 429 RESOURCE_EXHAUSTED：獨立重試 _QUOTA_MAX_RETRIES 次，等待 60 → 120 → ...
+      → 上限 _QUOTA_WAIT_CAP 秒，不佔用 max_retries（見上方常數說明）
+    - 其他錯誤：重試 max_retries 次，等待 2 → 4 → 8 秒...
 
-    for attempt in range(1, max_retries + 1):
+    temperature 預設 0：這個模組所有呼叫都是抽取/分類/是非判斷，不需要創意，
+    低溫度讓同一份輸入的輸出更穩定可重現（跟專案其他 Gemini 呼叫點一致，
+    例如 sentiment_score.py、outlook_review.py 也都是分類任務用 temperature=0）。
+
+    response_schema：帶入時會用 Gemini 原生的 response_schema 強制輸出符合
+    指定 JSON 結構（含 enum 限制），取代「prompt 裡用文字要求格式 + 事後
+    regex 從 ```json 區塊挖出來解析」的作法，從源頭杜絕格式跑掉或
+    relation_type 打錯字這類問題。
+
+    model：不給就用 settings.GEMINI_MODEL；需要較強模型的步驟（例如 extract_v2 的
+    關係判斷）可以個別指定。
+
+    max_output_tokens：限制輸出長度。小模型搭配 response_schema 偶爾會陷入無限重複
+    同一筆資料的迴圈，沒有上限時要等到模型輸出上限才結束，常常因此超過
+    _GEMINI_TIMEOUT 被判定超時；有上限就會很快回傳（JSON 可能被截斷，由呼叫端處理）。
+    """
+
+    client = get_client()
+    model_name = model or getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash-lite")
+
+    config: dict = {"temperature": temperature}
+    if max_output_tokens:
+        config["max_output_tokens"] = max_output_tokens
+    if response_schema is not None:
+        config["response_mime_type"] = "application/json"
+        config["response_schema"] = response_schema
+
+    attempt = 0        # 一般錯誤 / hang 的重試計數（上限 max_retries）
+    quota_attempt = 0  # 429 配額錯誤的重試計數（獨立上限 _QUOTA_MAX_RETRIES）
+
+    while True:
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         try:
             future = executor.submit(
-                client.models.generate_content, model=model_name, contents=contents
+                client.models.generate_content,
+                model=model_name, contents=contents, config=config,
             )
             response = future.result(timeout=_GEMINI_TIMEOUT)
             executor.shutdown(wait=False)
@@ -55,7 +105,8 @@ def _call_gemini_with_retry(contents: str, max_retries: int = 5) -> str:
 
         except concurrent.futures.TimeoutError:
             executor.shutdown(wait=False)  # 不等背景執行緒，直接放棄
-            if attempt == max_retries:
+            attempt += 1
+            if attempt >= max_retries:
                 raise TimeoutError(f"Gemini API 連續 {max_retries} 次超時（{_GEMINI_TIMEOUT}s）")
             wait = 30 * attempt
             print(f"  ⚠️  Gemini API 超時（第 {attempt} 次），{wait}s 後重試...")
@@ -63,19 +114,25 @@ def _call_gemini_with_retry(contents: str, max_retries: int = 5) -> str:
 
         except genai_errors.ClientError as e:
             executor.shutdown(wait=False)
-            if attempt == max_retries:
-                raise
             if e.code == 429:
-                wait = 60 * attempt
-                print(f"  ⚠️  Gemini API 429 Quota 耗盡（第 {attempt} 次），{wait}s 後重試...")
+                quota_attempt += 1
+                if quota_attempt >= _QUOTA_MAX_RETRIES:
+                    raise
+                wait = min(60 * quota_attempt, _QUOTA_WAIT_CAP)
+                print(f"  ⏸️  Gemini API 429 配額耗盡（第 {quota_attempt}/{_QUOTA_MAX_RETRIES} 次），{wait}s 後自動重試...")
+                time.sleep(wait)
             else:
+                attempt += 1
+                if attempt >= max_retries:
+                    raise
                 wait = 2 ** attempt
                 print(f"  ⚠️  Gemini API 錯誤（第 {attempt} 次），{wait}s 後重試。錯誤：{e}")
-            time.sleep(wait)
+                time.sleep(wait)
 
         except Exception as e:
             executor.shutdown(wait=False)
-            if attempt == max_retries:
+            attempt += 1
+            if attempt >= max_retries:
                 raise
             wait = 2 ** attempt
             print(f"  ⚠️  Gemini API 失敗（第 {attempt} 次），{wait}s 後重試。錯誤：{e}")
@@ -134,6 +191,45 @@ def build_summary_text(record: SummaryRecord) -> str:
 # ==========================================
 # 模組 2: 呼叫 LLM 萃取圖譜 JSON
 # ==========================================
+
+# 圖譜抽取的輸出結構，用 Gemini 原生 response_schema 強制輸出符合此格式
+# （含 relation_type 的 enum 限制），取代原本「prompt 用文字要求格式 +
+# 事後 regex 從 ```json 區塊挖」的作法。
+GRAPH_EXTRACTION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "nodes": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "industry": {"type": "string"},
+                },
+                "required": ["id", "industry"],
+            },
+        },
+        "links": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "source": {"type": "string"},
+                    "target": {"type": "string"},
+                    "relation_type": {
+                        "type": "string",
+                        "enum": ["Supply", "Co-impact", "Substitution"],
+                    },
+                    "reason": {"type": "string"},
+                },
+                "required": ["source", "target", "relation_type", "reason"],
+            },
+        },
+    },
+    "required": ["nodes", "links"],
+}
+
+
 def extract_graph_from_summary(podcast_summary: str) -> str | None:
     prompt = """
     Role: 你是一位產業鏈分析專家，擅長從文本中萃取企業與產業間的「價值網圖譜」。
@@ -189,11 +285,9 @@ def extract_graph_from_summary(podcast_summary: str) -> str | None:
     航運/物流,
     若以上皆不適合，填寫為:其他。
 
-    Output Format:
-    請務必只輸出 JSON 格式的資料，用 ```json 包裝。
-    必須包含:
-    1. `nodes`: 包含 id（公司或產業名稱）以及 industry 屬性。
-    2. `links`: 包含 source, target, reason, relation_type 屬性。
+    輸出內容規則（格式本身已由 response_schema 強制，不需要再自己組 JSON 外殼）：
+    1. `nodes`：每個 node 的 id（公司或產業名稱）以及 industry 屬性。
+    2. `links`：每條 link 的 source, target, reason, relation_type 屬性。
        ❌ source 與 target 絕對不能是同一個節點。
        ❌ reason 不能是「XXX屬於某產業」、「XXX隸屬於某行業」這類分類描述，必須是具體商業行為或產業關係。
     """
@@ -201,35 +295,64 @@ def extract_graph_from_summary(podcast_summary: str) -> str | None:
     print("\n🧠 [階段一] 呼叫 LLM 萃取 JSON 結構資料...")
     request_content = f"{prompt}\n\n【Podcast 摘要內容】：\n{podcast_summary}"
 
-    output_text = _call_gemini_with_retry(request_content)
+    output_text = _call_gemini_with_retry(request_content, response_schema=GRAPH_EXTRACTION_SCHEMA)
+
+    # response_schema 已強制輸出是合法 JSON，這裡直接解析；
+    # 保留 ```json 區塊的 fallback 只是防呆，理論上不會再走到。
+    try:
+        json.loads(output_text)
+        print("✅ [階段一] 成功萃取 JSON。")
+        return output_text
+    except Exception:
+        pass
 
     json_match = re.search(r'```json\n(.*?)\n```', output_text, re.DOTALL | re.IGNORECASE)
     if json_match:
-        print("✅ [階段一] 成功萃取 JSON。")
+        print("✅ [階段一] 成功萃取 JSON（fallback：從 ```json 區塊取出）。")
         return json_match.group(1)
 
-    print("❌ [階段一] 找不到 JSON 區塊，嘗試直接解析...")
-    try:
-        json.loads(output_text)
-        return output_text
-    except Exception:
-        print("❌ 原始輸出非有效 JSON：")
-        print(output_text)
-        return None
+    print("❌ 原始輸出非有效 JSON：")
+    print(output_text)
+    return None
 
 
 # ==========================================
 # 模組 3: 重複判斷
 # ==========================================
-def _resolve_node_name(llm_name: str, existing_names: list) -> str:
+def _normalize_node_name(name: str) -> str:
     """
-    用 Gemini 判斷 llm_name 是否與 existing_names 中某個名稱代表同一實體。
-    若有匹配，回傳 existing_names 中的正規名稱；
-    否則回傳 llm_name 本身（代表全新節點）。
+    決定性正規化（不呼叫 LLM）：全形轉半形、去除空白、轉小寫。
+    用來在丟給 LLM 語意比對之前，先攔掉單純因大小寫/全半形/空白
+    造成的重複節點（例如 NVIDIA vs Nvidia、ＡＩ運算 vs AI運算）。
+    """
+    if not name:
+        return ""
+    normalized = unicodedata.normalize("NFKC", name)
+    normalized = re.sub(r"\s+", "", normalized)
+    return normalized.lower()
+
+
+def _build_norm_index(names: list) -> dict:
+    """正規化名稱 -> 原始正規節點名稱 的對照表，供 O(1) 直接命中。"""
+    return {_normalize_node_name(n): n for n in names}
+
+
+def _resolve_node_name(llm_name: str, existing_names: list, norm_index: dict) -> str:
+    """
+    決定 llm_name 該對應到哪個既有節點名稱。
+
+    1. 先用決定性正規化比對 norm_index，命中就直接回傳，不呼叫 LLM。
+    2. 沒命中才退回 LLM 語意判斷（處理「同一實體但用詞完全不同」的情況，
+       例如中英文別名、簡稱），若有匹配，回傳 existing_names 中的正規名稱；
+       否則回傳 llm_name 本身（代表全新節點）。
     每呼叫一次會動態比對當下的 existing_names（含本批次已新增的節點）。
     """
     if not existing_names:
         return llm_name
+
+    norm_key = _normalize_node_name(llm_name)
+    if norm_key in norm_index:
+        return norm_index[norm_key]
 
     prompt = (
         f"新名稱：「{llm_name}」\n\n"
@@ -300,6 +423,8 @@ def save_to_db(json_data_str: str, summary_date: str, podcast_source: str):
         existing_nodes: dict = {row[0]: row[1] for row in cursor.fetchall()}
         # existing_names 會隨本批次新增而動態擴充，實現批次內去重
         existing_names: list = list(existing_nodes.keys())
+        # norm_index 讓大小寫/全半形/空白造成的重複可以直接命中，不必問 LLM
+        norm_index: dict = _build_norm_index(existing_names)
 
         # ── 階段一：建立 llm名稱 → 正規名稱 對照表，並插入真正新的 nodes ──
         name_map: dict = {}
@@ -310,7 +435,7 @@ def save_to_db(json_data_str: str, summary_date: str, podcast_source: str):
             if not llm_name or not industry:
                 continue
 
-            canonical = _resolve_node_name(llm_name, existing_names)
+            canonical = _resolve_node_name(llm_name, existing_names, norm_index)
             name_map[llm_name] = canonical
 
             if canonical not in existing_nodes:
@@ -320,6 +445,7 @@ def save_to_db(json_data_str: str, summary_date: str, podcast_source: str):
                 )
                 existing_nodes[canonical] = industry
                 existing_names.append(canonical)
+                norm_index[_normalize_node_name(canonical)] = canonical
                 nodes_inserted += 1
                 print(f"  ✅ 新增 node：{canonical} ({industry})")
             else:
