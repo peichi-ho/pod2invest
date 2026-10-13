@@ -17,8 +17,13 @@ _FIXED_TOPICS = {"總體經濟環境", "操作策略與建議", "風險提示"}
 
 
 def _is_recognized_topic(t: str) -> bool:
-    """topic 是否符合四種既有格式（固定三個／個股：.../產業：...）。"""
-    return t in _FIXED_TOPICS or t.startswith("個股：") or t.startswith("產業：")
+    """topic 是否符合五種既有格式（固定三個／個股：.../ETF：.../產業：...）。"""
+    return (
+        t in _FIXED_TOPICS
+        or t.startswith("個股：")
+        or t.startswith("ETF：")
+        or t.startswith("產業：")
+    )
 
 
 def _has_numeric_value(value: str) -> bool:
@@ -264,7 +269,7 @@ def normalize_schema(summary: dict) -> dict:
 
         merged_args = [merged_map[t] for t in merged_order]
 
-        # 固定排序：總體經濟環境 → 產業：* → 個股：* → 操作策略與建議 → 風險提示 → 其他
+        # 固定排序：總體經濟環境 → 產業：* → 個股：* → ETF：* → 操作策略與建議 → 風險提示 → 其他
         def _arg_sort_key(a: dict) -> tuple:
             topic = (a.get("topic") or "").strip()
             if topic == "總體經濟環境":
@@ -273,11 +278,13 @@ def normalize_schema(summary: dict) -> dict:
                 return (1, topic)
             if topic.startswith("個股：") or topic.startswith("個股:"):
                 return (2, topic)
-            if topic == "操作策略與建議":
+            if topic.startswith("ETF：") or topic.startswith("ETF:"):
                 return (3, topic)
-            if topic == "風險提示":
+            if topic == "操作策略與建議":
                 return (4, topic)
-            return (5, topic)
+            if topic == "風險提示":
+                return (5, topic)
+            return (6, topic)
 
         summary["arguments"] = sorted(merged_args, key=_arg_sort_key)
 
