@@ -245,6 +245,36 @@ def calc_end_time(timeframe_raw: str, start: date) -> Optional[date]:
 
 # ── 股票名稱 → ticker ─────────────────────────────────────────────────────────
 
+# 指數 / 大宗商品關鍵字對照表，放在模組層級（而不是 _rule_based_ticker 內部
+# 區域變數）是為了讓 thesis_score.py 的資產名稱分組（把「S&P 500指數」跟
+# 「標普500指數」、「S&P500」歸成同一組）能直接複用同一份表做「整串完全
+# 相等」的嚴格比對，不用另外複製一份容易跟這裡兜不起來。
+# _rule_based_ticker() 本身的比對邏輯（子字串 in）沒有變，行為完全不變。
+INDEX_TICKER_MAP = {
+    ("台股加權", "加權指數", "大盤", "台北股市", "台股"): "^TWII",
+    ("那斯達克", "Nasdaq", "nasdaq", "納斯達克", "納指"): "^IXIC",
+    ("S&P500", "S&P 500", "S&P", "標準普爾", "標普", "標普500"): "^GSPC",
+    ("費半", "費城半導體指數", "費城半導體"): "^SOX",
+    ("道瓊",): "^DJI",
+    ("羅素",): "^RUT",
+    ("上證", "滬指"): "000001.SS",
+    ("櫃買指數", "OTC", "上櫃指數", "櫃買"): "^TWOTCI",
+    ("Stoxx 600", "stoxx600"): "^STOXX50E",
+}
+
+COMMODITY_TICKER_MAP = {
+    ("黃金",):               "GC=F",
+    ("原油", "油價", "美油", "布油"): "CL=F",
+    ("白銀",):               "SI=F",
+    ("天然氣",):             "NG=F",
+    ("日圓", "日元"):        "JPY=X",
+    ("美元指數",):           "DX=F",
+    ("比特幣",):             "BTC-USD",
+    ("白金",):               "PL=F",
+    ("石油",):               "CL=F",
+}
+
+
 def _rule_based_ticker(asset: str) -> Optional[str]:
     """第一層：規則直判，不查資料庫。"""
     a = asset.strip()
@@ -253,35 +283,11 @@ def _rule_based_ticker(asset: str) -> Optional[str]:
     if re.match(r"^\d{4,6}$", a):
         return f"{a}.TW"
 
-    # ── 指數關鍵字 ────────────────────────────────────────────────────────────
-    INDEX_MAP = {
-        ("台股加權", "加權指數", "大盤", "台北股市", "台股"): "^TWII",
-        ("那斯達克", "Nasdaq", "nasdaq", "納斯達克", "納指"): "^IXIC",
-        ("S&P500", "S&P 500", "S&P", "標準普爾", "標普", "標普500"): "^GSPC",
-        ("費半", "費城半導體指數", "費城半導體"): "^SOX",
-        ("道瓊",): "^DJI",
-        ("羅素",): "^RUT",
-        ("上證", "滬指"): "000001.SS",
-        ("櫃買指數", "OTC", "上櫃指數", "櫃買"): "^TWOTCI",
-        ("Stoxx 600", "stoxx600"): "^STOXX50E",
-    }
-    for keys, ticker in INDEX_MAP.items():
+    for keys, ticker in INDEX_TICKER_MAP.items():
         if any(k in a for k in keys):
             return ticker
 
-    # ── 大宗商品 / 外匯 ───────────────────────────────────────────────────────
-    COMMODITY_MAP = {
-        ("黃金",):               "GC=F",
-        ("原油", "油價", "美油", "布油"): "CL=F",
-        ("白銀",):               "SI=F",
-        ("天然氣",):             "NG=F",
-        ("日圓", "日元"):        "JPY=X",
-        ("美元指數",):           "DX=F",
-        ("比特幣",):             "BTC-USD",
-        ("白金",):               "PL=F",
-        ("石油",):               "CL=F",
-    }
-    for keys, ticker in COMMODITY_MAP.items():
+    for keys, ticker in COMMODITY_TICKER_MAP.items():
         if any(k in a for k in keys):
             return ticker
 
