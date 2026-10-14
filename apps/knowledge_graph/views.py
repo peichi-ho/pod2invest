@@ -513,7 +513,16 @@ def generate_graph_from_summaries(request):
 
 def basket_page(request):
     """渲染 Basket 探索頁面。"""
+    from .services.seed_suggest import warm_async
+    warm_async()    # 先在背景建好「查詢標的」搜尋建議的索引
     return render(request, "knowledge_graph/basket.html")
+
+
+def seed_suggest_api(request):
+    """探索頁「查詢標的」輸入框的搜尋建議：名稱或代號符合輸入文字的投資標的節點。"""
+    from .services.seed_suggest import suggest_seeds
+    q = request.GET.get("q", "").strip()
+    return JsonResponse({"suggestions": suggest_seeds(q)}, json_dumps_params={"ensure_ascii": False})
 
 
 def basket_purposes_api(request):
