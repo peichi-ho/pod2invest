@@ -141,7 +141,7 @@ function formatJoinDate(iso) {
   if (!iso) return '';
   const d = new Date(iso);
   if (isNaN(d.getTime())) return '';
-  return `Joined ${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}`;
+  return `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')} 加入`;
 }
 
 function renderProfileAvatar() {

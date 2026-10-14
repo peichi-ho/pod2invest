@@ -65,6 +65,124 @@ function _macroWordLabel(v) {
   if (v < 0) return '看空';
   return '中立';
 }
+// ── 手動輸入：代號或中文名稱的搜尋建議(做法比照資產頁搜尋欄) ──────────────
+// 輸入時 debounce 查 /search/，結果顯示在輸入框下方；點選後把代號帶進輸入框。
+// 直接按「開始模擬」時，輸入若是中文名稱或純數字，會先自動解析成代號(唯一時才自動帶入，不猜)。
+let _tickerSearchTimer = null;
+let _tickerSearchSeq = 0;
+let _tickerSearchItems = [];
+let _tickerSearchActive = -1;
+function _tickerSearchBase() {
+  return (typeof B_API_URL !== 'undefined' ? B_API_URL : API_URL) + 'search/';
+}
+function _looksLikeFullTicker(v) {
+  // 已經是代號：含 . 的完整代號(2330.TW)，或英文字母開頭的美股代號(NVDA、BRK-B、^GSPC)
+  return /\./.test(v) || /^[A-Za-z^][A-Za-z0-9\-=^]*$/.test(v);
+}
+function _closeTickerSearch() {
+  const dd = document.getElementById('ticker-search-dropdown');
+  if (dd) { dd.classList.add('hidden'); dd.innerHTML = ''; }
+  _tickerSearchItems = []; _tickerSearchActive = -1;
+}
+function onTickerSearchInput() {
+  const q = document.getElementById('in-ticker').value.trim();
+  clearTimeout(_tickerSearchTimer);
+  document.getElementById('ticker-picked').classList.add('hidden');
+  if (!q) { _closeTickerSearch(); return; }
+  _tickerSearchTimer = setTimeout(() => runTickerSearch(q), 250);
+}
+async function _fetchTickerSearch(q) {
+  const res = await fetch(_tickerSearchBase() + '?q=' + encodeURIComponent(q));
+  if (!res.ok) throw new Error('search failed');
+  return (await res.json()).results || [];
+}
+async function runTickerSearch(q) {
+  const seq = ++_tickerSearchSeq;
+  const dd = document.getElementById('ticker-search-dropdown');
+  try {
+    const rows = await _fetchTickerSearch(q);
+    if (seq !== _tickerSearchSeq) return;          // 已經又打了別的字，這筆作廢
+    _tickerSearchItems = rows;
+    _tickerSearchActive = rows.length ? 0 : -1;
+    if (!rows.length) {
+      dd.innerHTML = '<p class="text-outline text-sm p-4 text-center">找不到相關標的，可直接輸入代號（例如 2330.TW、NVDA）</p>';
+    } else {
+      dd.innerHTML = rows.map((r, i) => `
+        <div data-i="${i}" onmousedown="event.preventDefault()" onclick="selectTickerCandidate(${i})"
+          class="ticker-search-row flex items-center gap-3 px-4 py-3 hover:bg-surface-container-highest cursor-pointer border-b border-outline-variant/10 last:border-0 transition-colors">
+          <span class="text-[11px] font-bold text-outline flex-shrink-0 px-1.5 py-0.5 rounded bg-surface-container-highest">${_escHtml(r.market)}</span>
+          <span class="text-base font-bold text-tertiary-container truncate">${_escHtml(r.name)}</span>
+          <span class="text-sm text-outline flex-shrink-0">${_escHtml(r.ticker)}</span>
+        </div>`).join('');
+      _paintTickerActive();
+    }
+    dd.classList.remove('hidden');
+  } catch (e) {
+    if (seq !== _tickerSearchSeq) return;
+    dd.innerHTML = '<p class="text-error text-sm p-4 text-center">搜尋失敗，請稍後再試，或直接輸入代號</p>';
+    dd.classList.remove('hidden');
+  }
+}
+function _paintTickerActive() {
+  document.querySelectorAll('#ticker-search-dropdown .ticker-search-row').forEach((el, i) => {
+    el.classList.toggle('bg-surface-container-highest', i === _tickerSearchActive);
+  });
+}
+function onTickerSearchKeydown(e) {
+  const dd = document.getElementById('ticker-search-dropdown');
+  const open = dd && !dd.classList.contains('hidden') && _tickerSearchItems.length;
+  if (e.key === 'Escape') { _closeTickerSearch(); return; }
+  if (!open) return;
+  if (e.key === 'ArrowDown') { e.preventDefault(); _tickerSearchActive = (_tickerSearchActive + 1) % _tickerSearchItems.length; _paintTickerActive(); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); _tickerSearchActive = (_tickerSearchActive - 1 + _tickerSearchItems.length) % _tickerSearchItems.length; _paintTickerActive(); }
+  else if (e.key === 'Enter') { e.preventDefault(); selectTickerCandidate(_tickerSearchActive); }
+}
+function selectTickerCandidate(i) {
+  const r = _tickerSearchItems[i];
+  if (!r) return;
+  const input = document.getElementById('in-ticker');
+  input.value = r.ticker;
+  _closeTickerSearch();
+  _showPickedTicker(r);
+}
+function _showPickedTicker(r) {
+  const el = document.getElementById('ticker-picked');
+  if (!el) return;
+  if (r && r.name && r.name !== r.ticker) {
+    el.textContent = `${r.name}（${r.ticker}）`;
+    el.classList.remove('hidden');
+  } else {
+    el.classList.add('hidden');
+  }
+}
+// 回傳可以直接送後端的代號；中文名稱或純數字會先解析。有多個可能、無法確定時回傳 ''，
+// 並把選單打開讓使用者自己選(不亂猜)。
+async function resolveTickerInput() {
+  const input = document.getElementById('in-ticker');
+  const v = input.value.trim();
+  if (!v) return '';
+  if (_looksLikeFullTicker(v)) return v;
+  try {
+    const rows = await _fetchTickerSearch(v);
+    const exact = rows.filter(r => r.exact);
+    const pick = rows.length === 1 ? rows[0] : (exact.length === 1 ? exact[0] : null);
+    if (pick) {
+      input.value = pick.ticker;
+      _showPickedTicker(pick);
+      return pick.ticker;
+    }
+    if (rows.length) await runTickerSearch(v);       // 讓使用者從選單選
+  } catch (e) { /* 搜尋服務失敗：當作使用者輸入的就是代號 */ return v; }
+  return '';
+}
+document.addEventListener('click', (e) => {
+  const dd = document.getElementById('ticker-search-dropdown');
+  const inp = document.getElementById('in-ticker');
+  if (dd && inp && !dd.contains(e.target) && e.target !== inp) _closeTickerSearch();
+});
+// 輸入框離開(change)時先把名稱解析成代號；已經是代號就不多打一次搜尋
+document.getElementById('in-ticker').addEventListener('change', () => { resolveTickerInput(); });
+
 function syncInvestedFromSlider() {
   document.getElementById('in-invested').value = document.getElementById('slider-invested').value;
 }
@@ -135,13 +253,46 @@ async function _applyPendingCalcTarget() {
   onEpisodeChange();
 }
 
+// 選到一集之後，上方那塊資訊：名稱＋代號放大，日期／風險／立場／回測期間做成小標籤。
+// 立場顏色沿用台股慣例（看多紅、看空綠），風險用三顆點表示程度，不另外用顏色，避免跟立場的紅綠混在一起。
+function _escHtml(x) {
+  return String(x == null ? '' : x).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function renderEpisodeInfo(ep) {
+  const el = document.getElementById('episode-info');
+  if (!el) return;
+  const riskLevel = ep.risk_score >= 1 ? 3 : (ep.risk_score >= 0.5 ? 2 : 1);
+  const dots = '●'.repeat(riskLevel) + '○'.repeat(3 - riskLevel);
+  const m = ep.macro_score;
+  const stance = m > 0
+    ? { text: '看多', icon: 'trending_up', cls: 'text-[#ba1a1a] bg-[#ba1a1a]/10' }
+    : (m < 0
+      ? { text: '看空', icon: 'trending_down', cls: 'text-[#1e8e3e] bg-[#1e8e3e]/10' }
+      : { text: '中立', icon: 'trending_flat', cls: 'text-on-surface-variant bg-surface-container' });
+  const icon = n => `<span class="material-symbols-outlined text-sm leading-none">${n}</span>`;
+  const chip = (inner, cls, title) =>
+    `<span class="inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-bold ${cls}"${title ? ` title="${_escHtml(title)}"` : ''}>${inner}</span>`;
+  const neutral = 'text-on-surface-variant bg-surface-container';
+  // 風險顏色刻意避開紅／綠(那是立場的台股慣例：看多紅、看空綠)，用 藍→金黃→橘 表示 低→中→高，
+  // 免得「風險高(紅)」跟「看多(紅)」同時出現時讓人搞混。
+  const riskCls = ['text-[#286671] bg-[#286671]/10', 'text-[#a16207] bg-[#eab308]/20', 'text-[#c2410c] bg-[#c2410c]/10'][riskLevel - 1];
+  // 名稱、代號、日期、風險、立場、回測期間全部放在同一排(放不下才自動換行)
+  el.innerHTML = `
+    <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
+      <span class="font-['Epilogue'] text-lg font-bold text-tertiary-container">${_escHtml(ep.asset_name)}</span>
+      <span class="text-sm font-bold tracking-widest text-outline bg-surface-container rounded px-2 py-0.5">${_escHtml(ep.ticker)}</span>
+      ${chip(icon('event') + _escHtml(ep.published_at) + ' 發布', neutral, '這一集節目的發布日期，也是模擬的基準日')}
+      ${chip('風險 <span class="tracking-widest">' + dots + '</span> ' + _riskWordLabel(ep.risk_score), riskCls, 'Podcast 對這檔股票的風險評估')}
+      ${chip(icon(stance.icon) + '立場 ' + stance.text, stance.cls, 'Podcast 對這檔股票的看法')}
+      ${ep.default_months ? chip(icon('history') + '回測約 ' + _escHtml(ep.default_months) + ' 個月', neutral, '該集 backtesting 的時間範圍，也是投資期間的預設值') : ''}
+    </div>`;
+}
+
 function onEpisodeChange() {
   const scoreId = document.getElementById('in-episode').value;
   const ep = episodes.find(e => String(e.score_id) === String(scoreId));
   if (!ep) return;
-  let info = `${ep.asset_name}(${ep.ticker})　發布於${ep.published_at}　風險：${_riskWordLabel(ep.risk_score)}　立場：${_macroWordLabel(ep.macro_score)}`;
-  if (ep.default_months) info += `　｜　該集backtesting時間範圍約${ep.default_months}個月`;
-  document.getElementById('episode-info').textContent = info;
+  renderEpisodeInfo(ep);
 
   const sourceLink = document.getElementById('episode-source-link');
   if (ep.summary_id) {
@@ -165,6 +316,31 @@ function onEpisodeChange() {
   loadSourceText(scoreId);
 }
 
+// 「AI實際讀到的完整輸入」原本是一整坨純文字，改成：每個【標題】一張卡片，
+// 「看多：」「看空：」這類開頭做成小標籤，段落放寬行距、限制一行的長度。
+function renderSourceText(el, text) {
+  const raw = String(text || '').trim();
+  if (!raw) { el.textContent = '(這集沒有找到對應的原始段落)'; return; }
+  const chipCls = {
+    '看多': 'text-[#ba1a1a] bg-[#ba1a1a]/10',
+    '看空': 'text-[#1e8e3e] bg-[#1e8e3e]/10',
+  };
+  const para = line => {
+    const k = line.match(/^(看多|看空|中立|操作建議|風險提示|建議|風險)[：:]\s*([\s\S]*)$/);
+    if (!k) return `<p class="leading-7">${_escHtml(line)}</p>`;
+    const cls = chipCls[k[1]] || 'text-on-surface-variant bg-surface-container-lowest';
+    return `<p class="leading-7"><span class="inline-block mr-2 px-2 py-0.5 rounded-full text-xs font-bold ${cls}">${_escHtml(k[1])}</span>${_escHtml(k[2])}</p>`;
+  };
+  el.innerHTML = raw.split(/(?=【[^】\n]+】)/).map(s => s.trim()).filter(Boolean).map(part => {
+    const m = part.match(/^【([^】\n]+)】\s*([\s\S]*)$/);
+    const title = m ? m[1] : '';
+    const lines = (m ? m[2] : part).split(/\n+/).map(l => l.trim()).filter(Boolean);
+    return `<div class="bg-surface-container rounded-lg px-4 py-3">` +
+      (title ? `<div class="text-sm font-bold text-tertiary-container mb-1">${_escHtml(title)}</div>` : '') +
+      `<div class="space-y-1">${lines.map(para).join('')}</div></div>`;
+  }).join('');
+}
+
 async function loadSourceText(scoreId) {
   const mySeq = ++sourceTextRequestSeq;
   const el = document.getElementById('episode-source-text');
@@ -173,7 +349,8 @@ async function loadSourceText(scoreId) {
     const resp = await fetch(B_SOURCE_TEXT_URL + '?score_id=' + encodeURIComponent(scoreId));
     const data = await resp.json();
     if (mySeq !== sourceTextRequestSeq) return;
-    el.textContent = resp.ok ? (data.full_context || data.topic_summary || '(這集沒有找到對應的原始段落)') : ('載入失敗: ' + data.error);
+    if (!resp.ok) { el.textContent = '載入失敗: ' + data.error; return; }
+    renderSourceText(el, data.full_context || data.topic_summary || '');
   } catch (e) {
     if (mySeq !== sourceTextRequestSeq) return;
     el.textContent = '載入失敗: ' + e;
@@ -191,6 +368,7 @@ async function runSimulation() {
   const placeholder = document.getElementById('calc-placeholder');
   statusEl.textContent = '跑模擬中...(要抓歷史股價+跑模擬，可能要幾秒)';
   panel.classList.add('hidden');
+  { const ms = document.getElementById('money-stats'); if (ms) { ms.classList.add('hidden'); ms.hidden = true; } }
 
   const params = new URLSearchParams({ months, risk_score: risk, macro_score: macro, n_simulations: nsim });
   if (mode === 'episode') {
@@ -198,8 +376,8 @@ async function runSimulation() {
     if (!scoreId) { statusEl.textContent = '請先選一集'; return; }
     params.set('score_id', scoreId);
   } else {
-    const ticker = document.getElementById('in-ticker').value.trim();
-    if (!ticker) { statusEl.textContent = '請輸入股票代號'; return; }
+    const ticker = await resolveTickerInput();
+    if (!ticker) { statusEl.textContent = '請輸入股票代號或名稱，或從搜尋選單選一檔'; return; }
     params.set('ticker', ticker);
   }
 
@@ -1815,6 +1993,7 @@ function resetCalculator() {
   // B方案(歷史拔靴模擬)區塊重置回預設狀態
   setMode('manual');
   document.getElementById('in-ticker').value = '2330.TW';
+  { const pk = document.getElementById('ticker-picked'); if (pk) pk.classList.add('hidden'); }
   document.getElementById('in-months').value = 12;
   document.getElementById('slider-months').value = 12;
   document.getElementById('lbl-months').textContent = 12;

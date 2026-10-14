@@ -18,8 +18,9 @@ scenario.py(給「從節目挑選」時預填滑桿用)是兩條獨立路徑，�
             每次重跑結果一模一樣)，並且會多算一段「發布日到現在」的真實股價路徑
             (actual_line)，給前端疊圖用。
 """
-from datetime import timedelta
+from datetime import date, timedelta
 
+from django.core.cache import cache
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -183,79 +184,220 @@ class BootstrapPathPreviewAPIView(APIView):
 
 class EpisodeListPreviewAPIView(APIView):
     """
-    給預覽頁的「選集數」下拉選單用：列出有 base/annual_vol 資料(=可以拿來當集模式
-    使用)的 StockSentimentScore，依發布日新到舊排序，最多回傳200筆避免選單過長。
+    給預覽頁的「選集數」下拉選單用。
+
+    2026-10-14改版：只列「有驗證句、驗證句有起訖日、且還沒到期(end_time >= 今天)」的集數
+    (每一筆都是 podcaster 對某檔股票講出了「方向＋可驗證的時間」的說法，而且那段時間還沒結束)，
+    所以每一筆都一定有 default_months(回測月數)。
+    原本是列出所有有分數的 StockSentimentScore，只要這集提到那檔股票就會出現，其中約三分之二
+    沒有可驗證的時間，畫面上「回測約N個月」就時有時無。
+
+    資料來源仍然要用 StockSentimentScore：集模式需要它的 risk_score/macro_score 與 base/
+    annual_vol(價格參數)，這些不在驗證句表(BacktestingRecord)裡；兩張表用 (summary_id, ticker)
+    對上同一集同一支股票。依發布日新到舊排序，最多回傳200筆避免選單過長。
 
     2026-10-01修正：同一集(episode_id)的pro/novice兩種mode各自有一筆SummaryRecord，
     backtesting/分數計算對兩者都各跑一次，導致同一支股票在同一集出現兩筆內容幾乎
-    一樣的紀錄，下拉選單看起來像重複。改成抓比200多一些的候選池，依(episode_id,
-    ticker)去重，同時存在時優先留pro版(內容較完整、不是簡化過的版本)，novice版
-    只在該(episode_id,ticker)沒有pro版時才保留，去重後再截斷回200筆。
+    一樣的紀錄，下拉選單看起來像重複。依(episode_id, ticker)去重，同時存在時優先留pro版
+    (內容較完整、不是簡化過的版本)，novice版只在沒有pro版時才保留。
     """
 
     def get(self, request):
-        from apps.summaries.models import StockSentimentScore
+        from apps.summaries.models import BacktestingRecord, StockSentimentScore
 
-        from apps.summaries.models import BacktestingRecord
+        # 1) 驗證句：有 ticker、有起訖日的才算(「未來幾年」這種換不成日期的被略過，不列入)。
+        #    用(summary_id, ticker)當key，這是BacktestingRecord跟StockSentimentScore唯一共同、
+        #    能對上同一支股票同一集的欄位。同一集同一檔有多句時，以最後一筆(id最大)為準。
+        # 只撈「最近發布」的驗證句：選單最多200集，不需要整張表(約8千筆)。
+        # pro/novice 各一份、同一集同一檔可能多句，所以多抓一些(1500筆)再去重、截斷。
+        # 只列「還沒到期」的驗證句(end_time >= 今天)：已經到期的那些，真實結果已經出來了，
+        # 屬於回測驗證的範圍，不是「接下來要看的標的」，所以不放進選單。
+        # 快取 key 帶日期，避免跨日之後還沿用昨天的清單。
+        today = date.today()
+        cache_key = f"episode-list-preview:v3:{today.isoformat()}"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return Response(cached)
 
-        # 抓比200多的候選池(pro/novice重複大約佔一半，400大致夠去重後還有200筆)，
-        # 去重後再截斷，避免去重後筆數不足200筆。
-        candidate_rows = (
-            StockSentimentScore.objects.using("summariesdb")
-            .filter(base__isnull=False, annual_vol__isnull=False)
-            .select_related("summary")
-            .order_by("-summary__published_at")[:400]
-        )
-
-        dedup_by_key = {}
-        for r in candidate_rows:
-            key = (r.summary.episode_id, r.ticker)
-            existing = dedup_by_key.get(key)
-            if existing is None or (existing.summary.mode != "pro" and r.summary.mode == "pro"):
-                dedup_by_key[key] = r
-        rows = sorted(
-            dedup_by_key.values(), key=lambda r: r.summary.published_at, reverse=True
-        )[:200]
-
-        # 一次把這批episode對應到的backtesting紀錄(start_time/end_time)全部撈出來，
-        # 不要每筆episode各自查一次DB(避免N+1)。用(summary_id, ticker)當key配對，
-        # 這是BacktestingRecord跟StockSentimentScore唯一共同、能對上同一支股票同一集的欄位。
-        summary_ids = [r.summary_id for r in rows]
         bt_rows = (
             BacktestingRecord.objects.using("summariesdb")
-            .filter(summary_id__in=summary_ids, start_time__isnull=False, end_time__isnull=False)
+            .filter(start_time__isnull=False, end_time__isnull=False, end_time__gte=today)
+            .exclude(ticker="")
+            .order_by("-summary__published_at", "id")[:1500]
             .values("summary_id", "ticker", "start_time", "end_time")
         )
         months_by_key = {}
         for bt in bt_rows:
-            key = (bt["summary_id"], bt["ticker"])
             days = (bt["end_time"] - bt["start_time"]).days
             if days > 0:
                 # 約略換算成月數，不用精確到日；至少算1個月，避免0個月的模擬。
-                months_by_key[key] = max(1, round(days / 30))
+                months_by_key[(bt["summary_id"], bt["ticker"])] = max(1, round(days / 30))
 
-        return Response({
+        # 2) 對應的分數紀錄(集模式要用)。
+        #    注意：不要用 select_related("summary")——SummaryRecord 帶著整份摘要文字，
+        #    撈上千筆會慢到十幾秒；只取需要的欄位，摘要欄位另外一次撈(實測 0.3 秒 vs 10 秒)。
+        from apps.summaries.models import SummaryRecord
+
+        summary_ids = {k[0] for k in months_by_key}
+        score_rows = list(
+            StockSentimentScore.objects.using("summariesdb")
+            .filter(summary_id__in=summary_ids, base__isnull=False, annual_vol__isnull=False)
+            .values("id", "summary_id", "episode_id", "ticker", "asset_name", "risk_score", "macro_score", "rationale")
+        )
+        summaries = {
+            r["id"]: r
+            for r in SummaryRecord.objects.using("summariesdb")
+            .filter(id__in=summary_ids)
+            .values("id", "episode_id", "mode", "published_at", "podcaster")
+        }
+
+        dedup_by_key = {}
+        for r in score_rows:
+            if (r["summary_id"], r["ticker"]) not in months_by_key:
+                continue   # 同一集裡的驗證句是講別檔股票，這檔沒有
+            sm = summaries.get(r["summary_id"])
+            if not sm or not sm["published_at"]:
+                continue
+            r = {**r, "_sm": sm}
+            key = (sm["episode_id"], r["ticker"])
+            existing = dedup_by_key.get(key)
+            if existing is None or (existing["_sm"]["mode"] != "pro" and sm["mode"] == "pro"):
+                dedup_by_key[key] = r
+        rows = sorted(dedup_by_key.values(), key=lambda r: r["_sm"]["published_at"], reverse=True)[:200]
+
+        payload = {
             "episodes": [
                 {
-                    "score_id": r.id,
-                    "summary_id": r.summary_id,  # 給前端「跳轉到原文」連結用，見bootstrap_path.html
-                    "episode_id": r.episode_id,  # 給「從deep dive頁面試算按鈕跳轉過來」配對用
-                    "ticker": r.ticker,
-                    "asset_name": r.asset_name,
-                    "published_at": r.summary.published_at.date().isoformat() if r.summary.published_at else None,
-                    "podcaster": r.summary.podcaster,
-                    "risk_score": r.risk_score,
-                    "macro_score": r.macro_score,
+                    "score_id": r["id"],
+                    "summary_id": r["summary_id"],  # 給前端「跳轉到原文」連結用，見bootstrap_path.html
+                    "episode_id": r["episode_id"],  # 給「從deep dive頁面試算按鈕跳轉過來」配對用
+                    "ticker": r["ticker"],
+                    "asset_name": r["asset_name"],
+                    "published_at": r["_sm"]["published_at"].date().isoformat(),
+                    "podcaster": r["_sm"]["podcaster"],
+                    "risk_score": r["risk_score"],
+                    "macro_score": r["macro_score"],
                     # AI對這集這支股票判斷risk/macro分數時，順便產生的一句話理由(≤200字)，
                     # 跟這筆score同一張表存的欄位，撈這批的成本很低，不用另外呼叫。
-                    "rationale": r.rationale,
-                    # 來自這集對這支股票的backtesting thesis時間範圍(約略月數)；
-                    # 沒有對應紀錄時是None，前端會保留原本手動設定的月數，不會硬套。
-                    "default_months": months_by_key.get((r.summary_id, r.ticker)),
+                    "rationale": r["rationale"],
+                    # 來自這集對這支股票的驗證句時間範圍(約略月數)。改版後選單只列有驗證句的，
+                    # 所以這裡一定有值；前端對None仍保留原本手動設定的月數(深連結補進來的集可能沒有)。
+                    "default_months": months_by_key.get((r["summary_id"], r["ticker"])),
                 }
                 for r in rows
             ]
-        })
+        }
+        cache.set(cache_key, payload, 300)   # 清單幾乎不變，快取5分鐘
+        return Response(payload)
+
+
+class StockSearchPreviewAPIView(APIView):
+    """
+    手動輸入股票用的搜尋建議：可以輸入代號或中文名稱(例如「台積電」「2330」「輝達」)。
+
+    GET參數：q。回傳 {"results": [{ticker, name, market, exact}]}，最多8筆。
+    資料來源(依序合併、去重)：
+      1. TickerMap(summariesdb，約250檔，台股與美股的中文名稱，團隊維護)
+      2. 證交所上市股票清單(views._get_tw_stock_map，24小時快取)，補 TickerMap 沒收的台股
+      3. 輸入看起來就是代號(例如 AMD)但上面都找不到時，原樣當作代號回傳，不擋掉使用者
+    排序：代號／名稱完全相同 > 代號開頭 > 名稱開頭 > 名稱或代號包含。
+    exact=True 代表「代號或名稱跟輸入完全一樣」，前端用它判斷是不是可以直接帶入。
+    """
+
+    MAX_RESULTS = 8
+
+    @staticmethod
+    def _market_label(ticker: str, exchange: str = "") -> str:
+        t = ticker.upper()
+        if t.endswith(".TWO"):
+            return "上櫃"
+        if t.endswith(".TW"):
+            return "台股"
+        if t.startswith("^"):
+            return "指數"
+        if "=" in t:
+            return "商品"
+        if t.endswith("-USD"):
+            return "加密貨幣"
+        if "." in t:
+            return exchange or "海外"
+        return "美股"
+
+    def get(self, request):
+        import re
+
+        q = request.query_params.get("q", "").strip()
+        if not q or len(q) > 40:
+            return Response({"results": []})
+        ql = q.lower()
+
+        # TickerMap 只有約250筆，整張撈起來快取1小時，在記憶體裡比對
+        rows = cache.get("ticker-map-rows:v1")
+        if rows is None:
+            try:
+                from apps.summaries.models import TickerMap
+                rows = list(TickerMap.objects.using("summariesdb").values("ticker", "asset_name", "zh_name", "exchange"))
+            except Exception:
+                rows = []
+            cache.set("ticker-map-rows:v1", rows, 3600)
+
+        found = {}   # ticker -> {ticker, name, market, rank, exact}
+
+        def consider(ticker: str, names: list, exchange: str = ""):
+            names = [n for n in names if n]
+            if not names:
+                return
+            code = re.sub(r"\.[A-Za-z]+$", "", ticker).lower()
+            t_low = ticker.lower()
+            best, exact = None, False
+            for n in names:
+                nl = n.lower()
+                if nl == ql:
+                    r, ex = 0, True
+                elif nl.startswith(ql):
+                    r, ex = 2, False
+                elif ql in nl:
+                    r, ex = 3, False
+                else:
+                    continue
+                if best is None or r < best:
+                    best, exact = r, ex
+            if code == ql or t_low == ql:
+                best, exact = 0, True
+            elif t_low.startswith(ql) or code.startswith(ql):
+                best = 1 if best is None else min(best, 1)
+            elif ql in t_low and best is None:
+                best = 4
+            if best is None:
+                return
+            display = next((n for n in names if re.search(r"[一-鿿]", n)), names[0])
+            cur = found.get(ticker)
+            if cur is None or best < cur["rank"]:
+                found[ticker] = {
+                    "ticker": ticker, "name": display, "market": self._market_label(ticker, exchange),
+                    "rank": best, "exact": exact,
+                }
+
+        for r in rows:
+            consider(r["ticker"], [r.get("zh_name"), r.get("asset_name")], r.get("exchange") or "")
+
+        # 證交所上市清單(含 TickerMap 沒收的)。查不到時(連線失敗)就只用上面的結果。
+        try:
+            from .views import _get_tw_stock_map
+            for code, name in (_get_tw_stock_map() or {}).items():
+                consider(f"{code}.TW", [name], "TWSE")
+        except Exception:
+            pass
+
+        # 輸入本身就像代號(例如 AMD、BRK-B、2330.TW)，但都沒找到：原樣當作代號給使用者選
+        if re.fullmatch(r"[A-Za-z0-9.\-^=]{1,15}", q) and not any(v["ticker"].lower() == ql for v in found.values()):
+            tk = q.upper()
+            if tk.isdigit():
+                tk = tk + ".TW"
+            found.setdefault(tk, {"ticker": tk, "name": tk, "market": self._market_label(tk), "rank": 9, "exact": False})
+
+        results = sorted(found.values(), key=lambda v: (v["rank"], len(v["name"]), v["ticker"]))[: self.MAX_RESULTS]
+        return Response({"results": [{k: v[k] for k in ("ticker", "name", "market", "exact")} for v in results]})
 
 
 class EpisodeSourceTextPreviewAPIView(APIView):

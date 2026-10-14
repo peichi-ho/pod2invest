@@ -1,6 +1,35 @@
 // ── Continue Listening ────────────────────────────────────────
 let _discCurrentId = null;
-let _hotTagNames = [];  // shared with AI question cards
+let _hotTagNames = [];    // shared with AI question cards — 純字串陣列，格式不能改
+let _hotTopicsCache = null;  // 完整物件 [{name, count}]，供「今日市場焦點」卡片使用
+
+// ── Demo 模式（暫時）─────────────────────────────────────────────
+// knowledge_graphdb 目前很久沒更新，最近 30 天沒有熱門主題資料，「今日市場焦點」/
+// 「最近熱門」平常會是空狀態（見 loadHotTopics()）。網址帶 ?demo=1、而且真實 API
+// 真的回傳是空的時候，才會用這份範例資料頂著給外部展示用；平常訪客連上來（沒帶這個
+// 參數）完全看不到，等 knowledge graph 資料補上後，真實資料會自動蓋過這份範例、
+// 不用回來刪這段程式碼也不會出錯。主題名稱刻意挑跟目前 backtesting 週訊號資料
+// (_signalData) 有重疊的（例如台積電），這樣「N 位看多/看空」顯示的還是真資料，
+// 只有「這是熱門主題」這件事本身是展示用的假設，不是連看多看空數字都憑空生造。
+const _DEMO_MODE = new URLSearchParams(location.search).get('demo') === '1';
+const _DEMO_HOT_TOPICS = [
+  { name: '台積電', count: 32 },
+  { name: 'AI', count: 28 },
+  { name: '聯準會', count: 19 },
+  { name: '半導體', count: 15 },
+  { name: '美股', count: 12 },
+  { name: 'ETF', count: 9 },
+];
+
+// 在 section 標題後面加一個小標籤，避免看展示的人誤把範例資料當成真實資料。
+function _markDemoSection(headingId) {
+  const heading = document.getElementById(headingId);
+  if (!heading || heading.querySelector('.demo-badge')) return;
+  const badge = document.createElement('span');
+  badge.className = 'demo-badge ml-2 align-middle text-[10px] font-bold text-outline uppercase tracking-widest bg-surface-container px-2 py-1 rounded-full';
+  badge.textContent = '展示用範例';
+  heading.appendChild(badge);
+}
 
 // ── Weekly Signals ──────────────────────────────────────────────
 let _signalDir = 'bullish';
@@ -123,8 +152,7 @@ function renderRecommended(list) {
         </div>
         <div class="p-4 space-y-2">
           <div class="flex items-center justify-between">
-            <span class="text-[10px] font-bold text-secondary uppercase tracking-widest truncate max-w-[60%]">${tag}</span>
-            <span class="text-[10px] font-bold text-on-primary-container">New</span>
+            <span class="text-[10px] font-bold text-secondary uppercase tracking-widest truncate">${tag}</span>
           </div>
           <h4 class="font-['Epilogue'] font-bold text-sm text-tertiary-container leading-snug group-hover:text-secondary transition-colors line-clamp-2">${title}</h4>
           <p class="text-[10px] text-outline truncate">${s.podcaster || ''}</p>
@@ -237,21 +265,26 @@ function toggleSignalDetail(chipBtn, asset, week, podcaster, event) {
         <p class="text-sm font-bold text-tertiary-container font-['Epilogue'] leading-snug mb-2">${r.thesis || ''}</p>
         <div class="text-[11px] text-outline mb-0.5 truncate" title="${episodeName}">${episodeName}</div>
         ${acc ? `<div class="text-[11px] font-bold text-secondary mt-1">⚡ ${acc.pct}% 準確率</div>` : ''}
-        <button onclick="openDeepDive(${r.summary_id}, false, ${r.id})" class="mt-3 w-full py-2 bg-on-primary-container text-white rounded-full font-label text-[11px] font-bold uppercase tracking-widest">Read Thesis</button>
+        <button onclick="openDeepDive(${r.summary_id}, false, ${r.id})" class="mt-3 w-full py-2 bg-on-primary-container text-white rounded-full font-label text-[11px] font-bold tracking-widest">閱讀論點</button>
       </div>`;
-  }).join('') || '<p class="text-outline text-xs py-2">此 Podcaster 無驗證句</p>';
+  }).join('') || '<p class="text-outline text-xs py-2">此節目無驗證句</p>';
   detail.classList.remove('hidden');
 }
 
-function toggleSingleSource(btn) {
+// 通用的「展開清單」收合按鈕：「單一來源」整節清單（顯示更多（+N）／收起）跟單一來源
+// 卡片內同一位 podcaster 的「其他觀點」（其他觀點（N）／收起）都是同一套版型——收合上一個
+// 兄弟元素、轉動 chevron、換按鈕文字——只有文案不同，用 data-more-label/data-less-label
+// （{n} 是數量佔位字元）帶文案，不用為每個使用情境各寫一份幾乎一樣的收合邏輯。
+function toggleExpandableList(btn) {
   const rest = btn.previousElementSibling;
-  const chevron = btn.querySelector('.single-chevron');
-  const label = btn.querySelector('.single-more-label');
+  const chevron = btn.querySelector('.expand-chevron');
+  const label = btn.querySelector('.expand-label');
   const isHidden = rest.classList.toggle('hidden');
   chevron.style.transform = isHidden ? '' : 'rotate(180deg)';
   if (label) {
     const count = rest.querySelectorAll(':scope > div').length;
-    label.textContent = isHidden ? `顯示更多（+${count}）` : '收起';
+    const moreTemplate = btn.dataset.moreLabel || '顯示更多（+{n}）';
+    label.textContent = isHidden ? moreTemplate.replace('{n}', count) : (btn.dataset.lessLabel || '收起');
   }
 }
 
@@ -273,23 +306,24 @@ function shiftSignalWeek(delta) {
   if (_signalData) renderSignalCards(_signalData);
 }
 
+// 日期所屬那一週的週一（YYYY-MM-DD）。「市場共識」的週切換跟「今日市場」找最新一週共用。
+function _toWeekMon(dateStr) {
+  const d = new Date(dateStr);
+  const day = d.getUTCDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  const mon = new Date(d);
+  mon.setUTCDate(d.getUTCDate() + diff);
+  return mon.toISOString().slice(0, 10);
+}
+
 function renderSignalCards(records) {
   const grid = document.getElementById('insights-grid');
   const accMap = _accuracyCache || {};
 
-  function toWeekMon(dateStr) {
-    const d = new Date(dateStr);
-    const day = d.getUTCDay();
-    const diff = day === 0 ? -6 : 1 - day;
-    const mon = new Date(d);
-    mon.setUTCDate(d.getUTCDate() + diff);
-    return mon.toISOString().slice(0, 10);
-  }
-
   _signalRecordsByAssetWeek = {};
   for (const r of records) {
     if (!r.start_time) continue;
-    const week = toWeekMon(r.start_time);
+    const week = _toWeekMon(r.start_time);
     const key = `${r.asset}||${week}`;
     if (!_signalRecordsByAssetWeek[key]) _signalRecordsByAssetWeek[key] = [];
     if (!_signalRecordsByAssetWeek[key].find(x => x.id === r.id))
@@ -299,7 +333,7 @@ function renderSignalCards(records) {
   const weekMap = {};
   for (const r of records) {
     if (!r.start_time) continue;
-    const week = toWeekMon(r.start_time);
+    const week = _toWeekMon(r.start_time);
     if (!weekMap[week]) weekMap[week] = {};
     const asset = r.asset || '';
     if (!weekMap[week][asset]) weekMap[week][asset] = { podcasters: {}, dir: r.direction, ticker: r.ticker };
@@ -331,16 +365,6 @@ function renderSignalCards(records) {
   const dirFilter = _signalDir;
   const filtered = Object.entries(assets).filter(([, d]) => d.dir === dirFilter);
 
-  const allPodcasters = new Set();
-  let consensusCount = 0;
-  for (const [, d] of filtered) {
-    Object.keys(d.podcasters).forEach(p => allPodcasters.add(p));
-    if (Object.keys(d.podcasters).length >= 2) consensusCount++;
-  }
-  const s1 = document.getElementById('stat-total'); if (s1) s1.textContent = filtered.length;
-  const s2 = document.getElementById('stat-consensus'); if (s2) s2.textContent = consensusCount;
-  const s3 = document.getElementById('stat-podcasters'); if (s3) s3.textContent = allPodcasters.size;
-
   const sorted = filtered.sort((a, b) => Object.keys(b[1].podcasters).length - Object.keys(a[1].podcasters).length);
   const strongItems = sorted.filter(([, d]) => Object.keys(d.podcasters).length >= 3);
   const weakItems   = sorted.filter(([, d]) => Object.keys(d.podcasters).length === 2);
@@ -363,7 +387,7 @@ function renderSignalCards(records) {
       fail:    { label: '✗ 錯誤',   color: '#993c1d', bg: '#faece7' },
       pending: { label: '⏳ 待驗證', color: '#717879', bg: '#f0eee5' },
     };
-    const thesisHtml = recs.map(r => {
+    const renderThesis = r => {
       const cfg = resultCfg[r.result] || resultCfg.pending;
       const ep = (r.source_filename || '').replace(/\.srt$/i, '');
       return `<div class="bg-surface-container-lowest rounded-md border border-outline-variant/20 p-3 mt-2">
@@ -372,9 +396,17 @@ function renderSignalCards(records) {
         </div>
         <p class="text-sm font-bold text-tertiary-container font-['Epilogue'] leading-snug mb-1.5">${r.thesis || ''}</p>
         <div class="text-[11px] text-outline truncate mb-2" title="${ep}">${ep}</div>
-        <button onclick="openDeepDive(${r.summary_id}, false, ${r.id})" class="w-full py-1.5 bg-on-primary-container text-white rounded-full font-label text-[11px] font-bold uppercase tracking-widest">Read Thesis</button>
+        <button onclick="openDeepDive(${r.summary_id}, false, ${r.id})" class="w-full py-1.5 bg-on-primary-container text-white rounded-full font-label text-[11px] font-bold tracking-widest">閱讀論點</button>
       </div>`;
-    }).join('');
+    };
+
+    // 同一位 podcaster 在同一週對同一標的可能不只發表過一次觀點（不同集數都提到），
+    // 先只顯示第一則，其餘收進「其他觀點」收合清單，單一來源卡片才不會被拉得很長。
+    const [firstRec, ...restRecs] = recs;
+    const firstThesisHtml = firstRec ? renderThesis(firstRec) : '';
+    const restThesisHtml = restRecs.map(renderThesis).join('');
+    const hasMoreViews = restRecs.length > 0;
+
     return `
       <div class="bg-white rounded-2xl overflow-hidden" style="border-left:3px solid #c1c8c9;border-top:0.5px solid #e5e3d9;border-right:0.5px solid #e5e3d9;border-bottom:0.5px solid #e5e3d9;border-radius:0 1rem 1rem 0;">
         <div class="p-4">
@@ -387,7 +419,13 @@ function renderSignalCards(records) {
             ${pct != null ? `<span class="text-[11px] font-semibold text-secondary">⚡ ${pct}% 準確率</span>` : ''}
           </div>
           ${pct != null ? `<div class="h-1 bg-surface-container rounded-full mb-3"><div class="h-full rounded-full" style="width:${pct}%;background:${accBarColor};"></div></div>` : ''}
-          ${thesisHtml}
+          ${firstThesisHtml}
+          ${hasMoreViews ? `
+          <div class="hidden">${restThesisHtml}</div>
+          <button type="button" onclick="toggleExpandableList(this)" data-more-label="其他觀點（{n}）" class="mt-2 w-full flex items-center justify-center gap-1.5 py-2 rounded-xl border border-outline-variant/30 text-xs font-bold text-outline hover:bg-surface-container transition-colors">
+            <span class="expand-label">其他觀點（${restRecs.length}）</span>
+            <span class="material-symbols-outlined text-sm expand-chevron" style="transition:transform 0.2s">expand_more</span>
+          </button>` : ''}
         </div>
       </div>`;
   }
@@ -428,7 +466,7 @@ function renderSignalCards(records) {
           <div class="signal-detail hidden mt-2 space-y-2"></div>
           ${avgAcc != null ? `
           <div class="mt-3">
-            <div class="flex justify-between text-[10px] font-bold text-outline mb-1"><span>Podcaster 平均準確率</span><span>${avgAcc}%</span></div>
+            <div class="flex justify-between text-[10px] font-bold text-outline mb-1"><span>節目平均準確率</span><span>${avgAcc}%</span></div>
             <div class="h-1 bg-surface-container rounded-full"><div class="h-full rounded-full" style="width:${accBarWidth}%;background:${accBarColor};"></div></div>
           </div>` : ''}
         </div>
@@ -445,7 +483,7 @@ function renderSignalCards(records) {
     html += weakItems.map(([a, d]) => renderCard(a, d)).join('');
   }
   if (singleItems.length) {
-    const SHOW = 3;
+    const SHOW = 2;
     const visibleHtml = singleItems.slice(0, SHOW).map(([a, d]) => renderSingleCard(a, d)).join('');
     const restHtml    = singleItems.slice(SHOW).map(([a, d]) => renderSingleCard(a, d)).join('');
     const hasMore = singleItems.length > SHOW;
@@ -455,10 +493,10 @@ function renderSignalCards(records) {
         ${sectionLabel}
         <div class="space-y-3">${visibleHtml}</div>
         ${hasMore ? `
-        <div class="single-source-rest hidden space-y-3 mt-3">${restHtml}</div>
-        <button onclick="toggleSingleSource(this)" class="mt-3 w-full flex items-center justify-center gap-1.5 py-2.5 rounded-xl border border-outline-variant/30 text-xs font-bold text-outline hover:bg-surface-container transition-colors">
-          <span class="single-more-label">顯示更多（+${singleItems.length - SHOW}）</span>
-          <span class="material-symbols-outlined text-sm single-chevron" style="transition:transform 0.2s">expand_more</span>
+        <div class="hidden space-y-3 mt-3">${restHtml}</div>
+        <button type="button" onclick="toggleExpandableList(this)" data-more-label="顯示更多（+{n}）" class="mt-3 w-full flex items-center justify-center gap-1.5 py-2.5 rounded-xl border border-outline-variant/30 text-xs font-bold text-outline hover:bg-surface-container transition-colors">
+          <span class="expand-label">顯示更多（+${singleItems.length - SHOW}）</span>
+          <span class="material-symbols-outlined text-sm expand-chevron" style="transition:transform 0.2s">expand_more</span>
         </button>` : ''}
       </div>`;
   }
@@ -477,9 +515,14 @@ async function loadWeeklySignals() {
     await _ensureFavoritesCache();
     _signalData = records;
     renderSignalCards(records);
+    renderMarketFocus(); // 補上「今日市場焦點」卡片的看多/看空共識（見 _consensusForTopic）
   } catch (e) {
     console.error('loadWeeklySignals failed', e);
     grid.innerHTML = '<p class="text-outline text-sm">載入失敗</p>';
+  } finally {
+    // 「今日市場」要優先放市場共識有提到的個股，所以等共識資料回來（或確定失敗）才載入，
+    // 這樣只會畫一次，不會先畫一版再補上共識個股造成畫面跳動。共識資料失敗時就只剩追蹤＋熱門成交。
+    loadMarketOverview();
   }
 }
 
@@ -502,22 +545,25 @@ async function filterDiscoverByTag(tagName) {
   _updateTagButtons();
 
   const resultsSection     = document.getElementById('tag-results-section');
-  const continueSec        = document.getElementById('continue-listening-section');
-  const insightsSec        = document.getElementById('verified-insights-section');
-  const recommendedSection = document.getElementById('recommended-section');
+  // 標籤篩選畫面會蓋掉首頁其他所有 section，這份清單要跟
+  // templates/pages/discover.html 目前有的 section 保持一致。
+  const otherSections = [
+    'market-focus-section',
+    'continue-listening-section',
+    'verified-insights-section',
+    'hot-topics-section',
+    'market-overview-section',
+    'recommended-section',
+  ].map(id => document.getElementById(id)).filter(Boolean);
 
   if (!tagName) {
     resultsSection.classList.add('hidden');
-    continueSec.classList.remove('hidden');
-    insightsSec.classList.remove('hidden');
-    recommendedSection.classList.remove('hidden');
+    otherSections.forEach(el => el.classList.remove('hidden'));
     return;
   }
 
   resultsSection.classList.remove('hidden');
-  continueSec.classList.add('hidden');
-  insightsSec.classList.add('hidden');
-  recommendedSection.classList.add('hidden');
+  otherSections.forEach(el => el.classList.add('hidden'));
   document.getElementById('tag-results-title').textContent = `「${tagName}」相關節目`;
 
   const list = document.getElementById('tag-results-list');
@@ -568,8 +614,8 @@ async function filterDiscoverByTag(tagName) {
     const tagStr = (s.tags || []).slice(0, 3).join(' · ');
     return `
       <div onclick="openDeepDive(${s.id})" class="flex gap-4 p-4 rounded-lg bg-surface-container-lowest hover:bg-surface-container-low transition-colors cursor-pointer border border-transparent hover:border-outline-variant/20">
-        <div class="w-16 h-16 rounded-lg flex-shrink-0 flex items-center justify-center" style="background:${st.bg}">
-          <span class="material-symbols-outlined text-white/60 text-2xl" style="font-variation-settings:'FILL' 1">${st.icon}</span>
+        <div class="w-16 h-16 rounded-lg overflow-hidden flex-shrink-0">
+          ${podcastAvatar(s.podcaster, st.bg, st.icon)}
         </div>
         <div class="flex flex-col justify-center min-w-0">
           <span class="text-[10px] font-bold text-secondary uppercase tracking-widest truncate">${s.podcaster || ''}</span>
@@ -580,33 +626,230 @@ async function filterDiscoverByTag(tagName) {
   }).join('');
 }
 
-async function loadHotTags() {
+// 標籤按鈕本體（「最近熱門」section 用）：node.count 是 /api/knowledge-graph/hot-nodes/
+// 回傳的「最近 N 天在圖譜中出現的次數」，不是集數，所以標成「次提及」而不是「集討論」。
+function _renderTagBtns(topics) {
   const container = document.getElementById('discover-tags');
   if (!container) return;
-  const allBtn = `<button data-tag="__all__" onclick="filterDiscoverByTag(null)" class="${_tagActiveCls}">All</button>`;
+  const allBtn = `<button data-tag="__all__" onclick="filterDiscoverByTag(null)" class="${_tagActiveCls}">全部</button>`;
+  const btns = topics.map(t => {
+    const safe = t.name.replace(/'/g, "\\'");
+    const countLabel = t.count != null ? `<span class="ml-1.5 opacity-60 font-semibold">${t.count} 次提及</span>` : '';
+    return `<button data-tag="${t.name}" onclick="filterDiscoverByTag('${safe}')" class="${_tagNormalCls}">${escapeHtml(t.name)}${countLabel}</button>`;
+  }).join('');
+  container.innerHTML = allBtn + btns;
+}
 
-  function _renderTagBtns(names) {
-    const btns = names.map(n =>
-      `<button data-tag="${n}" onclick="filterDiscoverByTag('${n.replace(/'/g, "\\'")}') " class="${_tagNormalCls}">${n}</button>`
-    ).join('');
-    container.innerHTML = allBtn + btns;
-  }
-
+async function loadHotTopics() {
+  const tagsContainer = document.getElementById('discover-tags');
+  const focusGrid = document.getElementById('market-focus-grid');
   try {
     const res = await fetch('/api/knowledge-graph/hot-nodes/?days=30&limit=12');
-    if (res.ok) {
-      const data = await res.json();
-      const nodes = data.nodes || [];
-      if (nodes.length) {
-        _hotTagNames = nodes.map(n => n.name);
-        _renderTagBtns(_hotTagNames);
-        return;
-      }
-    }
-  } catch { /* fall through */ }
+    if (!res.ok) throw new Error('network');
+    const data = await res.json();
+    let nodes = data.nodes || [];
 
-  container.innerHTML = allBtn;
+    if (!nodes.length && _DEMO_MODE) {
+      nodes = _DEMO_HOT_TOPICS;
+      _markDemoSection('market-focus-heading');
+      _markDemoSection('hot-topics-heading');
+    }
+
+    if (!nodes.length) {
+      _hotTopicsCache = [];
+      if (tagsContainer) tagsContainer.innerHTML = '<p class="text-outline text-sm">目前還沒有足夠的熱門討論資料</p>';
+      if (focusGrid) focusGrid.innerHTML = '<p class="text-outline text-sm">目前還沒有足夠的熱門討論資料</p>';
+      return;
+    }
+
+    _hotTopicsCache = nodes;
+    _hotTagNames = nodes.map(n => n.name);
+    _renderTagBtns(nodes);
+    renderMarketFocus();
+  } catch (e) {
+    console.error('loadHotTopics failed', e);
+    _hotTopicsCache = null;
+    if (tagsContainer) tagsContainer.innerHTML = '<p class="text-outline text-sm">熱門主題暫時無法載入</p>';
+    if (focusGrid) focusGrid.innerHTML = '<p class="text-outline text-sm">今日市場焦點暫時無法載入</p>';
+  }
 }
+
+// 從已經載入的 backtesting 週訊號資料（_signalData，見 loadWeeklySignals）裡，
+// 找同名 asset 的看多/看空 podcaster 人數。找不到（該熱門主題不是個股/ETF、或近期
+// 沒有對應的投資觀點紀錄）就回傳 null，讓卡片只顯示提及次數，不生造共識資料。
+function _consensusForTopic(topicName) {
+  if (!_signalData || !_signalData.length) return null;
+  const name = (topicName || '').trim();
+  if (!name) return null;
+  const bullish = new Set();
+  const bearish = new Set();
+  for (const r of _signalData) {
+    if ((r.asset || '').trim() !== name || !r.podcaster) continue;
+    if (r.direction === 'bullish') bullish.add(r.podcaster);
+    else if (r.direction === 'bearish') bearish.add(r.podcaster);
+  }
+  if (!bullish.size && !bearish.size) return null;
+  return { bullish: bullish.size, bearish: bearish.size };
+}
+
+// 「今日市場焦點」卡片：取前 6 個熱門主題，只用 hot-nodes 真的有的欄位（name/count），
+// 共識資料（看多/看空）是額外資訊，有才顯示——見 _consensusForTopic()。
+// loadHotTopics() 跟 loadWeeklySignals() 是各自獨立的非同步請求，兩邊完成順序不定，
+// 所以兩邊都會呼叫這支函式，確保不管誰先回來，畫面最終都會補上共識資料。
+function renderMarketFocus() {
+  const grid = document.getElementById('market-focus-grid');
+  if (!grid) return;
+  if (_hotTopicsCache === null) return; // 尚未載入或已顯示錯誤狀態，交給 loadHotTopics() 處理
+  if (!_hotTopicsCache.length) return;  // 空狀態已經在 loadHotTopics() 裡設定過
+
+  const topics = _hotTopicsCache.slice(0, 6);
+  grid.innerHTML = topics.map(t => {
+    const safe = t.name.replace(/'/g, "\\'");
+    const consensus = _consensusForTopic(t.name);
+    const consensusHtml = consensus ? `
+      <div class="flex items-center gap-2 mt-3 flex-wrap">
+        ${consensus.bullish ? `<span class="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-1 rounded-full bg-surface-container text-secondary"><span class="material-symbols-outlined text-sm">arrow_upward</span>${consensus.bullish} 位看多</span>` : ''}
+        ${consensus.bearish ? `<span class="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-1 rounded-full bg-surface-container text-outline"><span class="material-symbols-outlined text-sm">arrow_downward</span>${consensus.bearish} 位看空</span>` : ''}
+      </div>` : '';
+    return `
+      <button type="button"
+        onclick="filterDiscoverByTag('${safe}'); document.getElementById('tag-results-section')?.scrollIntoView({behavior:'smooth', block:'start'});"
+        class="text-left bg-surface-container-lowest rounded-2xl p-5 border border-outline-variant/10 hover:shadow-lg hover:border-outline-variant/30 transition-all">
+        <h3 class="font-['Epilogue'] font-bold text-lg text-tertiary-container leading-snug">${escapeHtml(t.name)}</h3>
+        <p class="text-xs text-outline mt-1 font-semibold">Podcast 最近 ${t.count} 次提及</p>
+        ${consensusHtml}
+        <span class="inline-flex items-center gap-1 text-secondary text-xs font-bold mt-4">
+          查看相關內容<span class="material-symbols-outlined text-sm">arrow_forward</span>
+        </span>
+      </button>`;
+  }).join('');
+}
+
+// ── 今日市場（輔助資訊）─────────────────────────────────────────
+// 後端目前沒有台灣加權指數／NASDAQ／S&P 500 這種大盤指數資料來源（只有 apps/assets 的
+// 個股／ETF 即時行情），所以不做假的指數卡片，改用 /api/assets/rankings/ 的真實行情。
+// 卡片順序（前面的優先）：
+//   1. 使用者已經收藏（追蹤）的台股個股
+//   2. 最新一週「市場共識」區塊有提到的台股個股（提到的 podcaster 人數多的排前面）
+//   3. 前兩類加起來不到 _MARKET_OVERVIEW_MIN_CARDS 張時，才用今日成交量最大的個股補滿
+// 跟 assets.js 的 loadAssetFavorites() 一樣用 symbols= 參數一次查回指定幾檔的即時價量，
+// 不用逐檔打 API。卡片數量因此不固定，前端改成左右滑動，不用截斷。
+const _MARKET_OVERVIEW_MIN_CARDS = 10;
+let _marketOverviewSeq = 0;        // 過期回應防護：追蹤清單變動會重新載入，晚回來的舊請求不能蓋掉新結果
+let _marketOverviewRefreshTimer = null;
+
+// 最新一週（跟「市場共識」預設顯示的同一週）裡提到的台股個股，以及提到它的 podcaster 人數
+// （人數多的在前）。只算「市場共識」畫面上真的有的看多／看空，觀察（neutral）不在那個區塊裡。
+function _consensusTwStocks() {
+  if (!_signalData || !_signalData.length) return [];
+  const dated = _signalData.filter(r => r.start_time && (r.direction === 'bullish' || r.direction === 'bearish'));
+  if (!dated.length) return [];
+  const latestWeek = dated.reduce((max, r) => { const w = _toWeekMon(r.start_time); return w > max ? w : max; }, '');
+  const podcastersBySymbol = new Map();
+  for (const r of dated) {
+    if (_toWeekMon(r.start_time) !== latestWeek) continue;
+    const resolved = resolveAssetCategory(r.ticker);
+    if (!resolved || resolved.category !== 'tw_stock') continue;
+    if (!podcastersBySymbol.has(resolved.symbol)) podcastersBySymbol.set(resolved.symbol, new Set());
+    if (r.podcaster) podcastersBySymbol.get(resolved.symbol).add(r.podcaster);
+  }
+  return [...podcastersBySymbol.entries()]
+    .map(([symbol, podcasters]) => ({ symbol, podcasterCount: podcasters.size }))
+    .sort((a, b) => b.podcasterCount - a.podcasterCount);
+}
+
+async function _fetchTwStockRowsBySymbols(symbols) {
+  if (!symbols.length) return [];
+  const res = await fetch(`/api/assets/rankings/?category=tw_stock&symbols=${symbols.map(encodeURIComponent).join(',')}&sort=volume&direction=desc&limit=${symbols.length}`);
+  if (!res.ok) return [];
+  const data = await res.json();
+  return Array.isArray(data.data) ? data.data : [];
+}
+
+async function loadMarketOverview() {
+  const grid = document.getElementById('market-overview-grid');
+  if (!grid) return;
+  const seq = ++_marketOverviewSeq;
+
+  const favorites = await _ensureFavoritesCache();
+  const favSymbols = [...favorites].filter(k => k.startsWith('tw_stock:')).map(k => k.split(':')[1]);
+  const favSet = new Set(favSymbols);
+  const consensus = _consensusTwStocks();
+  const consensusCounts = new Map(consensus.map(c => [c.symbol, c.podcasterCount]));
+  const prioritySymbols = [...new Set([...favSymbols, ...consensus.map(c => c.symbol)])];
+
+  // 優先清單跟熱門成交各自獨立，其中一邊抓不到不能讓另一邊也跟著掛掉。
+  const [priorityRows, hotRows] = await Promise.all([
+    _fetchTwStockRowsBySymbols(prioritySymbols).catch(e => {
+      console.error('loadMarketOverview priority failed', e);
+      return [];
+    }),
+    fetch('/api/assets/rankings/?category=tw_stock&sort=volume&direction=desc&limit=10')
+      .then(r => r.ok ? r.json() : null)
+      .then(data => (data && Array.isArray(data.data)) ? data.data : null)
+      .catch(e => { console.error('loadMarketOverview hot failed', e); return null; }),
+  ]);
+  if (seq !== _marketOverviewSeq) return; // 期間又有更新的請求發出，這筆結果過期了
+
+  if (hotRows === null && !priorityRows.length) {
+    grid.innerHTML = '<p class="text-outline text-sm">今日市場資料暫時無法載入</p>';
+    return;
+  }
+
+  // API 回來的順序是依成交量，這裡重新排：追蹤的（成交量大到小）→ 共識提到的（人數多到少）→ 熱門成交補滿
+  const favRows = priorityRows.filter(r => favSet.has(r.symbol));
+  const consensusRows = priorityRows
+    .filter(r => !favSet.has(r.symbol))
+    .sort((a, b) => (consensusCounts.get(b.symbol) || 0) - (consensusCounts.get(a.symbol) || 0));
+  const shown = new Set(priorityRows.map(r => r.symbol));
+  const fillCount = Math.max(0, _MARKET_OVERVIEW_MIN_CARDS - priorityRows.length);
+  const fillRows = (hotRows || []).filter(r => !shown.has(r.symbol)).slice(0, fillCount);
+
+  renderMarketOverview([
+    ...favRows.map(row => ({ row, fav: true, consensusCount: consensusCounts.get(row.symbol) || 0 })),
+    ...consensusRows.map(row => ({ row, fav: false, consensusCount: consensusCounts.get(row.symbol) || 0 })),
+    ...fillRows.map(row => ({ row, fav: false, consensusCount: 0, hot: true })),
+  ]);
+}
+
+// items：[{ row, fav, consensusCount, hot }]——row 是 /api/assets/rankings/ 的一列，其餘是這張卡片
+// 出現在這裡的原因（追蹤中／市場共識提到／熱門成交補位），用來決定星號跟小標籤。
+function renderMarketOverview(items) {
+  const grid = document.getElementById('market-overview-grid');
+  if (!grid) return;
+  if (!items.length) { grid.innerHTML = '<p class="text-outline text-sm">目前沒有市場資料</p>'; return; }
+  grid.innerHTML = items.map(({ row: r, fav, consensusCount, hot }) => {
+    const chg = formatChangePct(r.change_pct);
+    const name = r.name || r.symbol;
+    const chipCls = 'text-[10px] font-bold px-2 py-0.5 rounded-full bg-surface-container';
+    const chips = [
+      consensusCount ? `<span class="${chipCls} text-secondary">市場共識・${consensusCount} 位提及</span>` : '',
+      hot ? `<span class="${chipCls} text-outline">成交熱門</span>` : '',
+    ].join('');
+    return `
+      <button type="button" onclick="_goToAssetFromSearch('${r.symbol}', 'tw_stock', '${name.replace(/'/g, "\'")}')"
+        class="flex-shrink-0 w-40 text-left bg-surface-container-lowest rounded-2xl p-4 border border-outline-variant/10 hover:shadow-lg transition-all">
+        <div class="flex items-center justify-between gap-1">
+          <span class="text-xs font-bold text-outline uppercase tracking-widest">${r.symbol}</span>
+          ${fav ? `<span class="material-symbols-outlined text-sm text-[#d97f12]" style="font-variation-settings:'FILL' 1" aria-label="追蹤中">star</span>` : ''}
+        </div>
+        <div class="font-['Epilogue'] font-bold text-base text-tertiary-container mt-0.5 truncate">${escapeHtml(name)}</div>
+        <div class="flex items-baseline gap-2 mt-2">
+          <span class="text-lg font-bold text-on-surface">${r.close != null ? r.close.toFixed(2) : '—'}</span>
+          <span class="text-sm font-bold ${chg.colorClass}">${chg.label}</span>
+        </div>
+        ${chips ? `<div class="flex flex-wrap gap-1 mt-2">${chips}</div>` : ''}
+      </button>`;
+  }).join('');
+}
+
+// 使用者在別處（市場共識卡片、Assets、單集頁…）追蹤／取消追蹤台股個股後，今日市場也要
+// 跟著更新。稍微 debounce，連續點好幾顆星星只重新載入一次。
+window.addEventListener('pod2invest:favorite-toggled', (e) => {
+  if (!e.detail || e.detail.category !== 'tw_stock') return;
+  clearTimeout(_marketOverviewRefreshTimer);
+  _marketOverviewRefreshTimer = setTimeout(loadMarketOverview, 300);
+});
 
 // ── Search ────────────────────────────────────────────────────
 let _searchTimer = null;
@@ -672,15 +915,21 @@ async function _fetchAssetMatches(q) {
   return results.flat().slice(0, 5);
 }
 
+// 台股漲跌色（紅漲綠跌，跟美股網站相反）：discover.js 的搜尋下拉、市場焦點共識、
+// 今日市場都共用同一套換算，避免各處各自寫一份容易顏色兜不起來。
+function formatChangePct(pct) {
+  if (pct == null) return { label: '—', colorClass: 'text-outline' };
+  const isUp = pct > 0, isDown = pct < 0;
+  const colorClass = isUp ? 'text-[#ba1a1a]' : isDown ? 'text-[#1e8e3e]' : 'text-outline';
+  const arrow = isUp ? '▲' : isDown ? '▼' : '';
+  return { label: `${arrow} ${Math.abs(pct).toFixed(2)}%`, colorClass };
+}
+
 // 跟 assets.js 的 _runAssetSearch() 下拉選項用同一套排版/配色，讓使用者一眼認出
 // 這是「標的」而不是「單集」（單集那排是另一種顏色的卡片，見 _episodeRowHtml）。
 function _assetMatchRowHtml(r) {
   const name = r.name || r.symbol;
-  const pct = r.change_pct;
-  const isUp = pct != null && pct > 0;
-  const isDown = pct != null && pct < 0;
-  const pctColor = pct == null ? 'text-outline' : (isUp ? 'text-[#ba1a1a]' : isDown ? 'text-[#1e8e3e]' : 'text-outline');
-  const pctLabel = pct == null ? '—' : `${isUp ? '▲' : isDown ? '▼' : ''} ${Math.abs(pct).toFixed(2)}%`;
+  const chg = formatChangePct(r.change_pct);
   return `
     <div onclick="_goToAssetFromSearch('${r.symbol}', '${r.category}', '${name.replace(/'/g, "\\'")}')"
       class="flex items-center justify-between gap-3 px-4 py-4 hover:bg-surface-container-highest cursor-pointer border-b border-outline-variant/10 last:border-0 transition-colors">
@@ -690,7 +939,7 @@ function _assetMatchRowHtml(r) {
       </div>
       <div class="flex items-baseline gap-2 flex-shrink-0">
         <span class="text-base font-bold text-on-surface">${r.close != null ? r.close.toFixed(2) : '—'}</span>
-        <span class="text-sm font-semibold ${pctColor} whitespace-nowrap">${pctLabel}</span>
+        <span class="text-sm font-semibold ${chg.colorClass} whitespace-nowrap">${chg.label}</span>
       </div>
     </div>`;
 }
