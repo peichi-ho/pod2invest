@@ -17,3 +17,4 @@ eval_rag_pipeline.md
 /rag_eval_results
 /sql_migrations
 summary_data.json
+/kg_eval_results
