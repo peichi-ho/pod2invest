@@ -7,6 +7,7 @@ from .gemini import make_client
 from .chunking import summarize_with_optional_chunking, generate_novice_content, _merge_novice_into_pro
 from .harmonize import harmonize_classification_entities, harmonize_investment_takeaways_dual_style
 from .postprocess import normalize_schema
+from .preference_tags import attach_preference_tags
 
 
 def summarize_from_srt_text(
@@ -65,6 +66,8 @@ def summarize_from_srt_text(
             errors["pro"] = str(e)
 
         if pro:
+            # 推薦用標籤只在 pro 產生一次，novice 由 _merge_novice_into_pro 複製過去
+            attach_preference_tags(client=client, model=model, summary=pro)
             # novice 只跑 investment_takeaways + arguments，其餘從 pro 複製
             _forced = [arg["topic"] for arg in (pro.get("arguments") or []) if arg.get("topic")]
             try:
@@ -96,6 +99,7 @@ def summarize_from_srt_text(
     if mode == "novice" and pro_result:
         _forced = [arg["topic"] for arg in (pro_result.get("arguments") or []) if arg.get("topic")]
         if _forced:
+            attach_preference_tags(client=client, model=model, summary=pro_result)
             novice_content = generate_novice_content(
                 client=client,
                 model=model,
@@ -107,7 +111,7 @@ def summarize_from_srt_text(
             )
             return normalize_schema(_merge_novice_into_pro(pro_result, novice_content))
 
-    return summarize_with_optional_chunking(
+    result = summarize_with_optional_chunking(
         client=client,
         model=model,
         mode=mode,
@@ -118,3 +122,4 @@ def summarize_from_srt_text(
         published_at=published_at,
         forced_topics=forced_topics,
     )
+    return attach_preference_tags(client=client, model=model, summary=result)

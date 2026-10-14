@@ -21,6 +21,14 @@ class SummaryRecord(models.Model):
     one_sentence_summary = models.TextField(blank=True)
     investment_takeaways = models.JSONField(default=dict, blank=True)
     tags = models.JSONField(default=list, blank=True)
+    # 推薦用：tags 是「整集提到過的分類」（長集數切段後聯集，每集平均十幾個），
+    # primary_tags 是從 tags 裡挑出最能代表這集的 3～5 個；analysis_style /
+    # investor_strategy 對應註冊問卷，選項見 services/tag_taxonomy.py。
+    # 由 services/preference_tags.py 在摘要完成後另外產生。null=True：資料庫是組員共用的，
+    # 還沒更新程式的人寫入時不會帶這三欄，允許空值才不會讓他們的摘要流程出錯。
+    primary_tags = models.JSONField(default=list, blank=True, null=True)
+    analysis_style = models.JSONField(default=list, blank=True, null=True)
+    investor_strategy = models.JSONField(default=list, blank=True, null=True)
     entities = models.JSONField(default=dict, blank=True)
     arguments = models.JSONField(default=list, blank=True)
 
