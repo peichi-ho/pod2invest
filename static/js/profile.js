@@ -24,7 +24,7 @@ const PREF_TAXONOMY = [
   { key: 'markets', mode: 'multi', label: '關注領域', icon: 'public', options: [
       { val: 'TW',      label: '台股',     emoji: '🇹🇼' },
       { val: 'US',      label: '美股',     emoji: '🇺🇸' },
-      { val: 'Crypto',  label: '加密貨幣', emoji: '₿' },
+      { val: 'Commodity', label: '能源與原物料', emoji: '🛢️' },
       { val: 'General', label: '還不確定', emoji: '🌍' },
   ]},
   { key: 'style', mode: 'single', label: '分析方法', icon: 'analytics', options: [
@@ -35,8 +35,7 @@ const PREF_TAXONOMY = [
   ]},
   { key: 'goal', mode: 'single', label: '獲利模式', icon: 'trending_up', options: [
       { val: 'Growth',   label: '低買高賣賺價差', emoji: '🚀' },
-      { val: 'Dividend', label: '穩定領股息',     emoji: '💰' },
-      { val: 'Passive',  label: '長期持有大盤',   emoji: '🏔️' },
+      { val: 'Passive',  label: '長期存股、穩穩領息', emoji: '🏔️' },
   ]},
   { key: 'capital', mode: 'single', label: '資金規模', icon: 'payments', options: [
       { val: 'Low',    label: '5,000 元以下',       emoji: '🌱' },
@@ -148,9 +147,12 @@ function formatJoinDate(iso) {
 function renderProfileAvatar() {
   const el = document.getElementById('profile-avatar-inner');
   if (!el || !_userProfile) return;
+  const initial = userInitial();
   el.innerHTML = _userProfile.avatar_base64
     ? `<img src="${_userProfile.avatar_base64}" alt="${escapeHtml(_userProfile.username || '')}" class="w-full h-full object-cover"/>`
-    : `<div class="w-full h-full flex flex-col items-center justify-center gap-1" style="background:#d97f12"><span class="material-symbols-outlined text-white/70 text-3xl" style="font-variation-settings:'FILL' 1">person</span></div>`;
+    : initial
+      ? initialAvatarHtml(initial, 'text-5xl md:text-7xl')
+      : `<div class="w-full h-full flex flex-col items-center justify-center gap-1" style="background:#d97f12"><span class="material-symbols-outlined text-white/70 text-3xl" style="font-variation-settings:'FILL' 1">person</span></div>`;
 }
 
 function renderProfileHeader() {
@@ -244,6 +246,7 @@ async function changePassword() {
   if (!oldPw || !newPw) { _showFieldError('edit-password-error', '請填寫原密碼和新密碼'); return; }
   if (newPw !== newPw2) { _showFieldError('edit-password-error', '兩次輸入的新密碼不一致'); return; }
   if (newPw.length < 8) { _showFieldError('edit-password-error', '新密碼至少需要 8 個字元'); return; }
+  if (!/[A-Za-z]/.test(newPw) || !/\d/.test(newPw)) { _showFieldError('edit-password-error', '新密碼必須同時包含英文字母和數字'); return; }
 
   try {
     const res  = await fetch('/api/accounts/change-password/', {
