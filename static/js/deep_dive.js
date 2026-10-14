@@ -87,7 +87,48 @@ function _dismissGlossaryPopover(e) {
   if (_glossaryPopoverEl && !_glossaryPopoverEl.contains(e.target)) hideGlossaryTerm();
 }
 
-// ── Mode rendering ────────────────────────────────────────────
+// ── 投資要點（固定顯示新手版本）──────────────────────────────────
+// 新手／資深切換已經搬到「關鍵論點」那一段，只控制關鍵論點的內容；投資要點不跟著切換，
+// 一律用新手版本。新手版本還沒載入完時先不畫（保留「載入中...」），避免先閃一下資深版本
+// 再換成新手版本；確定沒有新手版本（例如這集只有資深版）才退回用現有的那一份。
+function renderDdTakeaways(summaryId) {
+  if (summaryId != null && summaryId !== currentSummaryId) return; // 使用者已經切到別集，這次回應過期了
+  const s = ddSummaryData.novice || ddSummaryData.pro;
+  if (!s) return;
+
+  const tw = s.investment_takeaways || {};
+  let twHtml = '';
+  if ((tw.bullish || []).length) {
+    twHtml += `<div class="p-6 rounded-lg bg-on-primary-container/5 border-l-4 border-on-primary-container">
+      <div class="flex items-center gap-2 mb-3 text-on-primary-container">
+        <span class="material-symbols-outlined font-bold">trending_up</span>
+        <span class="font-label font-bold uppercase tracking-wider text-xs">看多論點</span>
+      </div>
+      <ul class="space-y-2">${(tw.bullish).map(item => `<li class="flex gap-2 text-on-surface font-body font-medium"><span class="text-on-primary-container shrink-0">•</span><span>${item}</span></li>`).join('')}</ul>
+    </div>`;
+  }
+  if ((tw.bearish || []).length) {
+    twHtml += `<div class="p-6 rounded-lg bg-tertiary-container/10 border-l-4 border-tertiary-container">
+      <div class="flex items-center gap-2 mb-3 text-tertiary-container">
+        <span class="material-symbols-outlined font-bold">trending_down</span>
+        <span class="font-label font-bold uppercase tracking-wider text-xs">看空論點</span>
+      </div>
+      <ul class="space-y-2">${(tw.bearish).map(item => `<li class="flex gap-2 text-on-surface font-body font-medium"><span class="text-tertiary-container shrink-0">•</span><span>${item}</span></li>`).join('')}</ul>
+    </div>`;
+  }
+  if ((tw.watchlist || []).length) {
+    twHtml += `<div class="p-6 rounded-lg bg-secondary/5 border-l-4 border-secondary">
+      <div class="flex items-center gap-2 mb-3 text-secondary">
+        <span class="material-symbols-outlined font-bold">visibility</span>
+        <span class="font-label font-bold uppercase tracking-wider text-xs">觀察清單</span>
+      </div>
+      <ul class="space-y-2">${(tw.watchlist).map(item => `<li class="flex gap-2 text-on-surface font-body font-medium"><span class="text-secondary shrink-0">•</span><span>${item}</span></li>`).join('')}</ul>
+    </div>`;
+  }
+  document.getElementById('dd-takeaways').innerHTML = twHtml || '<p class="text-outline text-sm">無資料</p>';
+}
+
+// ── 關鍵論點（跟著新手／資深切換）─────────────────────────────────
 function renderDdModeContent(mode) {
   const s = ddSummaryData[mode];
   if (!s) return;
@@ -97,37 +138,6 @@ function renderDdModeContent(mode) {
     ? _buildGlossaryIndex(s.glossary_matches)
     : { defs: {}, surfaceToId: {}, surfaces: [] };
   window._glossaryDefs = glossaryIndex.defs;
-
-  const tw = s.investment_takeaways || {};
-  let twHtml = '';
-  if ((tw.bullish || []).length) {
-    twHtml += `<div class="p-6 rounded-lg bg-on-primary-container/5 border-l-4 border-on-primary-container">
-      <div class="flex items-center gap-2 mb-3 text-on-primary-container">
-        <span class="material-symbols-outlined font-bold">trending_up</span>
-        <span class="font-label font-bold uppercase tracking-wider text-xs">Bullish Thesis</span>
-      </div>
-      <ul class="space-y-2">${(tw.bullish).map(item => `<li class="flex gap-2 text-on-surface font-body font-medium"><span class="text-on-primary-container shrink-0">•</span><span>${item}</span></li>`).join('')}</ul>
-    </div>`;
-  }
-  if ((tw.bearish || []).length) {
-    twHtml += `<div class="p-6 rounded-lg bg-tertiary-container/10 border-l-4 border-tertiary-container">
-      <div class="flex items-center gap-2 mb-3 text-tertiary-container">
-        <span class="material-symbols-outlined font-bold">trending_down</span>
-        <span class="font-label font-bold uppercase tracking-wider text-xs">Bearish Thesis</span>
-      </div>
-      <ul class="space-y-2">${(tw.bearish).map(item => `<li class="flex gap-2 text-on-surface font-body font-medium"><span class="text-tertiary-container shrink-0">•</span><span>${item}</span></li>`).join('')}</ul>
-    </div>`;
-  }
-  if ((tw.watchlist || []).length) {
-    twHtml += `<div class="p-6 rounded-lg bg-secondary/5 border-l-4 border-secondary">
-      <div class="flex items-center gap-2 mb-3 text-secondary">
-        <span class="material-symbols-outlined font-bold">visibility</span>
-        <span class="font-label font-bold uppercase tracking-wider text-xs">Watchlist</span>
-      </div>
-      <ul class="space-y-2">${(tw.watchlist).map(item => `<li class="flex gap-2 text-on-surface font-body font-medium"><span class="text-secondary shrink-0">•</span><span>${item}</span></li>`).join('')}</ul>
-    </div>`;
-  }
-  document.getElementById('dd-takeaways').innerHTML = twHtml || '<p class="text-outline text-sm">無資料</p>';
 
   const args = s.arguments || [];
   window._ddArgs = args;
@@ -173,7 +183,7 @@ function renderDdModeContent(mode) {
             <div class="flex items-center gap-4 flex-wrap mt-1">
               ${hasMore ? `
               <button onclick="toggleThesis(this)" class="flex items-center gap-1 text-secondary font-label font-bold text-xs uppercase tracking-wider hover:text-on-primary-container transition-colors">
-                <span class="btn-label">Read More</span>
+                <span class="btn-label">展開閱讀</span>
                 <span class="material-symbols-outlined text-sm btn-icon">expand_more</span>
               </button>` : ''}
               <button onclick="toggleArgAiChat(this, ${i})" class="arg-ai-btn flex items-center gap-1 font-label font-bold text-xs uppercase tracking-wider transition-colors text-secondary hover:text-on-primary-container">
@@ -240,13 +250,14 @@ function switchDdMode(mode) {
   if (ddSummaryData[mode]) {
     renderDdModeContent(mode);
   } else {
-    document.getElementById('dd-takeaways').innerHTML = '<p class="text-outline text-sm">此模式無資料</p>';
     document.getElementById('dd-arguments').innerHTML = '<p class="text-outline text-sm">此模式無資料</p>';
   }
 }
 
 // ── Load deep dive data ───────────────────────────────────────
 async function loadDeepDive(summaryId) {
+  // 投資要點可能要等新手版本另外載入（見 renderDdTakeaways），先清掉上一集的內容，不要在等待期間顯示舊資料
+  document.getElementById('dd-takeaways').innerHTML = '<p class="text-outline text-sm">載入中...</p>';
   try {
     const res = await fetch(`/api/summaries/${summaryId}/`);
     const s   = await res.json();
@@ -260,7 +271,7 @@ async function loadDeepDive(summaryId) {
     podBtn.className = 'font-semibold underline underline-offset-2 hover:text-secondary transition-colors';
     podBtn.textContent = showName;
     podBtn.addEventListener('click', () => openRankedPodcasterByName(showName));
-    podcasterEl.textContent = 'Extracted from ';
+    podcasterEl.textContent = '來自 ';
     podcasterEl.appendChild(podBtn);
     if (s.published_at) {
       const dateSpan = document.createElement('span');
@@ -395,11 +406,24 @@ async function loadDeepDive(summaryId) {
         fetch(`/api/summaries/?source_filename=${encodeURIComponent(s.source_filename)}&mode=${otherMode}`)
           .then(r => r.json())
           .then(list => { if (list.length) return fetch(`/api/summaries/${list[0].id}/`).then(r => r.json()); })
-          .then(other => { if (other) { ddSummaryData[other.mode] = other; updateDdModeButtons(); } })
-          .catch(() => {});
+          .then(other => {
+            if (!other || summaryId !== currentSummaryId) return;
+            ddSummaryData[other.mode] = other;
+            updateDdModeButtons();
+            // 目前選的版本剛好就是這份晚到的資料（例如打開的是資深版紀錄、使用者預設是新手）：
+            // 前面 switchDdMode() 因為還沒有資料顯示了「此模式無資料」，這裡要補畫關鍵論點。
+            if (other.mode === ddCurrentMode) renderDdModeContent(ddCurrentMode);
+          })
+          .catch(() => {})
+          // 打開的是資深版時，新手版本要等這支請求回來才拿得到；不管成功與否都在這裡補畫一次投資要點
+          // （沒有新手版本就會退回用資深版），見 renderDdTakeaways()。
+          .finally(() => renderDdTakeaways(summaryId));
       }
     }
     switchDdMode(ddCurrentMode);
+    // 已經有新手版本（打開的就是新手版、或這集兩種版本在同一筆資料裡）就直接畫；
+    // 打開的是資深版的話，等上面那支請求回來再畫，避免先閃一下資深版內容。
+    if (ddSummaryData.novice || !s.source_filename) renderDdTakeaways(summaryId);
 
     document.getElementById('dd-ticker-section').classList.add('hidden');
 
@@ -510,7 +534,7 @@ function renderMindmap(data, container) {
   const totalH = treeHeight + marginTop + marginBottom;
 
   const treeData = {
-    name: data.title || 'Mindmap',
+    name: data.title || '心智圖',
     children: (data.arguments || []).map(arg => ({
       name: arg.topic,
       children: (Array.isArray(arg.summary) ? arg.summary : [arg.summary]).slice(0, 3).map(s => ({ name: s }))
@@ -584,14 +608,14 @@ function toggleThesis(btn) {
   if (isOpen) {
     full.classList.add('hidden');
     preview.classList.remove('hidden');
-    label.textContent = 'Read More';
+    label.textContent = '展開閱讀';
     icon.textContent  = 'expand_more';
     btn.classList.remove('text-on-primary-container');
     btn.classList.add('text-secondary');
   } else {
     preview.classList.add('hidden');
     full.classList.remove('hidden');
-    label.textContent = 'Show Less';
+    label.textContent = '收合';
     icon.textContent  = 'expand_less';
     btn.classList.remove('text-secondary');
     btn.classList.add('text-on-primary-container');

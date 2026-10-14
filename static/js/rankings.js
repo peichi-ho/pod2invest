@@ -42,19 +42,64 @@ const _rankColors = ['#d97f12','#286671','#1c1c16','#472500','#2c4c50','#113236'
 const _rankIcons  = ['workspace_premium','podcasts','show_chart','account_balance','public','ssid_chart','psychology','monitoring','bar_chart','mic'];
 let _rankData = [];
 
+// 搜尋、單集頁、Profile 等「不是從排名卡片點進來」的入口：就算排名頁還停在某個產業篩選，
+// 也不帶篩選進節目頁（第二個參數 false），節目頁看到的是完整的集數與觀點。
 function openRankedPodcasterByName(name) {
   const idx = _rankData.findIndex(p => p.podcaster === name);
   if (idx !== -1) {
-    openRankedPodcaster(idx);
+    openRankedPodcaster(idx, false);
   } else {
     showPodcaster(name, '--', '--', _rankColors[0], _rankIcons[0]);
   }
 }
 
-function openRankedPodcaster(idx) {
+// 從排名卡片點進節目頁。排名頁目前有套用產業篩選時，把篩選條件（跟這個節目在該產業的
+// 準確率／樣本數）一起帶進去，節目頁才能只顯示該產業底下提到的觀點，而不是跟沒篩選時一樣。
+// 其他入口（搜尋、單集頁、Profile）走 openRankedPodcasterByName()，不會帶篩選。
+function openRankedPodcaster(idx, carrySectorFilter = true) {
   const p = _rankData[idx];
   if (!p) return;
-  showPodcaster(p.podcaster, p.episodes + ' 集', '--', _rankColors[idx % _rankColors.length], _rankIcons[idx % _rankIcons.length]);
+  const sectorFilter = (carrySectorFilter && _currentSector)
+    ? { sector: _currentSector, accuracy: p.accuracy, total: p.total }
+    : null;
+  showPodcaster(
+    p.podcaster,
+    p.episodes !== '--' ? p.episodes + ' 集' : '--',
+    '--',
+    _rankColors[idx % _rankColors.length],
+    _rankIcons[idx % _rankIcons.length],
+    sectorFilter
+  );
+}
+
+// 整張排名卡片都可以點進節目頁；卡片裡的收藏按鈕自己有 stopPropagation，不會連帶觸發。
+// 鍵盤操作：只在卡片本身取得焦點時才處理 Enter／空白鍵，避免卡片內的收藏按鈕按 Enter 時
+// 事件冒泡上來又開一次節目頁。
+function _rankCardKey(event, idx) {
+  if (event.target !== event.currentTarget) return;
+  if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault();
+    openRankedPodcaster(idx);
+  }
+}
+
+// 「N 筆 · M 集」：樣本數（筆）放在最前面，使用者先看到這個準確率是建立在多少筆已驗證的
+// 觀點上，再看節目總集數。還沒有任何驗證紀錄（accuracy 為 null）時沒有「筆」可以顯示。
+function _rankSampleEpisodesText(p) {
+  const parts = [];
+  if (p.accuracy !== null && p.accuracy !== undefined) parts.push(`${p.total} 筆`);
+  if (p.episodes !== '--') parts.push(`${p.episodes} 集`);
+  return parts.join(' · ') || '--';
+}
+
+function _rankAccuracyText(p) {
+  return (p.accuracy !== null && p.accuracy !== undefined) ? `準確率 ${p.accuracy}%` : '準確率 待驗證';
+}
+
+// 卡片右下角的「更多 →」：只是視覺提示（整張卡片本身就可以點），所以用 span 不用 button，
+// 不然按鈕自己的 onclick 加上冒泡到卡片的 onclick 會連續開兩次節目頁。
+function _rankMoreHint(cls) {
+  return `<span class="inline-flex items-center gap-1 whitespace-nowrap ${cls}">更多<span class="material-symbols-outlined text-[1.25em] leading-none">arrow_forward</span></span>`;
 }
 
 async function loadRankings() {
@@ -108,7 +153,6 @@ async function loadRankings() {
     }
 
     _rankData = data;
-    const _accDisp = (p) => (p.accuracy !== null && p.accuracy !== undefined) ? `${p.accuracy}%・${p.total} 筆` : '待驗證';
 
     if (!data.length) {
       podium.innerHTML   = `<div class="col-span-3 text-outline text-sm text-center py-12">${_currentSector ? '此類別暫無回測資料' : '暫無節目資料'}</div>`;
@@ -127,12 +171,13 @@ async function loadRankings() {
       const bg      = _rankColors[origIdx % _rankColors.length];
       const icon    = _rankIcons[origIdx  % _rankIcons.length];
       const isFirst = rank === 1;
-      const accDisp = _accDisp(p);
-      const epStr   = p.episodes !== '--' ? `${p.episodes} 集` : '--';
+      const sampleEp = _rankSampleEpisodesText(p);
+      const accText  = _rankAccuracyText(p);
 
       if (isFirst) {
         return `
-          <div class="flex flex-col items-center gap-3 pb-4 pt-8 bg-tertiary-container rounded-lg shadow-xl relative">
+          <div role="button" tabindex="0" onclick="openRankedPodcaster(${origIdx})" onkeydown="_rankCardKey(event, ${origIdx})"
+            class="flex flex-col items-center gap-4 pb-5 pt-8 bg-tertiary-container rounded-lg shadow-xl relative cursor-pointer hover:opacity-95 transition-opacity">
             <div class="absolute -top-3 left-1/2 -translate-x-1/2">
               <span class="material-symbols-outlined text-on-primary-container text-2xl" style="font-variation-settings:'FILL' 1">emoji_events</span>
             </div>
@@ -142,28 +187,29 @@ async function loadRankings() {
             <div class="text-center px-2">
               <div class="font-['Epilogue'] font-black text-6xl text-white/20 mb-1">${rankStr}</div>
               <h4 class="font-['Epilogue'] font-bold text-[28px] text-white leading-tight w-full truncate">${p.podcaster}</h4>
-              <p class="text-xl text-on-tertiary-container mt-1">${epStr}</p>
-              <p class="text-xl font-bold text-on-tertiary-container/80 mt-0.5">準確率 ${accDisp}</p>
+              <p class="text-base text-on-tertiary-container mt-2.5">${sampleEp}</p>
+              <p class="text-lg font-bold text-on-tertiary-container/80 mt-1">${accText}</p>
             </div>
             <div class="flex items-center gap-1.5">
-              <button onclick="openRankedPodcaster(${origIdx})" class="px-4 py-1.5 bg-on-primary-container text-white rounded-full font-label text-xl font-bold uppercase tracking-widest hover:opacity-90 transition-all">More</button>
+              ${_rankMoreHint('px-4 py-1.5 bg-on-primary-container text-white rounded-full font-label text-sm font-bold tracking-widest')}
               ${renderPodcastFollowButton(p.podcaster, 'w-8 h-8')}
             </div>
           </div>`;
       } else {
         return `
-          <div class="flex flex-col items-center gap-3 pb-4 pt-6 bg-surface-container-low rounded-lg border border-outline-variant/10">
+          <div role="button" tabindex="0" onclick="openRankedPodcaster(${origIdx})" onkeydown="_rankCardKey(event, ${origIdx})"
+            class="flex flex-col items-center gap-4 pb-5 pt-6 bg-surface-container-low rounded-lg border border-outline-variant/10 cursor-pointer hover:bg-surface-container-highest transition-colors">
             <div class="w-14 h-14 rounded-full overflow-hidden">
               ${podcastAvatar(p.podcaster, bg, icon)}
             </div>
             <div class="text-center px-2">
               <div class="font-['Epilogue'] font-black text-6xl text-outline/20 mb-1">${rankStr}</div>
               <h4 class="font-['Epilogue'] font-bold text-[28px] text-tertiary-container leading-tight w-full truncate">${p.podcaster}</h4>
-              <p class="text-xl text-outline mt-1">${epStr}</p>
-              <p class="text-xl font-bold text-secondary mt-0.5">準確率 ${accDisp}</p>
+              <p class="text-base text-outline mt-2.5">${sampleEp}</p>
+              <p class="text-lg font-bold text-secondary mt-1">${accText}</p>
             </div>
             <div class="flex items-center gap-1.5">
-              <button onclick="openRankedPodcaster(${origIdx})" class="px-4 py-1.5 border border-secondary text-secondary rounded-full font-label text-xl font-bold uppercase tracking-widest hover:bg-secondary hover:text-white transition-all">More</button>
+              ${_rankMoreHint('px-4 py-1.5 border border-secondary text-secondary rounded-full font-label text-sm font-bold tracking-widest')}
               ${renderPodcastFollowButton(p.podcaster, 'w-8 h-8')}
             </div>
           </div>`;
@@ -178,23 +224,24 @@ async function loadRankings() {
       const rankStr = String(rank).padStart(2, '0');
       const bg      = _rankColors[dataIdx % _rankColors.length];
       const icon    = _rankIcons[dataIdx  % _rankIcons.length];
-      const accDisp = _accDisp(p);
-      const epStr   = p.episodes !== '--' ? `${p.episodes} 集` : '--';
       return `
-        <div class="flex items-center justify-between p-4 bg-surface-container-low rounded-lg hover:bg-surface-container-highest transition-all">
-          <div class="flex items-center gap-4">
-            <span class="text-5xl font-black text-outline/30 italic w-16">${rankStr}</span>
-            <div class="w-12 h-12 rounded-full overflow-hidden">
+        <div role="button" tabindex="0" onclick="openRankedPodcaster(${dataIdx})" onkeydown="_rankCardKey(event, ${dataIdx})"
+          class="flex items-center justify-between p-4 bg-surface-container-low rounded-lg hover:bg-surface-container-highest transition-all cursor-pointer">
+          <div class="flex items-center gap-4 min-w-0">
+            <span class="text-5xl font-black text-outline/30 italic w-16 flex-shrink-0">${rankStr}</span>
+            <div class="w-12 h-12 rounded-full overflow-hidden flex-shrink-0">
               ${podcastAvatar(p.podcaster, bg, icon)}
             </div>
-            <div>
-              <h4 class="font-bold text-tertiary-container text-xl">${p.podcaster}</h4>
-              <p class="text-base text-outline font-medium">${epStr} · 準確率 ${accDisp}</p>
+            <div class="min-w-0">
+              <div class="flex items-center gap-1.5 min-w-0">
+                <h4 class="font-bold text-tertiary-container text-xl truncate">${p.podcaster}</h4>
+                ${renderPodcastFollowButton(p.podcaster, 'w-8 h-8')}
+              </div>
+              <p class="text-base text-outline font-medium">${_rankSampleEpisodesText(p)} · ${_rankAccuracyText(p)}</p>
             </div>
           </div>
-          <div class="flex items-center gap-2 flex-shrink-0">
-            <button onclick="openRankedPodcaster(${dataIdx})" class="px-5 py-2 border border-secondary text-secondary rounded-full font-label text-base font-bold uppercase tracking-widest hover:bg-secondary hover:text-white transition-all">More</button>
-            ${renderPodcastFollowButton(p.podcaster, 'w-9 h-9')}
+          <div class="flex items-center flex-shrink-0">
+            ${_rankMoreHint('px-5 py-2 border border-secondary text-secondary rounded-full font-label text-base font-bold tracking-widest')}
           </div>
         </div>`;
     }).join('') || '<p class="text-outline text-sm">暫無更多資料</p>';
@@ -206,7 +253,11 @@ async function loadRankings() {
 }
 
 // ── Podcaster page ────────────────────────────────────────────
-async function showPodcaster(name, episodeCount, accuracy, bgColor, icon) {
+// sectorFilter：從 Rankings 套用產業篩選後點進來時才有值，格式 { sector, accuracy, total }
+// （accuracy／total 是這個節目在該產業的準確率與樣本數，跟排名頁上顯示的是同一組數字）。
+// 有值的話「所有觀點」只列出該產業底下提到的觀點，並且預設直接停在這個分頁；沒值（搜尋、
+// 單集頁、Profile 等其他入口）維持原本行為：全部觀點、預設停在「所有集數」。
+async function showPodcaster(name, episodeCount, accuracy, bgColor, icon, sectorFilter = null) {
   document.getElementById('podcaster-name').textContent = name;
   document.getElementById('podcaster-episode-count').textContent = episodeCount;
   document.getElementById('podcaster-accuracy').textContent = accuracy;
@@ -216,12 +267,16 @@ async function showPodcaster(name, episodeCount, accuracy, bgColor, icon) {
     document.getElementById('podcaster-favorite-slot').innerHTML = renderPodcastFollowButton(name, 'w-9 h-9');
   });
 
+  const sectorChip = document.getElementById('podcaster-sector-chip');
+  sectorChip.classList.toggle('hidden', !sectorFilter);
+  if (sectorFilter) document.getElementById('podcaster-sector-label').textContent = `產業篩選：${sectorFilter.sector}`;
+
   const epList   = document.getElementById('podcaster-episodes-list');
   const viewList = document.getElementById('podcaster-views-list');
   epList.innerHTML   = '<p class="text-outline text-sm py-6 text-center">載入中...</p>';
   viewList.innerHTML = '<p class="text-outline text-sm py-6 text-center">載入中...</p>';
 
-  switchPodcasterTab('episodes');
+  switchPodcasterTab(sectorFilter ? 'views' : 'episodes');
   showPage('podcaster');
 
   try {
@@ -256,7 +311,8 @@ async function showPodcaster(name, episodeCount, accuracy, bgColor, icon) {
         }).join('')
       : '<p class="text-outline text-sm py-6 text-center">暫無集數資料</p>';
 
-    const btRes = await fetch(`/api/summaries/backtesting/?podcaster=${encodeURIComponent(name)}`);
+    const sectorParam = sectorFilter ? `&sector=${encodeURIComponent(sectorFilter.sector)}` : '';
+    const btRes = await fetch(`/api/summaries/backtesting/?podcaster=${encodeURIComponent(name)}${sectorParam}`);
     const btRecords = btRes.ok ? await btRes.json() : [];
 
     const groups = { pass: [], fail: [], pending: [] };
@@ -272,9 +328,15 @@ async function showPodcaster(name, episodeCount, accuracy, bgColor, icon) {
     const accMap = await _ensureAccuracyCache();
     await _ensureFavoritesCache();
     const accEl  = document.getElementById('podcaster-accuracy');
-    const acc    = accMap[name];
-    if (acc && acc.total > 0) accEl.textContent = `平均準確率 ${acc.pct}%・${acc.total} 筆驗證`;
-    else accEl.textContent = '尚無驗證觀點';
+    if (sectorFilter) {
+      // 套用產業篩選時顯示該產業的準確率，不是節目整體的，才跟排名頁上看到的數字一致
+      if (sectorFilter.accuracy != null && sectorFilter.total > 0) accEl.textContent = `${sectorFilter.sector} 準確率 ${sectorFilter.accuracy}%・${sectorFilter.total} 筆驗證`;
+      else accEl.textContent = `${sectorFilter.sector} 尚無驗證觀點`;
+    } else {
+      const acc = accMap[name];
+      if (acc && acc.total > 0) accEl.textContent = `平均準確率 ${acc.pct}%・${acc.total} 筆驗證`;
+      else accEl.textContent = '尚無驗證觀點';
+    }
 
     const groupConfig = {
       pass:    { label: '正確',   icon: 'check_circle', colorClass: 'text-green-600', border: 'border-green-500',        bg: 'bg-green-50/50' },
@@ -282,6 +344,11 @@ async function showPodcaster(name, episodeCount, accuracy, bgColor, icon) {
       pending: { label: '待驗證', icon: 'pending',      colorClass: 'text-outline',   border: 'border-outline-variant',  bg: 'bg-surface-container/50' },
     };
     const dirLabel = { bullish: '看多', bearish: '看空', neutral: '觀察' };
+
+    if (sectorFilter && !seenTheses.size) {
+      viewList.innerHTML = `<p class="text-outline text-sm py-6 text-center">此節目在「${escapeHtml(sectorFilter.sector)}」類別下沒有提及的觀點</p>`;
+      return;
+    }
 
     viewList.innerHTML = Object.entries(groups).map(([key, items]) => {
       const cfg = groupConfig[key];

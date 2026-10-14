@@ -147,7 +147,7 @@
 <div id="ai-input-bar" class="hidden fixed bottom-[72px] w-full z-40 bg-[#fcf9f0]/90 backdrop-blur-xl pt-3 pb-3 px-4">
   <div class="max-w-4xl mx-auto flex items-center gap-4 bg-surface-container-high rounded-full p-2 pl-6 shadow-lg">
     <button class="text-secondary hover:text-on-primary-container transition-colors"><span class="material-symbols-outlined">attach_file</span></button>
-    <input id="chat-input" class="w-full bg-transparent border-none focus:ring-0 text-on-surface font-body text-sm placeholder:text-outline/60" placeholder="Ask about investment strategies..." type="text" onkeydown="if(event.key==='Enter') sendChat()"/>
+    <input id="chat-input" class="w-full bg-transparent border-none focus:ring-0 text-on-surface font-body text-sm placeholder:text-outline/60" placeholder="詢問投資策略、個股或節目重點..." type="text" onkeydown="if(event.key==='Enter') sendChat()"/>
     <button onclick="sendChat()" class="bg-[#d97f12] text-white w-12 h-12 rounded-full flex items-center justify-center hover:opacity-90 active:scale-95 transition-all">
       <span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">send</span>
     </button>
@@ -180,14 +180,14 @@
 
 {% block body_scripts %}
 <!-- JS modules -->
-<script src="{% static 'js/app.js' %}?v=18"></script>
-<script src="{% static 'js/discover.js' %}?v=19"></script>
-<script src="{% static 'js/rankings.js' %}?v=16"></script>
-<script src="{% static 'js/deep_dive.js' %}?v=19"></script>
+<script src="{% static 'js/app.js' %}?v=19"></script>
+<script src="{% static 'js/discover.js' %}?v=30"></script>
+<script src="{% static 'js/rankings.js' %}?v=21"></script>
+<script src="{% static 'js/deep_dive.js' %}?v=21"></script>
 <script src="{% static 'js/calculator.js' %}?v=29"></script>
 <script src="{% static 'js/ai.js' %}?v=10"></script>
 <script src="{% static 'js/assets.js' %}?v=21"></script>
-<script src="{% static 'js/profile.js' %}?v=11"></script>
+<script src="{% static 'js/profile.js' %}?v=12"></script>
 <script>
   calcWealth();
   {# 從 basket.html 等獨立頁面連回來時可帶 #assets 之類的 hash，指定要打開哪個分頁 #}
