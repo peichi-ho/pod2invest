@@ -34,6 +34,17 @@ class Match:
     short_definition: str
 
 
+def _surface_pattern(surface: str) -> "re.Pattern[str]":
+    """
+    英文／數字詞的前後不可緊接英數字，避免 TER 比對到 podcasTER、
+    EPS 比對到 DEPS 之類的子字串。中文詞（邊界不是英數字）維持原本字面比對。
+    """
+    body = re.escape(surface)
+    prefix = r"(?<![A-Za-z0-9])" if re.match(r"[A-Za-z0-9]", surface[0]) else ""
+    suffix = r"(?![A-Za-z0-9])" if re.match(r"[A-Za-z0-9]", surface[-1]) else ""
+    return re.compile(prefix + body + suffix, flags=re.IGNORECASE)
+
+
 def annotate(text: str, max_matches: int = 100):
     text = text or ""
     if not text:
@@ -63,7 +74,7 @@ def annotate(text: str, max_matches: int = 100):
     matches: List[Match] = []
 
     for surface, t in surfaces:
-        pat = re.compile(re.escape(surface), flags=re.IGNORECASE)
+        pat = _surface_pattern(surface)
         for m in pat.finditer(text):
             s, e = m.start(), m.end()
             if s == e:

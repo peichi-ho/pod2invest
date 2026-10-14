@@ -6,6 +6,7 @@ from .views import (
 )
 from .preview_views import (
     BootstrapPathPreviewAPIView, EpisodeListPreviewAPIView, EpisodeSourceTextPreviewAPIView,
+    StockSearchPreviewAPIView,
 )
 
 urlpatterns = [
@@ -19,5 +20,6 @@ urlpatterns = [
     # 獨立預覽用途，跟上面正式的scenario/scenario-weighted完全分開，見preview_views.py
     path('bootstrap-path-preview/', BootstrapPathPreviewAPIView.as_view(), name='bootstrap-path-preview'),
     path('bootstrap-path-preview/episodes/', EpisodeListPreviewAPIView.as_view(), name='bootstrap-path-preview-episodes'),
+    path('bootstrap-path-preview/search/', StockSearchPreviewAPIView.as_view(), name='bootstrap-path-preview-search'),
     path('bootstrap-path-preview/source-text/', EpisodeSourceTextPreviewAPIView.as_view(), name='bootstrap-path-preview-source-text'),
 ]
