@@ -27,10 +27,18 @@ function onAiPageShow() {
   if (emptyState && !currentConversationId) {
     emptyState.innerHTML = buildEmptyStateHTML();
   }
+  const input = document.getElementById('chat-input');
+  if (input && !_aiLoggedIn()) input.placeholder = '登入後即可向 AI 助理提問';
   loadConversations();
 }
 
+// 訪客（未登入）不能提問也沒有對話紀錄；後端 /api/ai/ 也會回 401，這裡是先在前端擋下來
+function _aiLoggedIn() {
+  return typeof window.IS_AUTHENTICATED === 'undefined' || window.IS_AUTHENTICATED;
+}
+
 async function sendChat() {
+  if (!_aiLoggedIn()) { showLoginPrompt(); return; }  // 先擋，不清掉訪客打的字
   const input = document.getElementById('chat-input');
   const msg   = input.value.trim();
   if (!msg || aiIsLoading) return;
@@ -39,6 +47,7 @@ async function sendChat() {
 }
 
 async function sendQuickAction(text) {
+  if (!_aiLoggedIn()) { showLoginPrompt(); return; }
   if (aiIsLoading) return;
   await submitMessage(text);
 }
@@ -56,6 +65,12 @@ async function submitMessage(query) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
+    if (res.status === 401) {  // 登入過期
+      loadingEl.remove();
+      addAIMessage('登入狀態已失效，請重新登入後再提問。');
+      showLoginPrompt();
+      return;
+    }
     const data = await res.json();
     loadingEl.remove();
     if (data.ok) {
@@ -304,7 +319,8 @@ function buildSuggestedQuestions() {
 function buildEmptyStateHTML() {
   const hasPrefs = _prefTopics((typeof _userPrefs !== 'undefined') ? _userPrefs : null).length > 0;
   const hasHot   = typeof _hotTagNames !== 'undefined' && _hotTagNames.length > 0;
-  const subtitle = hasPrefs ? '根據您的偏好與近期熱門話題為您推薦'
+  const subtitle = !_aiLoggedIn() ? '登入後即可向 AI 助理提問，並保存你的對話紀錄'
+    : hasPrefs ? '根據您的偏好與近期熱門話題為您推薦'
     : hasHot ? '根據近期熱門話題為您推薦'
     : '詢問股票、Podcast 重點或投資觀點';
 
@@ -354,6 +370,10 @@ function closeHistoryDrawer() {
 
 async function loadConversations() {
   const list = document.getElementById('ai-history-list');
+  if (!_aiLoggedIn()) {
+    list.innerHTML = '<p class="text-outline text-xs text-center py-6">登入後即可保存對話紀錄</p>';
+    return;
+  }
   try {
     const res  = await fetch('/api/ai/conversations/');
     const data = await res.json();

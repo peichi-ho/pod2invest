@@ -721,6 +721,12 @@ async function _ddArgSubmit(chatEl, query, displayQuery) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
+    if (res.status === 401) {  // 登入過期（單集頁本身要登入才進得來）
+      loadEl.remove();
+      _ddArgAddAI(msgBox, '登入狀態已失效，請重新登入後再提問。', [], chatEl);
+      showLoginPrompt();
+      return;
+    }
     const data = await res.json();
     loadEl.remove();
     if (data.ok) {
