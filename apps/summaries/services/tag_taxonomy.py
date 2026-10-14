@@ -53,6 +53,24 @@ ASSET_TYPES = [
 ]
 
 
+# ── 對應註冊問卷的兩組標籤（存在 SummaryRecord.analysis_style / investor_strategy）──
+# 不放進 CLASSIFICATION_KEYS：那組會被展平成 tags，這兩組要獨立存放，原本的 tags 維持不變。
+# 選項跟 templates/accounts/onboarding.html 問卷一對一，首頁 discover.js 的 _prefScore() 會用。
+ANALYSIS_STYLES = [
+    "技術分析",      # 問卷「K 線與成交量」
+    "基本面分析",    # 問卷「財報與公司體質」
+    "總經分析",      # 問卷「國際局勢與政策」
+    "指數化投資",    # 問卷「聽專家的／跟著大盤」
+]
+
+INVESTOR_STRATEGIES = [
+    "價差交易",      # 問卷「低買高賣賺價差」
+    "存股領息",      # 問卷「長期存股、穩穩領息」
+    "長期定期定額",  # 問卷「長期存股、穩穩領息」
+    "小資入門",      # 問卷資金規模「5,000 元以下」
+]
+
+
 CLASSIFICATION_KEYS = [
     "financial_topics",
     "industries",

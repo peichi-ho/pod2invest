@@ -490,12 +490,27 @@ async function loadUserProfile() {
   }
 }
 
+// 沒設照片時頭像顯示帳號第一個字（像 Google 帳號的預設頭像）；Array.from 避免中文/emoji 被切半。
+// Header 跟 Profile 頁共用。
+function userInitial() {
+  return (Array.from(((_userProfile && _userProfile.username) || '').trim())[0] || '').toUpperCase();
+}
+
+// Epilogue 字型上方留白比下方多，flex 置中後字母會偏上約 0.085em（實測量字形墨水範圍），
+// 用 translateY 補回來；用 em 單位，右上角小頭像跟個人頁大頭像都會等比例修正。
+function initialAvatarHtml(initial, sizeClass) {
+  return `<div class="w-full h-full flex items-center justify-center text-white font-['Epilogue'] font-bold leading-none ${sizeClass}" style="background:#d97f12"><span style="transform:translateY(0.085em)">${escapeHtml(initial)}</span></div>`;
+}
+
 function renderHeaderAvatar() {
   const el = document.getElementById('header-avatar-inner');
   if (!el || !_userProfile) return;
+  const initial = userInitial();
   el.innerHTML = _userProfile.avatar_base64
     ? `<img src="${_userProfile.avatar_base64}" alt="${escapeHtml(_userProfile.username || '')}" class="w-full h-full object-cover"/>`
-    : `<div class="w-full h-full flex items-center justify-center" style="background:#e5e3d9"><span class="material-symbols-outlined text-white/70 text-2xl" style="font-variation-settings:'FILL' 1">person</span></div>`;
+    : initial
+      ? initialAvatarHtml(initial, 'text-lg')
+      : `<div class="w-full h-full flex items-center justify-center" style="background:#e5e3d9"><span class="material-symbols-outlined text-white/70 text-2xl" style="font-variation-settings:'FILL' 1">person</span></div>`;
 }
 
 // ── Boot ─────────────────────────────────────────────────────

@@ -152,15 +152,20 @@ function addAIMessage(text, followUps = []) {
 }
 
 // ── Personalized question card generator ───────────────────────
-const _TOPIC_LABELS = {
-  macro:       '總體經濟',
-  tech:        'AI/半導體',
-  crypto:      '加密貨幣',
-  stocks:      '個股/選股',
-  realestate:  '房地產',
-  forex:       '外匯/匯率',
-  etf:         'ETF/指數',
+// 問卷偏好（_userPrefs，discover.js 從 /api/accounts/preferences/ 載入）→ 建議問題的主題與語氣
+const _PREF_TOPIC_LABELS = {
+  markets: { TW: '台股', US: '美股', Commodity: '能源與原物料' },
+  style:   { Technical: '技術面走勢', Fundamental: '個股財報', Macro: '總體經濟', Passive: 'ETF' },
 };
+const _GOAL_TO_TEMPLATE_STYLE = { Growth: 'aggressive', Passive: 'conservative' };
+
+function _prefTopics(prefs) {
+  if (!prefs) return [];
+  const topics = (prefs.markets || []).map(m => _PREF_TOPIC_LABELS.markets[m]).filter(Boolean);
+  const styleTopic = _PREF_TOPIC_LABELS.style[prefs.style];
+  if (styleTopic) topics.push(styleTopic);
+  return topics;
+}
 
 // 5 card categories, each with 3 templates keyed by style (conservative/aggressive/balanced)
 const _CARD_TEMPLATES = [
@@ -276,21 +281,17 @@ function _pickRandom(arr) {
 }
 
 function buildSuggestedQuestions() {
-  let prefs = {};
-  try { prefs = JSON.parse(localStorage.getItem('pod2invest_prefs') || '{}'); } catch {}
+  const prefs    = (typeof _userPrefs !== 'undefined' && _userPrefs) ? _userPrefs : {};
+  // 語氣：價差交易 → 積極；存股／長期持有 → 保守；其他 → 中性
+  const styleKey = _GOAL_TO_TEMPLATE_STYLE[prefs.goal] || 'balanced';
 
-  const style    = (prefs.style && prefs.style.length) ? prefs.style[0] : 'balanced';
-  const styleKey = ['conservative', 'aggressive'].includes(style) ? style : 'balanced';
-
-  // topic source: hot tags → user preference topics → default
-  let topicPool;
-  if (typeof _hotTagNames !== 'undefined' && _hotTagNames.length >= 5) {
-    topicPool = [..._hotTagNames].sort(() => Math.random() - 0.5);
-  } else if (prefs.topics && prefs.topics.length) {
-    topicPool = prefs.topics.map(t => _TOPIC_LABELS[t] || t);
-  } else {
-    topicPool = ['台積電', '總體經濟', 'AI產業', '美股', 'ETF'];
-  }
+  // 主題：問卷偏好優先，不足 5 個用近期熱門話題補，再不夠才用預設
+  const hot = (typeof _hotTagNames !== 'undefined') ? [..._hotTagNames].sort(() => Math.random() - 0.5) : [];
+  const topicPool = [...new Set([
+    ..._prefTopics(prefs),
+    ...hot,
+    '台積電', '總體經濟', 'AI產業', '美股', 'ETF',
+  ])];
 
   return _CARD_TEMPLATES.map((cat, i) => {
     const topic    = topicPool[i % topicPool.length];
@@ -301,14 +302,11 @@ function buildSuggestedQuestions() {
 }
 
 function buildEmptyStateHTML() {
-  const subtitle = (typeof _hotTagNames !== 'undefined' && _hotTagNames.length)
-    ? '根據近期熱門話題為您推薦'
-    : (() => {
-        try {
-          const p = JSON.parse(localStorage.getItem('pod2invest_prefs') || '{}');
-          return (p.topics && p.topics.length) ? '根據您的偏好為您量身推薦' : '詢問股票、Podcast 重點或投資觀點';
-        } catch { return '詢問股票、Podcast 重點或投資觀點'; }
-      })();
+  const hasPrefs = _prefTopics((typeof _userPrefs !== 'undefined') ? _userPrefs : null).length > 0;
+  const hasHot   = typeof _hotTagNames !== 'undefined' && _hotTagNames.length > 0;
+  const subtitle = hasPrefs ? '根據您的偏好與近期熱門話題為您推薦'
+    : hasHot ? '根據近期熱門話題為您推薦'
+    : '詢問股票、Podcast 重點或投資觀點';
 
   const cards = buildSuggestedQuestions();
   const cardsHTML = cards.map(c => `

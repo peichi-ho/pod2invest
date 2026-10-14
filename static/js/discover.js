@@ -162,34 +162,30 @@ function renderRecommended(list) {
 }
 
 // ── Preference-based scoring ──────────────────────────────────
+// 問卷選項 → 單集的推薦用標籤（後端 services/preference_tags.py 產生）：
+//   markets 比對 primary_tags（這集主要在講的 3～5 個標籤）；只出現在 tags（整集提到過）打折
+//   style / goal / capital 比對 analysis_style / investor_strategy，選項跟問卷一對一
 const _PREF_TAG_MAP = {
-  markets: { TW: ['台股'], US: ['美股'], Crypto: ['加密貨幣', '區塊鏈 / 加密貨幣'] },
-  style:   { Technical: ['投資策略'], Fundamental: ['公司分析', '產業分析'], Macro: ['總體經濟', '政策與地緣政治'], Passive: ['投資策略'] },
-  goal:    { Growth: ['個股'], Dividend: ['ETF'], Passive: ['ETF'] },
-  capital: { Low: ['ETF'], Medium: ['個股', 'ETF'], High: ['債券'] },
+  markets: { TW: ['台股'], US: ['美股'], Commodity: ['能源', '貴金屬'], General: ['ETF'] },
+  style:   { Technical: ['技術分析'], Fundamental: ['基本面分析'], Macro: ['總經分析'], Passive: ['指數化投資'] },
+  goal:    { Growth: ['價差交易'], Passive: ['存股領息', '長期定期定額'] },
+  capital: { Low: ['小資入門'] },  // 中、高預算沒有對應的內容類型，不計分
 };
+const _PREF_WEIGHTS = { markets: 3, style: 2, goal: 2, capital: 1 };
+const _MENTIONED_ONLY_RATIO = 0.3;  // 只是「提到過」、不是主要內容時的打折比例
 
 function _prefScore(summary, prefs) {
   if (!prefs) return 0;
-  const tags = new Set(summary.tags || []);
+  const has = (list, wanted) => wanted.some(t => (list || []).includes(t));
   let score = 0;
 
-  if (prefs.markets && prefs.markets.length > 0 && !prefs.markets.includes('General')) {
-    const wanted = prefs.markets.flatMap(m => _PREF_TAG_MAP.markets[m] || []);
-    if (wanted.some(t => tags.has(t))) score += 3;
-  }
-  if (prefs.style) {
-    const wanted = _PREF_TAG_MAP.style[prefs.style] || [];
-    if (wanted.some(t => tags.has(t))) score += 2;
-  }
-  if (prefs.goal) {
-    const wanted = _PREF_TAG_MAP.goal[prefs.goal] || [];
-    if (wanted.some(t => tags.has(t))) score += 2;
-  }
-  if (prefs.capital) {
-    const wanted = _PREF_TAG_MAP.capital[prefs.capital] || [];
-    if (wanted.some(t => tags.has(t))) score += 1;
-  }
+  const markets = (prefs.markets || []).flatMap(m => _PREF_TAG_MAP.markets[m] || []);
+  if (has(summary.primary_tags, markets))  score += _PREF_WEIGHTS.markets;
+  else if (has(summary.tags, markets))     score += _PREF_WEIGHTS.markets * _MENTIONED_ONLY_RATIO;
+
+  if (has(summary.analysis_style, _PREF_TAG_MAP.style[prefs.style] || []))      score += _PREF_WEIGHTS.style;
+  if (has(summary.investor_strategy, _PREF_TAG_MAP.goal[prefs.goal] || []))     score += _PREF_WEIGHTS.goal;
+  if (has(summary.investor_strategy, _PREF_TAG_MAP.capital[prefs.capital] || [])) score += _PREF_WEIGHTS.capital;
   return score;
 }
 
