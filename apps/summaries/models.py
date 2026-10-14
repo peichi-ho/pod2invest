@@ -183,3 +183,71 @@ class TickerMap(models.Model):
         return f"{self.asset_name} → {self.ticker}"
 
 
+class IndustryClassification(models.Model):
+    """
+    股票/ETF/指數的產業分類對照表——刻意跟 TickerMap 分開存成獨立一張乾淨的表，
+    是給全專案共用查詢的對照表，不是只有summaries這個app自己在用(2026-09-30，
+    團隊決定統一分類方法)。TickerMap 要查某檔標的的產業，用ticker來這張表對照，
+    不用自己另外存一份分類邏輯或重複判斷。
+
+    分類方法比照 apps/assets 頁面既有的做法(個股詳情頁同一套邏輯)：
+      台股：TWSE官方產業別代碼(t187ap03_L開放API)，34種官方分類，權威資料來源
+      美股(TWSE查不到才用)：yfinance .info 的 sector/industry(Yahoo自家分類法)，
+        翻譯成中文——見 apps/summaries/services/industry_classification.py
+    """
+    ticker        = models.CharField(max_length=20, unique=True)  # 2330.TW / NVDA
+    market        = models.CharField(max_length=10, blank=True)   # TW / US
+    industry_code = models.CharField(max_length=10, blank=True)   # TWSE官方代碼，只有台股才有
+    industry_name = models.CharField(max_length=50, blank=True)   # 中文產業名稱
+    sector_name   = models.CharField(max_length=50, blank=True)   # 中文sector，主要美股才有
+    # 這筆分類實際用哪套方法查到的："twse" / "yfinance" / ""(兩邊都查無資料)
+    source        = models.CharField(max_length=20, blank=True)
+    updated_at    = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table  = "industry_classification"
+        app_label = "summaries"
+
+    def __str__(self):
+        return f"{self.ticker} ({self.market}) → {self.industry_name or '(未分類)'}"
+
+
+class FinancialReportCache(models.Model):
+    """
+    財報資料快取（試算計算機 Earnings Simulator / Monte Carlo 用，見
+    apps/calculator/services/earnings_simulator.py）。
+
+    跟 apps/knowledge_graph 裡的 FinancialMetricsCache 存的是同一種東西
+    (營收/毛利/EPS等原始金額)，故意分開成獨立一張表放在 summariesdb，
+    不依賴 knowledge_graphdb 那個常常連線不穩的 Supabase 專案——這裡不是
+    要取代那張表，是給 earnings_simulator 一個不受它連線狀況影響的資料源。
+    """
+    ticker             = models.CharField(max_length=20)
+    fiscal_period_end  = models.DateField()
+    data_source        = models.CharField(max_length=20)  # "yfinance" | "finmind"
+    # 這一期財報「實際公開的日期」，不是期末日——回測時要用這個欄位過濾
+    # (disclosure_date <= as_of_date)，避免用到模擬當下其實還沒公告的資料。
+    # 抓法跟 apps/knowledge_graph/services/financial_data.py 一致：優先用
+    # yfinance t.earnings_dates 的真實公告日，抓不到才退回估計值(季報+45天/
+    # 年報+90天)。
+    disclosure_date    = models.DateField(null=True, blank=True)
+
+    revenue            = models.FloatField(null=True, blank=True)
+    gross_profit       = models.FloatField(null=True, blank=True)
+    operating_income   = models.FloatField(null=True, blank=True)
+    ebit               = models.FloatField(null=True, blank=True)
+    net_income         = models.FloatField(null=True, blank=True)
+    shares_outstanding = models.FloatField(null=True, blank=True)
+    eps                = models.FloatField(null=True, blank=True)
+
+    fetched_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table  = "financial_report_cache"
+        app_label = "summaries"
+        unique_together = ("ticker", "fiscal_period_end")
+
+    def __str__(self):
+        return f"{self.ticker} @ {self.fiscal_period_end}"
+
+
