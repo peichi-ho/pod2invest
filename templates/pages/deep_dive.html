@@ -39,8 +39,8 @@
       <div class="flex items-center justify-between">
         <h2 class="font-['Epilogue'] text-3xl font-bold text-tertiary-container">Investment Takeaways</h2>
         <div class="flex gap-2 bg-surface-container-low rounded-full p-1 border border-outline-variant/20">
-          <button id="btn-mode-novice" onclick="switchDdMode('novice')" class="px-5 py-1.5 rounded-full font-label text-xs font-bold tracking-wide transition-all bg-tertiary-container text-white">Novice</button>
-          <button id="btn-mode-pro" onclick="switchDdMode('pro')" class="px-5 py-1.5 rounded-full font-label text-xs font-bold tracking-wide transition-all text-secondary">Pro</button>
+          <button data-dd-mode="novice" onclick="switchDdMode('novice')" class="px-5 py-1.5 rounded-full font-label text-xs font-bold tracking-wide transition-all bg-tertiary-container text-white">Novice</button>
+          <button data-dd-mode="pro" onclick="switchDdMode('pro')" class="px-5 py-1.5 rounded-full font-label text-xs font-bold tracking-wide transition-all text-secondary">Pro</button>
         </div>
       </div>
       <div id="dd-takeaways" class="space-y-4"><p class="text-outline text-sm">載入中...</p></div>
@@ -50,6 +50,10 @@
   <section class="mb-20">
     <div class="mb-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
       <h2 class="font-['Epilogue'] text-4xl font-bold text-tertiary-container">Critical Thesis Points</h2>
+      <div class="flex gap-2 bg-surface-container-low rounded-full p-1 border border-outline-variant/20 self-start md:self-auto">
+        <button data-dd-mode="novice" onclick="switchDdMode('novice')" class="px-5 py-1.5 rounded-full font-label text-xs font-bold tracking-wide transition-all bg-tertiary-container text-white">Novice</button>
+        <button data-dd-mode="pro" onclick="switchDdMode('pro')" class="px-5 py-1.5 rounded-full font-label text-xs font-bold tracking-wide transition-all text-secondary">Pro</button>
+      </div>
     </div>
     <div id="dd-audio-player" class="hidden mb-8 p-5 rounded-2xl bg-surface-container-low border border-outline-variant/20">
       <div class="flex items-center gap-4">

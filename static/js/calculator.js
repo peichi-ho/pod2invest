@@ -33,16 +33,19 @@ function setMode(m) {
   document.getElementById('mode-btn-episode').classList.toggle('active', m === 'episode');
   document.getElementById('panel-manual').classList.toggle('hidden', m !== 'manual');
   document.getElementById('panel-episode').classList.toggle('hidden', m !== 'episode');
+  if (typeof refreshImplied === 'function') refreshImplied();
 }
 
 function syncFromSlider(key) {
   document.getElementById('in-' + key).value = document.getElementById('slider-' + key).value;
   document.getElementById('lbl-' + key).textContent = document.getElementById('slider-' + key).value;
+  if (key === 'months' && typeof schedulePeBaseline === 'function') { refreshPeDefault(); schedulePeBaseline(); }
 }
 function syncFromInput(key) {
   const v = document.getElementById('in-' + key).value;
   document.getElementById('slider-' + key).value = v;
   document.getElementById('lbl-' + key).textContent = v;
+  if (key === 'months' && typeof schedulePeBaseline === 'function') { refreshPeDefault(); schedulePeBaseline(); }
 }
 // 風險程度(低/中/高)、市場立場(看空/中立/看多)這兩組用三顆按鈕取代滑桿+數字框，
 // 底層數值(0/0.5/1、-1/0/1)還是寫進同一個in-risk/in-macro(改成hidden input)，
@@ -52,6 +55,7 @@ function setScoreButton(key, value) {
   document.querySelectorAll('#btns-' + key + ' button').forEach(btn => {
     btn.classList.toggle('active', parseFloat(btn.dataset.value) === value);
   });
+  if (typeof schedulePeBaseline === 'function') schedulePeBaseline();
 }
 // 跟三顆按鈕(低/中/高、看空/中立/看多)用同一套文字，純文字顯示(例如選集數後的說明列)
 // 也統一改用這兩個函式，不要再直接印0.5、-1這種原始數字給使用者看。
@@ -65,6 +69,496 @@ function _macroWordLabel(v) {
   if (v < 0) return '看空';
   return '中立';
 }
+// 說明泡泡(ⓘ)：做法跟「資產」頁一樣——滑過圖示才顯示，長說明不佔版面。
+// 用 fixed 定位掛在 <body> 下，不被左欄的 overflow 裁掉；所有圖示共用同一個泡泡，只依 key 換內容。
+const _CALC_INFO_NOTES = {
+  regime: {
+    title: '市場環境',
+    body: '決定模擬時，從歷史的「空頭日」與「多頭日」各抽多少比例。',
+    points: [
+      ['歷史實際', '過去 5 年每天被抽到的機率相同，是目前已校準的預設。'],
+      ['偏多', '空頭日約占 8%：模擬時很少抽到下跌行情。'],
+      ['偏空', '空頭日約占 60%：接近歷史上真實熊市年的水準（約 55～70%）。'],
+      ['自訂', '自己決定空頭日占幾成。'],
+    ],
+    footer: '偏多、偏空、自訂是你的情境假設，未經校準；風險與立場的調整仍照常套用。',
+  },
+  fundamental: {
+    title: '基本面假設',
+    body: '滑桿預設值是用這檔股票過去 5 年的財報與股價反推出來的 EPS 成長與本益比變化，也就是基準本來就隱含的假設。',
+    example: {
+      head: '例子：股價 ＝ 每股賺的錢（EPS）× 市場願意付的倍數（本益比）',
+    },
+  },
+  eps: {
+    title: '每股盈餘（EPS）',
+    body: '公司一年賺的錢，平均分到每一股，就是 EPS。「每年成長 +20%」代表每一股每年多賺兩成。',
+    dynamic: () => {
+      const d = (typeof _implied !== 'undefined') ? _implied : null;
+      if (!d) return '';
+      const yrs = d.years_used >= 4.9 ? '5' : d.years_used.toFixed(1);   // 窗口不一定剛好5年
+      return `過去${yrs}年EPS：期初 ${d.eps_start.toFixed(2)} → 期末 ${d.eps_end.toFixed(2)}（${d.window_start} ~ ${d.window_end}）`;
+    },
+  },
+  pe: {
+    title: '本益比（P/E）',
+    body: '股價 ÷ EPS，代表市場願意用幾年的獲利來買下這家公司。倍數變高表示市場更看好；變低表示更保守。',
+    dynamic: () => {
+      const d = (typeof _implied !== 'undefined') ? _implied : null;
+      if (!d || !d.pe_now) return '';
+      return `現在本益比 ${d.pe_now.toFixed(1)} 倍＝現在股價 ÷ 近四季 EPS ${d.eps_end.toFixed(2)}`;
+    },
+    footer: '預設值是基準情境隱含的倍數，已含你選的市場環境、風險與立場；投資期間改了也會跟著變。',
+  },
+  pe_scenarios: {
+    title: '這個情境隱含的本益比',
+    body: '',
+    dynamicFirst: true,     // 「現在的本益比」放在標題正下方、字放大
+    dynamic: () => {
+      // 優先用最近一次模擬回傳的「現在本益比」，沒有再用載入預設值時取得的
+      let now = null;
+      if (typeof lastResult !== 'undefined' && lastResult && lastResult.pe_scenarios) now = lastResult.pe_scenarios.pe_now;
+      if (!now && typeof _implied !== 'undefined' && _implied) now = _implied.pe_now;
+      if (!now) return '';
+      return `<div class="font-bold text-on-surface">現在的本益比：${now.toFixed(1)} 倍</div>` +
+             `<div>高於 ${(now * 2).toFixed(1)} 倍或低於 ${(now / 2).toFixed(1)} 倍會標紅字</div>`;
+    },
+    points: [
+      ['跟現在差不多', '股價主要靠獲利成長撐起來，路徑在基本面上說得通。'],
+      ['比現在高很多（紅字）', '得靠市場給更高的倍數才成立，樂觀情境要特別留意。'],
+      ['比現在低很多（紅字）', '代表市場得大幅殺低倍數，通常出現在偏空的情境。'],
+    ],
+    footer: '倍數高於現在 2 倍或低於一半時會標紅字，只是提醒，不代表一定不會發生。',
+  },
+  fundamental_na: {
+    title: '為什麼沒有基本面假設',
+    body: '需要這檔股票近 5 年足夠的季度財報才能反推預設值。ETF、指數、商品與加密貨幣本身沒有每股盈餘，不適用；個股則是財報資料還沒補齊。',
+    footer: '想用基本面假設，可改選有財報資料的個股節目（例如台積電、聯發科）。',
+  },
+};
+function _calcInfoNoteHtml(key) {
+  const n = _CALC_INFO_NOTES[key];
+  if (!n) return '';
+  const title = `<div class="flex items-center gap-1 font-bold text-base text-tertiary-container mb-1">
+      <span class="material-symbols-outlined text-lg leading-none">info</span>${n.title}</div>`;
+  const points = n.points
+    ? `<ul class="mt-2 space-y-1.5">${n.points.map(([k, v]) =>
+        `<li class="rounded-md px-2.5 py-1.5 bg-surface-container"><div class="font-bold text-on-surface">${k}</div><div>${v}</div></li>`
+      ).join('')}</ul>`
+    : '';
+  const footer = n.footer
+    ? `<div class="mt-2 flex items-start gap-1 text-xs text-outline">
+        <span class="material-symbols-outlined text-sm leading-none">lightbulb</span><span>${n.footer}</span></div>`
+    : '';
+  const example = n.example
+    ? `<div class="mt-2 rounded-md px-2.5 py-2 bg-surface-container text-xs">
+        <div class="font-bold text-on-surface mb-1">${n.example.head}</div>
+        ${(n.example.rows || []).map(([k, v]) => `<div class="py-1 border-t border-outline-variant/30 first:border-t-0"><div class="text-outline">${k}</div><div class="font-bold text-on-surface">${v}</div></div>`).join('')}
+        ${n.example.note ? `<div class="mt-1 text-outline">${n.example.note}</div>` : ''}</div>`
+    : '';
+  const dynText = (typeof n.dynamic === 'function') ? n.dynamic() : '';
+  const dyn = dynText
+    ? (n.dynamicFirst
+        ? `<div class="mt-1 mb-2 rounded-md px-2.5 py-1.5 bg-surface-container">${dynText}</div>`
+        : `<div class="mt-2 rounded-md px-2.5 py-1.5 bg-surface-container text-xs">${dynText}</div>`)
+    : '';
+  const bodyHtml = n.body ? `<div>${n.body}</div>` : '';
+  return `${title}${n.dynamicFirst ? dyn : ''}${bodyHtml}${example}${n.dynamicFirst ? '' : dyn}${points}${footer}`;
+}
+function showCalcInfoNote(event, key) {
+  let note = document.getElementById('calc-info-note');
+  if (!note) {
+    note = document.createElement('div');
+    note.id = 'calc-info-note';
+    note.className = 'hidden fixed z-50 w-72 max-w-[calc(100vw-16px)] text-sm text-left normal-case tracking-normal font-normal bg-surface-container-high rounded-lg p-4 text-on-surface-variant leading-relaxed shadow-lg pointer-events-none';
+    note.innerHTML = '<div id="calc-info-note-arrow" class="absolute -top-1 w-2 h-2 bg-surface-container-high rotate-45"></div><div id="calc-info-note-content"></div>';
+    // 寬度直接寫在 style：量測位置時不用等 Tailwind 把 w-72 這類class動態產生出來
+    note.style.width = '288px';
+    note.style.maxWidth = 'calc(100vw - 16px)';
+    document.body.appendChild(note);
+  }
+  document.getElementById('calc-info-note-content').innerHTML = _calcInfoNoteHtml(key);
+  note.classList.remove('hidden');
+  const rect = event.currentTarget.getBoundingClientRect();
+  const margin = 8;
+  const w = note.offsetWidth;
+  const cx = rect.left + rect.width / 2;
+  const left = Math.max(margin, Math.min(cx - w / 2, window.innerWidth - w - margin));
+  note.style.left = `${left}px`;
+  const h = note.offsetHeight;
+  const fitsBelow = rect.bottom + 8 + h <= window.innerHeight - margin;
+  const fitsAbove = rect.top - 8 - h >= margin;
+  const above = !fitsBelow && fitsAbove;
+  note.style.top = `${above ? rect.top - 8 - h : rect.bottom + 8}px`;
+  const arrow = document.getElementById('calc-info-note-arrow');
+  if (arrow) {
+    arrow.style.left = `${Math.max(12, Math.min(cx - left, w - 12))}px`;
+    arrow.style.top = above ? 'auto' : '';
+    arrow.style.bottom = above ? '-4px' : '';
+  }
+}
+function hideCalcInfoNote() {
+  const note = document.getElementById('calc-info-note');
+  if (note) note.classList.add('hidden');
+}
+
+// 市場環境(情境假設)：決定拔靴抽樣時「空頭日」占多少比例，見 apps/calculator/services/market_regime.py。
+// 預設 actual＝不傳任何參數，後端輸出跟沒有這個功能時完全一樣；其餘三種是使用者自己的情境假設。
+function setRegime(key) {
+  document.getElementById('in-regime').value = key;
+  document.querySelectorAll('#btns-regime button').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.value === key);
+  });
+  document.getElementById('regime-custom').classList.toggle('hidden', key !== 'custom');
+  if (typeof schedulePeBaseline === 'function') schedulePeBaseline();
+}
+function syncBearShare() {
+  document.getElementById('lbl-bear').textContent = document.getElementById('slider-bear').value + '%';
+  if (typeof schedulePeBaseline === 'function') schedulePeBaseline();
+}
+function applyRegimeParams(params) {
+  const key = document.getElementById('in-regime').value;
+  if (key === 'bull' || key === 'bear') params.set('regime', key);
+  if (key === 'custom') params.set('bear_share', (parseFloat(document.getElementById('slider-bear').value) / 100).toFixed(2));
+}
+function renderRegimeNote(data) {
+  const el = document.getElementById('regime-note');
+  if (!el) return;
+  const r = data.regime;
+  if (!r) { el.classList.add('hidden'); el.textContent = ''; return; }
+  const msg = r['warn' + 'ing'];
+  let text;
+  if (r.applied) {
+    text = `市場環境：空頭日占比 ${(r.applied_bear_share * 100).toFixed(0)}%（歷史 ${(r.actual_bear_share * 100).toFixed(0)}%）`;
+  } else {
+    text = '市場環境未套用：' + (msg || '資料不足');
+  }
+  el.textContent = text;
+  el.classList.remove('hidden');
+}
+
+// 基本面假設(選用，組合一)：滑桿預設值＝引擎基準隱含的EPS年化成長與估值擴張，見 implied_assumptions.py。
+// 滑桿停在預設值時不送任何參數，後端輸出跟沒有這個功能時一樣；調離預設才送，後端在API層對輸出乘倍數F。
+let _implied = null;
+let _impliedSeq = 0;
+function _pct(x, d = 1) { return (x >= 0 ? '+' : '') + (x * 100).toFixed(d) + '%'; }
+async function refreshImplied() {
+  const seq = ++_impliedSeq;
+  const panel = document.getElementById('fundamental-panel');
+  _implied = null;
+  _peBase = null;
+  if (!panel) return;
+  panel.classList.add('hidden');
+  const na = document.getElementById('fundamental-na');
+  const details = document.getElementById('fundamental-details');
+  const base = (typeof B_API_URL !== 'undefined' ? B_API_URL : API_URL) + 'implied/';
+  const p = new URLSearchParams();
+  if (mode === 'episode') {
+    const sid = document.getElementById('in-episode').value;
+    if (!sid) return;
+    p.set('score_id', sid);
+  } else {
+    const tk = document.getElementById('in-ticker').value.trim();
+    if (!tk) return;
+    p.set('ticker', tk);
+  }
+  try {
+    const res = await fetch(base + '?' + p.toString());
+    const d = await res.json();
+    if (seq !== _impliedSeq) return;
+    if (!res.ok || !d.supported) {
+      // 不支援時留一行原因(而不是整塊消失)，使用者才知道為什麼這檔沒有滑桿
+      na.innerHTML = '基本面假設：這檔暫不提供' + (d.reason ? '（' + d.reason + '）' : '') + ' ' +
+        '<span class="inline-flex items-center cursor-help align-middle" onmouseenter="showCalcInfoNote(event, \'fundamental_na\')" onmouseleave="hideCalcInfoNote()">' +
+        '<span class="material-symbols-outlined text-sm leading-none">info</span></span>';
+      na.classList.remove('hidden');
+      details.classList.add('hidden');
+      panel.classList.remove('hidden');
+      return;
+    }
+    na.classList.add('hidden');
+    details.classList.remove('hidden');
+    _implied = d;
+    const g = Math.round(d.g0 * 100);
+    const se = document.getElementById('slider-eps');
+    se.value = Math.min(Math.max(g, +se.min), +se.max);
+    // 本益比滑桿：取不到真實本益比時整塊隱藏，只留獲利成長那根
+    const hasPe = !!(d.pe_now && d.pe_start && d.pe_pace !== null && d.pe_pace !== undefined);
+    const peBlock = document.getElementById('slider-val').closest('.space-y-1');
+    if (peBlock) peBlock.classList.toggle('hidden', !hasPe);
+    _peTouched = false;
+    // 窗口不一定剛好 5 年(例如近年才上市的公司)，用實際年數，不要硬寫「5 年」
+    const yrs = d.years_used >= 4.9 ? '5' : d.years_used.toFixed(1);
+    document.getElementById('fundamental-default').textContent =
+      hasPe
+        ? `過去 ${yrs} 年實際：獲利每年成長 ${_pct(d.g0, 0)}；現在本益比 ${d.pe_now.toFixed(1)} 倍`
+        : `過去 ${yrs} 年實際：獲利每年成長 ${_pct(d.g0, 0)}`;
+    if (hasPe) { refreshPeDefault(); schedulePeBaseline(); } else syncFundamental();
+    panel.classList.remove('hidden');
+  } catch (e) { /* 取不到就維持隱藏 */ }
+}
+// 本益比滑桿(水位式)：使用者直接設「投資期間結束時」的本益比；預設＝現在的本益比 ×
+// (1+過去窗口本益比的年化變化)^期間年數，所以投資期間一改，預設值就跟著重算。
+// 滑桿停在預設值(或使用者沒動過)時不送參數，後端輸出跟沒有這個功能時一樣。
+let _peTouched = false;
+// 基準隱含的終點本益比(後端用「基準終點股價 ÷ 假設的終點EPS」算，已含市場環境、風險與立場、投資期間)。
+// null＝還沒取到，先用過去的變化速度估一個，取到後自動換掉。
+let _peBase = null;
+let _peBaseSeq = 0;
+let _peBaseTimer = null;
+function _peYears() {
+  const m = parseFloat(document.getElementById('in-months').value);
+  return (m > 0 ? m : 12) / 12;
+}
+function _peHistorical() {
+  if (!_implied || !_implied.pe_now) return null;
+  return _implied.pe_now * Math.pow(1 + _implied.pe_pace, _peYears());
+}
+function _peDefault() {
+  if (!_implied || !_implied.pe_now) return null;
+  return _peBase !== null ? _peBase : _peHistorical();
+}
+function _peStep(now) { return now < 100 ? 0.1 : 0.5; }
+function refreshPeDefault() {
+  const sv = document.getElementById('slider-val');
+  if (!sv || !_implied || !_implied.pe_now) return;
+  const now = _implied.pe_now, def = _peDefault(), step = _peStep(now);
+  // 範圍：現在的 0.5~2 倍，預設值落在外面就把範圍撐開(最多到後端允許的 0.25~4 倍)
+  let lo = Math.max(step, Math.min(now * 0.5, def * 0.7, now * 4));
+  let hi = Math.min(Math.max(now * 2, def * 1.3), now * 4);
+  lo = Math.max(now * 0.25, lo);
+  sv.min = (Math.floor(lo / step) * step).toFixed(2);
+  sv.max = (Math.ceil(hi / step) * step).toFixed(2);
+  sv.step = step;
+  if (!_peTouched) sv.value = Math.min(Math.max(def, +sv.min), +sv.max).toFixed(2);
+  syncFundamental();
+}
+// 市場環境、風險／立場、投資期間、標的任何一個改了，基準隱含的本益比就要重算。
+// 後端模擬一次不到一秒；用固定種子，同樣條件算出同樣的預設值，不會每次小跳動。
+function schedulePeBaseline() {
+  clearTimeout(_peBaseTimer);
+  _peBaseTimer = setTimeout(fetchPeBaseline, 350);
+}
+async function fetchPeBaseline() {
+  if (!_implied || !_implied.pe_now) return;
+  const seq = ++_peBaseSeq;
+  const params = new URLSearchParams({
+    months: document.getElementById('in-months').value,
+    risk_score: document.getElementById('in-risk').value,
+    macro_score: document.getElementById('in-macro').value,
+    n_simulations: 1000,
+    light: '1',
+  });
+  if (mode === 'episode') {
+    const sid = document.getElementById('in-episode').value;
+    if (!sid) return;
+    params.set('score_id', sid);
+  } else {
+    const tk = document.getElementById('in-ticker').value.trim();
+    if (!tk) return;
+    params.set('ticker', tk);
+  }
+  applyRegimeParams(params);
+  try {
+    const res = await fetch((typeof B_API_URL !== 'undefined' ? B_API_URL : API_URL) + '?' + params.toString());
+    const data = await res.json();
+    if (seq !== _peBaseSeq) return;     // 期間又改了，這筆作廢
+    if (res.ok && data.pe_baseline && data.pe_baseline.pe_implied) {
+      _peBase = data.pe_baseline.pe_implied;
+      refreshPeDefault();
+    }
+  } catch (e) { /* 取不到就維持用過去速度估的預設值 */ }
+}
+function onPeInput() {
+  _peTouched = true;
+  syncFundamental();
+}
+// 滑桿下方兩行「真的進入計算」的結果：終點EPS、終點股價(＝終點EPS × 終點本益比)。
+// 使用者沒動過獲利滑桿時，用精確的g0(不是四捨五入後的整數%)，跟後端一致。
+function _g1() {
+  const v = parseFloat(document.getElementById('slider-eps').value) / 100;
+  if (_implied && Math.round(_implied.g0 * 100) === Math.round(v * 100)) return _implied.g0;
+  return v;
+}
+function _priceUnit() {
+  const tk = (_implied && _implied.ticker) ? String(_implied.ticker).toUpperCase() : '';
+  if (tk.endsWith('.TW') || tk.endsWith('.TWO')) return '元';
+  if (tk && !tk.includes('.')) return '美元';     // 其他市場(韓、日…)幣別不同，不亂標
+  return '';
+}
+function renderFundamentalHints() {
+  const eh = document.getElementById('eps-hint'), ph = document.getElementById('price-hint');
+  if (!eh || !ph) return;
+  if (!_implied || !_implied.eps_end) { eh.textContent = ''; ph.textContent = ''; return; }
+  const eps0 = _implied.eps_end, epsT = eps0 * Math.pow(1 + _g1(), _peYears());
+  eh.textContent = `→ 終點 EPS 約 ${epsT.toFixed(2)}（現在 ${eps0.toFixed(2)}）`;
+  const pe = parseFloat(document.getElementById('slider-val').value);
+  if (_implied.pe_now && isFinite(pe)) {
+    const price = epsT * pe;
+    const txt = price >= 100 ? Math.round(price).toLocaleString() : price.toFixed(1);
+    ph.textContent = `終點股價 ＝ ${epsT.toFixed(2)} × ${pe.toFixed(1)} 倍 ＝ 約 ${txt}${_priceUnit() ? ' ' + _priceUnit() : ''}`;
+  } else {
+    ph.textContent = '';
+  }
+}
+function syncFundamental() {
+  document.getElementById('lbl-eps').textContent = (document.getElementById('slider-eps').value >= 0 ? '+' : '') + document.getElementById('slider-eps').value + '%';
+  const _sv = document.getElementById('slider-val');
+  document.getElementById('lbl-val').textContent = `${parseFloat(_sv.value).toFixed(1)} 倍`;
+  renderFundamentalHints();
+}
+function resetFundamental() {
+  if (!_implied) return;
+  document.getElementById('slider-eps').value = Math.round(_implied.g0 * 100);
+  _peTouched = false;
+  refreshPeDefault();
+  syncFundamental();
+}
+function applyFundamentalParams(params) {
+  if (!_implied) return;
+  const g = parseFloat(document.getElementById('slider-eps').value);
+  if (g !== Math.round(_implied.g0 * 100)) params.set('eps_growth', (g / 100).toFixed(4));
+  // 本益比：使用者動過、且跟預設差超過半格，才送「終點本益比」
+  if (_peTouched && _implied.pe_now) {
+    const def = _peDefault(), pe = parseFloat(document.getElementById('slider-val').value);
+    if (def !== null && Math.abs(pe - def) >= _peStep(_implied.pe_now) / 2) params.set('pe_target', pe.toFixed(2));
+  }
+}
+function renderFundamentalNote(data) {
+  const el = document.getElementById('fundamental-note');
+  if (!el) return;
+  const f = data.fundamental;
+  if (!f || !f.applied) { el.classList.add('hidden'); el.textContent = ''; return; }
+  const sgn = x => (x >= 0 ? '+' : '') + (x * 100).toFixed(1) + '%';
+  const peTxt = (f.pe_default && f.pe_target) ? `；終點本益比 ${f.pe_default.toFixed(1)} → ${f.pe_target.toFixed(1)} 倍` : '';
+  el.textContent =
+    `基本面假設：基準終點報酬 ${_pct(f.median_before)} → ${_pct(f.median_after)}` +
+    `（獲利 ${sgn(f.factor_growth - 1)}、本益比 ${sgn(f.factor_valuation - 1)}${peTxt}）`;
+  el.classList.remove('hidden');
+}
+// ── 手動輸入：代號或中文名稱的搜尋建議(做法比照資產頁搜尋欄) ──────────────
+// 輸入時 debounce 查 /search/，結果顯示在輸入框下方；點選後把代號帶進輸入框並重新取得基本面預設。
+// 直接按「開始模擬」時，輸入若是中文名稱或純數字，會先自動解析成代號(唯一時才自動帶入，不猜)。
+let _tickerSearchTimer = null;
+let _tickerSearchSeq = 0;
+let _tickerSearchItems = [];
+let _tickerSearchActive = -1;
+function _tickerSearchBase() {
+  return (typeof B_API_URL !== 'undefined' ? B_API_URL : API_URL) + 'search/';
+}
+function _looksLikeFullTicker(v) {
+  // 已經是代號：含 . 的完整代號(2330.TW)，或英文字母開頭的美股代號(NVDA、BRK-B、^GSPC)
+  return /\./.test(v) || /^[A-Za-z^][A-Za-z0-9\-=^]*$/.test(v);
+}
+function _closeTickerSearch() {
+  const dd = document.getElementById('ticker-search-dropdown');
+  if (dd) { dd.classList.add('hidden'); dd.innerHTML = ''; }
+  _tickerSearchItems = []; _tickerSearchActive = -1;
+}
+function onTickerSearchInput() {
+  const q = document.getElementById('in-ticker').value.trim();
+  clearTimeout(_tickerSearchTimer);
+  document.getElementById('ticker-picked').classList.add('hidden');
+  if (!q) { _closeTickerSearch(); return; }
+  _tickerSearchTimer = setTimeout(() => runTickerSearch(q), 250);
+}
+async function _fetchTickerSearch(q) {
+  const res = await fetch(_tickerSearchBase() + '?q=' + encodeURIComponent(q));
+  if (!res.ok) throw new Error('search failed');
+  return (await res.json()).results || [];
+}
+async function runTickerSearch(q) {
+  const seq = ++_tickerSearchSeq;
+  const dd = document.getElementById('ticker-search-dropdown');
+  try {
+    const rows = await _fetchTickerSearch(q);
+    if (seq !== _tickerSearchSeq) return;          // 已經又打了別的字，這筆作廢
+    _tickerSearchItems = rows;
+    _tickerSearchActive = rows.length ? 0 : -1;
+    if (!rows.length) {
+      dd.innerHTML = '<p class="text-outline text-sm p-4 text-center">找不到相關標的，可直接輸入代號（例如 2330.TW、NVDA）</p>';
+    } else {
+      dd.innerHTML = rows.map((r, i) => `
+        <div data-i="${i}" onmousedown="event.preventDefault()" onclick="selectTickerCandidate(${i})"
+          class="ticker-search-row flex items-center gap-3 px-4 py-3 hover:bg-surface-container-highest cursor-pointer border-b border-outline-variant/10 last:border-0 transition-colors">
+          <span class="text-[11px] font-bold text-outline flex-shrink-0 px-1.5 py-0.5 rounded bg-surface-container-highest">${_escHtml(r.market)}</span>
+          <span class="text-base font-bold text-tertiary-container truncate">${_escHtml(r.name)}</span>
+          <span class="text-sm text-outline flex-shrink-0">${_escHtml(r.ticker)}</span>
+        </div>`).join('');
+      _paintTickerActive();
+    }
+    dd.classList.remove('hidden');
+  } catch (e) {
+    if (seq !== _tickerSearchSeq) return;
+    dd.innerHTML = '<p class="text-error text-sm p-4 text-center">搜尋失敗，請稍後再試，或直接輸入代號</p>';
+    dd.classList.remove('hidden');
+  }
+}
+function _paintTickerActive() {
+  document.querySelectorAll('#ticker-search-dropdown .ticker-search-row').forEach((el, i) => {
+    el.classList.toggle('bg-surface-container-highest', i === _tickerSearchActive);
+  });
+}
+function onTickerSearchKeydown(e) {
+  const dd = document.getElementById('ticker-search-dropdown');
+  const open = dd && !dd.classList.contains('hidden') && _tickerSearchItems.length;
+  if (e.key === 'Escape') { _closeTickerSearch(); return; }
+  if (!open) return;
+  if (e.key === 'ArrowDown') { e.preventDefault(); _tickerSearchActive = (_tickerSearchActive + 1) % _tickerSearchItems.length; _paintTickerActive(); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); _tickerSearchActive = (_tickerSearchActive - 1 + _tickerSearchItems.length) % _tickerSearchItems.length; _paintTickerActive(); }
+  else if (e.key === 'Enter') { e.preventDefault(); selectTickerCandidate(_tickerSearchActive); }
+}
+function selectTickerCandidate(i) {
+  const r = _tickerSearchItems[i];
+  if (!r) return;
+  const input = document.getElementById('in-ticker');
+  input.value = r.ticker;
+  _closeTickerSearch();
+  _showPickedTicker(r);
+  input.dispatchEvent(new Event('change'));        // 重新取得基本面預設值等
+}
+function _showPickedTicker(r) {
+  const el = document.getElementById('ticker-picked');
+  if (!el) return;
+  if (r && r.name && r.name !== r.ticker) {
+    el.textContent = `${r.name}（${r.ticker}）`;
+    el.classList.remove('hidden');
+  } else {
+    el.classList.add('hidden');
+  }
+}
+// 回傳可以直接送後端的代號；中文名稱或純數字會先解析。有多個可能、無法確定時回傳 ''，
+// 並把選單打開讓使用者自己選(不亂猜)。
+async function resolveTickerInput() {
+  const input = document.getElementById('in-ticker');
+  const v = input.value.trim();
+  if (!v) return '';
+  if (_looksLikeFullTicker(v)) return v;
+  try {
+    const rows = await _fetchTickerSearch(v);
+    const exact = rows.filter(r => r.exact);
+    const pick = rows.length === 1 ? rows[0] : (exact.length === 1 ? exact[0] : null);
+    if (pick) {
+      input.value = pick.ticker;
+      _showPickedTicker(pick);
+      return pick.ticker;
+    }
+    if (rows.length) await runTickerSearch(v);       // 讓使用者從選單選
+  } catch (e) { /* 搜尋服務失敗：當作使用者輸入的就是代號 */ return v; }
+  return '';
+}
+document.addEventListener('click', (e) => {
+  const dd = document.getElementById('ticker-search-dropdown');
+  const inp = document.getElementById('in-ticker');
+  if (dd && inp && !dd.contains(e.target) && e.target !== inp) _closeTickerSearch();
+});
+// 輸入框離開(change)時先解析名稱再取預設值；已經是代號就不多打一次搜尋
+document.getElementById('in-ticker').addEventListener('change', async () => {
+  await resolveTickerInput();
+  refreshImplied();
+});
+setTimeout(refreshImplied, 0);  // 等整支script載入完(mode、API網址等變數都定義好)再取預設值
+
 function syncInvestedFromSlider() {
   document.getElementById('in-invested').value = document.getElementById('slider-invested').value;
 }
@@ -135,13 +629,46 @@ async function _applyPendingCalcTarget() {
   onEpisodeChange();
 }
 
+// 選到一集之後，上方那塊資訊：名稱＋代號放大，日期／風險／立場／回測期間做成小標籤。
+// 立場顏色沿用台股慣例（看多紅、看空綠），風險用三顆點表示程度，不另外用顏色，避免跟立場的紅綠混在一起。
+function _escHtml(x) {
+  return String(x == null ? '' : x).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function renderEpisodeInfo(ep) {
+  const el = document.getElementById('episode-info');
+  if (!el) return;
+  const riskLevel = ep.risk_score >= 1 ? 3 : (ep.risk_score >= 0.5 ? 2 : 1);
+  const dots = '●'.repeat(riskLevel) + '○'.repeat(3 - riskLevel);
+  const m = ep.macro_score;
+  const stance = m > 0
+    ? { text: '看多', icon: 'trending_up', cls: 'text-[#ba1a1a] bg-[#ba1a1a]/10' }
+    : (m < 0
+      ? { text: '看空', icon: 'trending_down', cls: 'text-[#1e8e3e] bg-[#1e8e3e]/10' }
+      : { text: '中立', icon: 'trending_flat', cls: 'text-on-surface-variant bg-surface-container' });
+  const icon = n => `<span class="material-symbols-outlined text-sm leading-none">${n}</span>`;
+  const chip = (inner, cls, title) =>
+    `<span class="inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-bold ${cls}"${title ? ` title="${_escHtml(title)}"` : ''}>${inner}</span>`;
+  const neutral = 'text-on-surface-variant bg-surface-container';
+  // 風險顏色刻意避開紅／綠(那是立場的台股慣例：看多紅、看空綠)，用 藍→金黃→橘 表示 低→中→高，
+  // 免得「風險高(紅)」跟「看多(紅)」同時出現時讓人搞混。
+  const riskCls = ['text-[#286671] bg-[#286671]/10', 'text-[#a16207] bg-[#eab308]/20', 'text-[#c2410c] bg-[#c2410c]/10'][riskLevel - 1];
+  // 名稱、代號、日期、風險、立場、回測期間全部放在同一排(放不下才自動換行)
+  el.innerHTML = `
+    <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
+      <span class="font-['Epilogue'] text-lg font-bold text-tertiary-container">${_escHtml(ep.asset_name)}</span>
+      <span class="text-sm font-bold tracking-widest text-outline bg-surface-container rounded px-2 py-0.5">${_escHtml(ep.ticker)}</span>
+      ${chip(icon('event') + _escHtml(ep.published_at) + ' 發布', neutral, '這一集節目的發布日期，也是模擬的基準日')}
+      ${chip('風險 <span class="tracking-widest">' + dots + '</span> ' + _riskWordLabel(ep.risk_score), riskCls, 'Podcast 對這檔股票的風險評估')}
+      ${chip(icon(stance.icon) + '立場 ' + stance.text, stance.cls, 'Podcast 對這檔股票的看法')}
+      ${ep.default_months ? chip(icon('history') + '回測約 ' + _escHtml(ep.default_months) + ' 個月', neutral, '該集 backtesting 的時間範圍，也是投資期間的預設值') : ''}
+    </div>`;
+}
+
 function onEpisodeChange() {
   const scoreId = document.getElementById('in-episode').value;
   const ep = episodes.find(e => String(e.score_id) === String(scoreId));
   if (!ep) return;
-  let info = `${ep.asset_name}(${ep.ticker})　發布於${ep.published_at}　風險：${_riskWordLabel(ep.risk_score)}　立場：${_macroWordLabel(ep.macro_score)}`;
-  if (ep.default_months) info += `　｜　該集backtesting時間範圍約${ep.default_months}個月`;
-  document.getElementById('episode-info').textContent = info;
+  renderEpisodeInfo(ep);
 
   const sourceLink = document.getElementById('episode-source-link');
   if (ep.summary_id) {
@@ -159,10 +686,37 @@ function onEpisodeChange() {
     document.getElementById('in-months').value = m;
     document.getElementById('slider-months').value = Math.min(36, m);
     document.getElementById('lbl-months').textContent = m;
+    if (typeof schedulePeBaseline === 'function') { refreshPeDefault(); schedulePeBaseline(); }
   }
 
   document.getElementById('episode-rationale').textContent = ep.rationale || '(無)';
   loadSourceText(scoreId);
+  refreshImplied();
+}
+
+// 「AI實際讀到的完整輸入」原本是一整坨純文字，改成：每個【標題】一張卡片，
+// 「看多：」「看空：」這類開頭做成小標籤，段落放寬行距、限制一行的長度。
+function renderSourceText(el, text) {
+  const raw = String(text || '').trim();
+  if (!raw) { el.textContent = '(這集沒有找到對應的原始段落)'; return; }
+  const chipCls = {
+    '看多': 'text-[#ba1a1a] bg-[#ba1a1a]/10',
+    '看空': 'text-[#1e8e3e] bg-[#1e8e3e]/10',
+  };
+  const para = line => {
+    const k = line.match(/^(看多|看空|中立|操作建議|風險提示|建議|風險)[：:]\s*([\s\S]*)$/);
+    if (!k) return `<p class="leading-7">${_escHtml(line)}</p>`;
+    const cls = chipCls[k[1]] || 'text-on-surface-variant bg-surface-container-lowest';
+    return `<p class="leading-7"><span class="inline-block mr-2 px-2 py-0.5 rounded-full text-xs font-bold ${cls}">${_escHtml(k[1])}</span>${_escHtml(k[2])}</p>`;
+  };
+  el.innerHTML = raw.split(/(?=【[^】\n]+】)/).map(s => s.trim()).filter(Boolean).map(part => {
+    const m = part.match(/^【([^】\n]+)】\s*([\s\S]*)$/);
+    const title = m ? m[1] : '';
+    const lines = (m ? m[2] : part).split(/\n+/).map(l => l.trim()).filter(Boolean);
+    return `<div class="bg-surface-container rounded-lg px-4 py-3">` +
+      (title ? `<div class="text-sm font-bold text-tertiary-container mb-1">${_escHtml(title)}</div>` : '') +
+      `<div class="space-y-1">${lines.map(para).join('')}</div></div>`;
+  }).join('');
 }
 
 async function loadSourceText(scoreId) {
@@ -173,7 +727,8 @@ async function loadSourceText(scoreId) {
     const resp = await fetch(B_SOURCE_TEXT_URL + '?score_id=' + encodeURIComponent(scoreId));
     const data = await resp.json();
     if (mySeq !== sourceTextRequestSeq) return;
-    el.textContent = resp.ok ? (data.full_context || data.topic_summary || '(這集沒有找到對應的原始段落)') : ('載入失敗: ' + data.error);
+    if (!resp.ok) { el.textContent = '載入失敗: ' + data.error; return; }
+    renderSourceText(el, data.full_context || data.topic_summary || '');
   } catch (e) {
     if (mySeq !== sourceTextRequestSeq) return;
     el.textContent = '載入失敗: ' + e;
@@ -191,6 +746,7 @@ async function runSimulation() {
   const placeholder = document.getElementById('calc-placeholder');
   statusEl.textContent = '跑模擬中...(要抓歷史股價+跑模擬，可能要幾秒)';
   panel.classList.add('hidden');
+  { const ms = document.getElementById('money-stats'); if (ms) { ms.classList.add('hidden'); ms.hidden = true; } }
 
   const params = new URLSearchParams({ months, risk_score: risk, macro_score: macro, n_simulations: nsim });
   if (mode === 'episode') {
@@ -198,10 +754,12 @@ async function runSimulation() {
     if (!scoreId) { statusEl.textContent = '請先選一集'; return; }
     params.set('score_id', scoreId);
   } else {
-    const ticker = document.getElementById('in-ticker').value.trim();
-    if (!ticker) { statusEl.textContent = '請輸入股票代號'; return; }
+    const ticker = await resolveTickerInput();
+    if (!ticker) { statusEl.textContent = '請輸入股票代號或名稱，或從搜尋選單選一檔'; return; }
     params.set('ticker', ticker);
   }
+  applyRegimeParams(params);
+  applyFundamentalParams(params);
 
   try {
     const resp = await fetch(B_API_URL + '?' + params.toString());
@@ -240,7 +798,27 @@ function renderResult(data) {
   document.getElementById('stat-p90').textContent = fmtPct(data.aggressive_return);
 
   renderChart(data);
+  renderPeScenarios(data);
+  renderRegimeNote(data);
+  renderFundamentalNote(data);
   renderMoneyStats();
+}
+
+// 三個情境在終點時隱含的本益比(後端算好，這裡只負責顯示)：離現在的倍數太遠就標紅字提醒
+function renderPeScenarios(data) {
+  const sc = data.pe_scenarios;
+  const items = [['stat-pe-p10', 'conservative'], ['stat-pe-median', 'baseline'], ['stat-pe-p90', 'aggressive']];
+  items.forEach(([id, key]) => {
+    const box = document.getElementById(id), txt = document.getElementById(id + '-text');
+    if (!box || !txt) return;
+    const v = sc ? sc[key] : null;
+    if (v === null || v === undefined || !isFinite(v) || v <= 0) { box.classList.add('hidden'); return; }
+    txt.textContent = `隱含本益比 ${v.toFixed(1)} 倍`;
+    const far = v > sc.pe_now * 2 || v < sc.pe_now * 0.5;
+    box.classList.toggle('text-error', far);
+    box.classList.toggle('text-outline', !far);
+    box.classList.remove('hidden');
+  });
 }
 
 function renderChart(data) {
@@ -1815,11 +2393,14 @@ function resetCalculator() {
   // B方案(歷史拔靴模擬)區塊重置回預設狀態
   setMode('manual');
   document.getElementById('in-ticker').value = '2330.TW';
+  { const pk = document.getElementById('ticker-picked'); if (pk) pk.classList.add('hidden'); }
   document.getElementById('in-months').value = 12;
   document.getElementById('slider-months').value = 12;
   document.getElementById('lbl-months').textContent = 12;
   setScoreButton('risk', 0);
   setScoreButton('macro', 0);
+  setRegime('actual');
+  refreshImplied();
   document.getElementById('in-invested').value = '';
   document.getElementById('slider-invested').value = '0';
   document.getElementById('result-panel').classList.add('hidden');

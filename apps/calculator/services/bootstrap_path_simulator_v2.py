@@ -58,13 +58,15 @@ p90_return——那兩個欄位繼續對應BAND_LOW_PCT/BAND_HIGH_PCT=10/90，�
 用的，兩組欄位刻意分開，呼叫端不要混用)。
 """
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from typing import Optional
 
 import numpy as np
 
 from apps.calculator.services.bootstrap_path_simulator import (
     DEFAULT_HISTORY_PERIOD,
+    HISTORY_YEARS,
+    MIN_HISTORY_DAYS,
     TRADING_DAYS_PER_YEAR,
     _fetch_daily_log_returns,
 )
@@ -94,6 +96,26 @@ _LOG_CAP_HIGH = np.log(1 + DAILY_MOVE_CAP)
 _LOG_CAP_LOW = np.log(1 - DAILY_MOVE_CAP)
 
 
+def _fetch_returns_with_dates(ticker: str, period: str, as_of_date: Optional[date]):
+    """跟 _fetch_daily_log_returns 同一套抓法，額外回傳每一筆報酬對應的日期(給環境權重對齊用)。"""
+    import pandas as pd
+    import yfinance as yf
+
+    if as_of_date is not None:
+        start = as_of_date - timedelta(days=int(HISTORY_YEARS * 365.25))
+        prices = yf.Ticker(ticker).history(
+            start=start.isoformat(), end=as_of_date.isoformat(), interval="1d", auto_adjust=True,
+        )["Close"].dropna()
+    else:
+        prices = yf.Ticker(ticker).history(period=period, interval="1d", auto_adjust=True)["Close"].dropna()
+
+    if len(prices) < MIN_HISTORY_DAYS:
+        raise ValueError(f"{ticker} 歷史資料只有{len(prices)}個交易日，少於{MIN_HISTORY_DAYS}天，樣本太薄無法拔靴抽樣")
+    rets = np.diff(np.log(prices.values))
+    dates = pd.DatetimeIndex(prices.index[1:]).tz_localize(None).normalize()
+    return rets, dates
+
+
 @dataclass
 class BootstrapPathSimulationResultV2:
     n_simulations: int
@@ -112,6 +134,8 @@ class BootstrapPathSimulationResultV2:
     aggressive_return: float    # P75終點報酬，「積極情境」標籤用
     history_days_used: int
     n_days_clipped: int  # 被硬上限夾住的(模擬路徑,天)組合數，用來監控clip觸發頻率
+    # 市場環境旋鈕(見 market_regime.py)的實際套用狀況；沒啟用時是None。
+    regime_info: Optional[dict] = None
 
 
 def run_bootstrap_path_simulation_v2(
@@ -125,19 +149,36 @@ def run_bootstrap_path_simulation_v2(
     history_period: str = DEFAULT_HISTORY_PERIOD,
     as_of_date: Optional[date] = None,
     seed: Optional[int] = None,
+    regime_preset: Optional[str] = None,
+    regime_bear_share: Optional[float] = None,
 ) -> BootstrapPathSimulationResultV2:
     if start_price <= 0:
         raise ValueError("start_price 必須是正數")
     if horizon_months <= 0:
         raise ValueError("horizon_months 必須是正數")
 
-    return_pool = _fetch_daily_log_returns(ticker, period=history_period, as_of_date=as_of_date)
+    # 市場環境旋鈕：沒指定 regime_preset / regime_bear_share 時走原本的路徑，輸出跟加這個
+    # 功能之前逐位元相同；指定了才改用「依空頭日占比加權」的抽樣(見 market_regime.py)。
+    regime_weights = None
+    regime_info = None
+    if regime_preset is not None or regime_bear_share is not None:
+        from apps.calculator.services.market_regime import build_regime_weights
+
+        return_pool, pool_dates = _fetch_returns_with_dates(ticker, history_period, as_of_date)
+        regime_weights, regime_info = build_regime_weights(
+            pool_dates, ticker, as_of_date, preset=regime_preset, bear_share=regime_bear_share,
+        )
+    else:
+        return_pool = _fetch_daily_log_returns(ticker, period=history_period, as_of_date=as_of_date)
 
     horizon_years = horizon_months / 12
     n_steps = max(1, round(horizon_years * TRADING_DAYS_PER_YEAR))
 
     rng = np.random.default_rng(seed)
-    draws = rng.choice(return_pool, size=(n_simulations, n_steps), replace=True)
+    if regime_weights is not None:
+        draws = rng.choice(return_pool, size=(n_simulations, n_steps), replace=True, p=regime_weights)
+    else:
+        draws = rng.choice(return_pool, size=(n_simulations, n_steps), replace=True)
 
     n_clipped = 0
     if macro_score != 0 or risk_score != 0:
@@ -185,4 +226,5 @@ def run_bootstrap_path_simulation_v2(
         aggressive_return=float(np.percentile(terminal_returns, AGGRESSIVE_PCT)),
         history_days_used=len(return_pool),
         n_days_clipped=n_clipped,
+        regime_info=regime_info,
     )

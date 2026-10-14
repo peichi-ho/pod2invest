@@ -221,9 +221,8 @@ function renderDdModeContent(mode) {
 }
 
 function updateDdModeButtons() {
-  ['novice', 'pro'].forEach(m => {
-    const btn = document.getElementById(`btn-mode-${m}`);
-    if (!btn) return;
+  document.querySelectorAll('[data-dd-mode]').forEach(btn => {
+    const m = btn.dataset.ddMode;
     const hasData = !!ddSummaryData[m];
     const isActive = ddCurrentMode === m;
     btn.className = `px-5 py-1.5 rounded-full font-label text-xs font-bold tracking-wide transition-all ${
