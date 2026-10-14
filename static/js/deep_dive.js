@@ -51,13 +51,29 @@ function annotateGlossaryText(text, glossaryIndex) {
   if (!text) return '';
   const { surfaces, surfaceToId } = glossaryIndex;
   if (!surfaces.length) return escapeHtml(text);
-  const pattern = new RegExp('(' + surfaces.map(_escapeRegex).join('|') + ')', 'g');
-  return text.split(pattern).map((part, i) => {
-    if (i % 2 === 1 && surfaceToId.hasOwnProperty(part)) {
-      return `<span class="glossary-term border-b border-dotted border-secondary text-secondary cursor-pointer" onclick="showGlossaryTerm(event, ${surfaceToId[part]})">${escapeHtml(part)}</span>`;
+  const pattern = new RegExp(surfaces.map(_escapeRegex).join('|'), 'g');
+  // 英文／數字詞前後不可緊接英數字（避免 TER 標到 podcaster 裡的 ter）；中文詞不受影響
+  const isAlnum = ch => !!ch && /[A-Za-z0-9]/.test(ch);
+  let out = '';
+  let last = 0;
+  let m;
+  while ((m = pattern.exec(text)) !== null) {
+    const part = m[0];
+    const s = m.index;
+    const e = s + part.length;
+    if (!part) { pattern.lastIndex++; continue; }
+    const badLeft  = isAlnum(part[0])               && isAlnum(text[s - 1]);
+    const badRight = isAlnum(part[part.length - 1]) && isAlnum(text[e]);
+    if (badLeft || badRight || !surfaceToId.hasOwnProperty(part)) {
+      // 不算命中：只吃掉第一個字，從下一個位置再找（避免漏掉重疊的合法詞）
+      pattern.lastIndex = s + 1;
+      continue;
     }
-    return escapeHtml(part);
-  }).join('');
+    out += escapeHtml(text.slice(last, s));
+    out += `<span class="glossary-term border-b border-dotted border-secondary text-secondary cursor-pointer" onclick="showGlossaryTerm(event, ${surfaceToId[part]})">${escapeHtml(part)}</span>`;
+    last = e;
+  }
+  return out + escapeHtml(text.slice(last));
 }
 
 let _glossaryPopoverEl = null;
