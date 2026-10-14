@@ -502,7 +502,9 @@ function renderHeaderAvatar() {
 document.addEventListener('DOMContentLoaded', () => {
   loadPodcastImages();
   loadDiscoverData();
-  loadHotTags();
+  loadHotTopics();
+  // loadMarketOverview() 不在這裡呼叫：今日市場要優先放市場共識有提到的個股，得等
+  // loadWeeklySignals()（見 base.html）的共識資料回來才載入，由 loadWeeklySignals() 負責觸發。
   loadRankings();
   loadUserProfile();
 
