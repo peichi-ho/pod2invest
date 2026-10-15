@@ -1,4 +1,5 @@
 import json
+from collections import defaultdict
 from django.conf import settings
 from django.http import JsonResponse
 from django.shortcuts import render
@@ -22,8 +23,62 @@ def graph_page(request):
     return render(request, "knowledge_graph/graph.html")
 
 
+def _source_candidates(source: str) -> set:
+    """
+    links.podcast_source 可能是「集數標題」（跟 SummaryRecord.source_filename 一樣，
+    process_all_summaries 就是這樣寫入），也可能是「節目名 - 集數標題」（目前資料庫裡大部分是這種）。
+    回傳這個來源所有可能的集數標題寫法：完整字串，以及每個「 - 」之後的剩餘字串
+    （集數標題本身也可能含有「 - 」，所以每個位置都試）。
+    """
+    candidates = {source}
+    start = 0
+    while True:
+        i = source.find(" - ", start)
+        if i == -1:
+            break
+        candidates.add(source[i + 3:])
+        start = i + 1
+    return candidates
+
+
+def resolve_sources_to_summaries(sources) -> dict:
+    """
+    把 links.podcast_source 對回 summariesdb 的 SummaryRecord。
+    回傳 {podcast_source: {"id", "source_filename"}}，每個來源（＝每一集）只挑一筆，優先新手版；
+    摘要庫裡沒有這一集的來源不會出現在結果裡。
+    「今日市場焦點」卡片上寫的集數、點進去列出的集數都走這支，兩邊才會一致。
+    """
+    from apps.summaries.models import SummaryRecord
+
+    sources = [s for s in set(sources) if s]
+    if not sources:
+        return {}
+    candidates_by_source = {s: _source_candidates(s) for s in sources}
+    all_candidates = set().union(*candidates_by_source.values())
+
+    by_filename = {}
+    rows = (SummaryRecord.objects.using("summariesdb")
+            .filter(source_filename__in=all_candidates)
+            .values("id", "source_filename", "mode"))
+    for r in rows:
+        current = by_filename.get(r["source_filename"])
+        if current is None or (r["mode"] == "novice" and current["mode"] != "novice"):
+            by_filename[r["source_filename"]] = r
+
+    resolved = {}
+    for source, candidates in candidates_by_source.items():
+        for candidate in sorted(candidates, key=len, reverse=True):  # 優先用最完整的寫法比對
+            if candidate in by_filename:
+                resolved[source] = by_filename[candidate]
+                break
+    return resolved
+
+
 def node_episodes_api(request):
-    """回傳某節點在最近 N 天內出現過的 podcast_source 清單。"""
+    """
+    回傳某節點在最近 N 天內出現過的 podcast_source 清單，以及其中摘要庫真的有的集數
+    （summary_ids，每集一筆）。前端用 summary_ids 直接列出集數。
+    """
     node = request.GET.get("node", "").strip()
     days = int(request.GET.get("days", 30))
     if not node:
@@ -37,7 +92,9 @@ def node_episodes_api(request):
                 AND podcast_source IS NOT NULL AND podcast_source <> ''
             """, [node, node, days])
             sources = [row[0] for row in cursor.fetchall()]
-        return JsonResponse({"sources": sources, "node": node})
+        resolved = resolve_sources_to_summaries(sources)
+        episodes = {r["source_filename"]: r["id"] for r in resolved.values()}
+        return JsonResponse({"sources": sources, "node": node, "summary_ids": sorted(episodes.values())})
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)
 
@@ -52,9 +109,17 @@ def latest_date_api(request):
 
 
 def hot_nodes_api(request):
-    """回傳最近 N 天內出現最多次的節點（source+target 合計）。"""
+    """
+    回傳最近 N 天內最熱門的節點。
+    count    ：該節點在 links 裡的關係邊筆數（source+target 合計）
+    episodes ：這些關係來自幾集「摘要庫真的有的」節目——前端卡片寫的「N 集提及」就是這個數字，
+               點進去列出的集數跟它一致（見 node_episodes_api）。摘要庫裡一集都對不到的節點不會出現，
+               不然卡片寫有討論、點進去卻是空的。依 episodes、count 由大到小排序。
+    """
     days = int(request.GET.get("days", 30))
     limit = int(request.GET.get("limit", 12))
+    # 先多抓一些候選，扣掉對不到摘要的之後才湊得滿 limit
+    candidate_limit = min(limit * 4, 80)
     try:
         with connections["knowledge_graphdb"].cursor() as cursor:
             cursor.execute("""
@@ -65,9 +130,34 @@ def hot_nodes_api(request):
                     SELECT target as name, COUNT(*) as cnt FROM links
                     WHERE summary_date >= NOW() - INTERVAL '%s days' GROUP BY target
                 ) t GROUP BY name ORDER BY total DESC LIMIT %s
-            """, [days, days, limit])
-            nodes = [{"name": r[0], "count": r[1]} for r in cursor.fetchall()]
-        return JsonResponse({"nodes": nodes, "days": days})
+            """, [days, days, candidate_limit])
+            candidates = [(r[0], int(r[1])) for r in cursor.fetchall()]
+
+            sources_by_node = defaultdict(set)
+            if candidates:
+                names = [c[0] for c in candidates]
+                cursor.execute("""
+                    SELECT name, podcast_source FROM (
+                        SELECT source AS name, podcast_source FROM links
+                        WHERE summary_date >= NOW() - INTERVAL '%s days' AND source = ANY(%s)
+                        UNION
+                        SELECT target AS name, podcast_source FROM links
+                        WHERE summary_date >= NOW() - INTERVAL '%s days' AND target = ANY(%s)
+                    ) t WHERE podcast_source IS NOT NULL AND podcast_source <> ''
+                """, [days, names, days, names])
+                for name, source in cursor.fetchall():
+                    sources_by_node[name].add(source)
+
+        resolved = resolve_sources_to_summaries(
+            [src for srcs in sources_by_node.values() for src in srcs]
+        )
+        nodes = []
+        for name, count in candidates:
+            episodes = {resolved[s]["source_filename"] for s in sources_by_node[name] if s in resolved}
+            if episodes:
+                nodes.append({"name": name, "count": count, "episodes": len(episodes)})
+        nodes.sort(key=lambda n: (-n["episodes"], -n["count"]))  # 集數多的在前，同樣集數再比關係邊筆數
+        return JsonResponse({"nodes": nodes[:limit], "days": days})
     except Exception as e:
         return JsonResponse({"error": str(e)}, status=500)
 

@@ -1,11 +1,14 @@
 // ── Continue Listening ────────────────────────────────────────
 let _discCurrentId = null;
 let _hotTagNames = [];    // shared with AI question cards — 純字串陣列，格式不能改
-let _hotTopicsCache = null;  // 完整物件 [{name, count}]，供「今日市場焦點」卡片使用
+let _hotTopicsCache = null;  // 完整物件 [{name, count, episodes}]，供「本季熱門」卡片使用
+// 「本季熱門」看最近幾天的資料。卡片上的「N 集提及」跟點進去列出的集數必須用同一個天數，
+// 所以載入（hot-nodes）跟點進去（node-episodes）都讀這個常數。
+const _HOT_TOPIC_DAYS = 60;
 
 // ── Demo 模式（暫時）─────────────────────────────────────────────
-// knowledge_graphdb 目前很久沒更新，最近 30 天沒有熱門主題資料，「今日市場焦點」/
-// 「最近熱門」平常會是空狀態（見 loadHotTopics()）。網址帶 ?demo=1、而且真實 API
+// knowledge_graphdb 如果很久沒更新，近 _HOT_TOPIC_DAYS 天沒有熱門主題資料，「本季熱門」
+// 平常會是空狀態（見 loadHotTopics()）。網址帶 ?demo=1、而且真實 API
 // 真的回傳是空的時候，才會用這份範例資料頂著給外部展示用；平常訪客連上來（沒帶這個
 // 參數）完全看不到，等 knowledge graph 資料補上後，真實資料會自動蓋過這份範例、
 // 不用回來刪這段程式碼也不會出錯。主題名稱刻意挑跟目前 backtesting 週訊號資料
@@ -515,7 +518,7 @@ async function loadWeeklySignals() {
     await _ensureFavoritesCache();
     _signalData = records;
     renderSignalCards(records);
-    renderMarketFocus(); // 補上「今日市場焦點」卡片的看多/看空共識（見 _consensusForTopic）
+    renderMarketFocus(); // 補上「本季熱門」卡片的看多/看空共識（見 _consensusForTopic）
   } catch (e) {
     console.error('loadWeeklySignals failed', e);
     grid.innerHTML = '<p class="text-outline text-sm">載入失敗</p>';
@@ -526,24 +529,8 @@ async function loadWeeklySignals() {
   }
 }
 
-// ── Hot tags ──────────────────────────────────────────────────
-let _activeTag = null;
-const _tagActiveCls = 'px-5 py-2 bg-tertiary-container text-surface rounded-full font-label text-sm font-semibold whitespace-nowrap transition-colors';
-const _tagNormalCls = 'px-5 py-2 bg-secondary/10 text-secondary rounded-full font-label text-sm font-semibold whitespace-nowrap border border-secondary/20 hover:bg-secondary/20 transition-colors';
-
-function _updateTagButtons() {
-  const container = document.getElementById('discover-tags');
-  if (!container) return;
-  container.querySelectorAll('button[data-tag]').forEach(btn => {
-    const isActive = btn.dataset.tag === (_activeTag === null ? '__all__' : _activeTag);
-    btn.className = isActive ? _tagActiveCls : _tagNormalCls;
-  });
-}
-
+// ── 熱門主題篩選（從「本季熱門」卡片點進來）─────────────────────
 async function filterDiscoverByTag(tagName) {
-  _activeTag = tagName;
-  _updateTagButtons();
-
   const resultsSection     = document.getElementById('tag-results-section');
   // 標籤篩選畫面會蓋掉首頁其他所有 section，這份清單要跟
   // templates/pages/discover.html 目前有的 section 保持一致。
@@ -551,7 +538,6 @@ async function filterDiscoverByTag(tagName) {
     'market-focus-section',
     'continue-listening-section',
     'verified-insights-section',
-    'hot-topics-section',
     'market-overview-section',
     'recommended-section',
   ].map(id => document.getElementById(id)).filter(Boolean);
@@ -569,26 +555,24 @@ async function filterDiscoverByTag(tagName) {
   const list = document.getElementById('tag-results-list');
   list.innerHTML = '<p class="text-outline text-sm">載入中...</p>';
 
-  let sources = null;
+  // 知識圖譜裡記的集數名稱（links.podcast_source）跟摘要庫的 source_filename 寫法不一定一樣
+  // （常見是多了「節目名 - 」前綴），所以由後端對好、直接回傳摘要 id（每集一筆），
+  // 這樣卡片上寫的「N 集提及」跟這裡列出的集數才會一致（見 apps/knowledge_graph/views.py）。
+  let summaryIds = [];
   try {
-    const res = await fetch(`/api/knowledge-graph/node-episodes/?node=${encodeURIComponent(tagName)}&days=30`);
+    const res = await fetch(`/api/knowledge-graph/node-episodes/?node=${encodeURIComponent(tagName)}&days=${_HOT_TOPIC_DAYS}`);
     if (res.ok) {
       const data = await res.json();
-      sources = new Set(data.sources || []);
+      summaryIds = data.summary_ids || [];
     }
   } catch (_) {}
 
   let filtered = [];
-  if (sources && sources.size > 0) {
+  if (summaryIds.length) {
     try {
-      const fetches = [...sources].map(name =>
-        fetch(`/api/summaries/?source_filename=${encodeURIComponent(name)}&mode=${ddCurrentMode || 'pro'}`)
-          .then(r => r.ok ? r.json() : [])
-          .then(data => Array.isArray(data) ? data : [])
-          .catch(() => [])
-      );
-      const results = await Promise.all(fetches);
-      filtered = results.flat();
+      const res = await fetch(`/api/summaries/?ids=${summaryIds.join(',')}`);
+      const data = res.ok ? await res.json() : [];
+      filtered = Array.isArray(data) ? dedupeByEpisode(data) : [];
     } catch (_) {}
   }
 
@@ -626,25 +610,17 @@ async function filterDiscoverByTag(tagName) {
   }).join('');
 }
 
-// 標籤按鈕本體（「最近熱門」section 用）：node.count 是 /api/knowledge-graph/hot-nodes/
-// 回傳的「最近 N 天在圖譜中出現的次數」，不是集數，所以標成「次提及」而不是「集討論」。
-function _renderTagBtns(topics) {
-  const container = document.getElementById('discover-tags');
-  if (!container) return;
-  const allBtn = `<button data-tag="__all__" onclick="filterDiscoverByTag(null)" class="${_tagActiveCls}">全部</button>`;
-  const btns = topics.map(t => {
-    const safe = t.name.replace(/'/g, "\\'");
-    const countLabel = t.count != null ? `<span class="ml-1.5 opacity-60 font-semibold">${t.count} 次提及</span>` : '';
-    return `<button data-tag="${t.name}" onclick="filterDiscoverByTag('${safe}')" class="${_tagNormalCls}">${escapeHtml(t.name)}${countLabel}</button>`;
-  }).join('');
-  container.innerHTML = allBtn + btns;
+// 熱門主題的提及次數文字。hot-nodes 回傳的 episodes 是「摘要庫裡真的有的集數」，點進去列出的
+// 就是這些集，所以標成「N 集提及」；count 是知識圖譜裡的關係邊筆數，不等於集數，
+// 只有沒有 episodes 的資料（展示用範例）才退回用「N 次提及」。
+function _topicMentionLabel(t) {
+  return t.episodes != null ? `${t.episodes} 集提及` : `${t.count} 次提及`;
 }
 
 async function loadHotTopics() {
-  const tagsContainer = document.getElementById('discover-tags');
   const focusGrid = document.getElementById('market-focus-grid');
   try {
-    const res = await fetch('/api/knowledge-graph/hot-nodes/?days=30&limit=12');
+    const res = await fetch(`/api/knowledge-graph/hot-nodes/?days=${_HOT_TOPIC_DAYS}&limit=12`);
     if (!res.ok) throw new Error('network');
     const data = await res.json();
     let nodes = data.nodes || [];
@@ -652,25 +628,21 @@ async function loadHotTopics() {
     if (!nodes.length && _DEMO_MODE) {
       nodes = _DEMO_HOT_TOPICS;
       _markDemoSection('market-focus-heading');
-      _markDemoSection('hot-topics-heading');
     }
 
     if (!nodes.length) {
       _hotTopicsCache = [];
-      if (tagsContainer) tagsContainer.innerHTML = '<p class="text-outline text-sm">目前還沒有足夠的熱門討論資料</p>';
       if (focusGrid) focusGrid.innerHTML = '<p class="text-outline text-sm">目前還沒有足夠的熱門討論資料</p>';
       return;
     }
 
     _hotTopicsCache = nodes;
     _hotTagNames = nodes.map(n => n.name);
-    _renderTagBtns(nodes);
     renderMarketFocus();
   } catch (e) {
     console.error('loadHotTopics failed', e);
     _hotTopicsCache = null;
-    if (tagsContainer) tagsContainer.innerHTML = '<p class="text-outline text-sm">熱門主題暫時無法載入</p>';
-    if (focusGrid) focusGrid.innerHTML = '<p class="text-outline text-sm">今日市場焦點暫時無法載入</p>';
+    if (focusGrid) focusGrid.innerHTML = '<p class="text-outline text-sm">本季熱門暫時無法載入</p>';
   }
 }
 
@@ -692,7 +664,7 @@ function _consensusForTopic(topicName) {
   return { bullish: bullish.size, bearish: bearish.size };
 }
 
-// 「今日市場焦點」卡片：取前 6 個熱門主題，只用 hot-nodes 真的有的欄位（name/count），
+// 「本季熱門」卡片：取前 6 個熱門主題，只用 hot-nodes 真的有的欄位（name/episodes），
 // 共識資料（看多/看空）是額外資訊，有才顯示——見 _consensusForTopic()。
 // loadHotTopics() 跟 loadWeeklySignals() 是各自獨立的非同步請求，兩邊完成順序不定，
 // 所以兩邊都會呼叫這支函式，確保不管誰先回來，畫面最終都會補上共識資料。
@@ -716,7 +688,7 @@ function renderMarketFocus() {
         onclick="filterDiscoverByTag('${safe}'); document.getElementById('tag-results-section')?.scrollIntoView({behavior:'smooth', block:'start'});"
         class="text-left bg-surface-container-lowest rounded-2xl p-5 border border-outline-variant/10 hover:shadow-lg hover:border-outline-variant/30 transition-all">
         <h3 class="font-['Epilogue'] font-bold text-lg text-tertiary-container leading-snug">${escapeHtml(t.name)}</h3>
-        <p class="text-xs text-outline mt-1 font-semibold">Podcast 最近 ${t.count} 次提及</p>
+        <p class="text-xs text-outline mt-1 font-semibold">Podcast 最近 ${_topicMentionLabel(t)}</p>
         ${consensusHtml}
         <span class="inline-flex items-center gap-1 text-secondary text-xs font-bold mt-4">
           查看相關內容<span class="material-symbols-outlined text-sm">arrow_forward</span>

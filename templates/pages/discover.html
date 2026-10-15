@@ -1,7 +1,7 @@
 <!-- ═══════════════════════════════════════════════ PAGE: DISCOVER ═══ -->
 <div id="page-discover" class="page active pt-24 px-6 max-w-5xl mx-auto space-y-10">
 
-  <!-- Hero：只留搜尋，讓使用者不用捲動就能看到「今日市場焦點」的開頭 -->
+  <!-- Hero：只留搜尋，讓使用者不用捲動就能看到「本季熱門」的開頭 -->
   <section>
     <div class="relative">
       <!-- 誘餌欄位：Chrome 的自動填入不完全遵守下面搜尋欄的 autocomplete="off"，
@@ -24,7 +24,7 @@
     </div>
   </section>
 
-  <!-- 標籤篩選結果：從「今日市場焦點」卡片或「最近熱門」標籤點進來的篩選畫面，
+  <!-- 標籤篩選結果：從「本季熱門」卡片點進來的篩選畫面，
        顯示時會蓋掉下面所有 section（見 discover.js 的 filterDiscoverByTag） -->
   <section id="tag-results-section" class="hidden">
     <button onclick="filterDiscoverByTag(null)" class="flex items-center gap-1 text-secondary font-label text-sm font-semibold mb-6 hover:opacity-70 transition-opacity">
@@ -34,10 +34,10 @@
     <div id="tag-results-list" class="space-y-3"></div>
   </section>
 
-  <!-- 今日市場焦點：首頁最重要的 section，回答「最近投資 Podcast 正在討論什麼？」 -->
+  <!-- 本季熱門：首頁最重要的 section，回答「最近投資 Podcast 正在討論什麼？」（近 60 天，見 discover.js 的 _HOT_TOPIC_DAYS） -->
   <section id="market-focus-section" aria-labelledby="market-focus-heading">
     <div class="mb-5">
-      <h2 id="market-focus-heading" class="text-3xl font-bold tracking-tight text-tertiary-container font-['Epilogue']">今日市場焦點</h2>
+      <h2 id="market-focus-heading" class="text-3xl font-bold tracking-tight text-tertiary-container font-['Epilogue']">本季熱門</h2>
       <p class="text-secondary text-sm font-medium mt-1">最近投資 Podcast 正在討論什麼？</p>
     </div>
     <div id="market-focus-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -83,17 +83,6 @@
 
     <div id="insights-grid" class="space-y-3">
       <p class="text-outline text-sm">載入中...</p>
-    </div>
-  </section>
-
-  <!-- 最近熱門投資主題：Knowledge Graph 熱門節點的標籤雲，點擊沿用同一套篩選機制 -->
-  <section id="hot-topics-section" aria-labelledby="hot-topics-heading">
-    <div class="mb-4">
-      <h2 id="hot-topics-heading" class="text-2xl font-bold tracking-tight text-tertiary-container font-['Epilogue']">最近熱門</h2>
-      <p class="text-secondary text-sm font-medium mt-1">最近 30 天投資 Podcast 討論最多的主題</p>
-    </div>
-    <div id="discover-tags" class="flex flex-wrap gap-3">
-      <span class="text-outline text-sm self-center">載入中...</span>
     </div>
   </section>
 
