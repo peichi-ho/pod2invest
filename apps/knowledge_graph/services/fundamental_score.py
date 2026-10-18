@@ -17,9 +17,17 @@ TCRI/S&P信評的公司做 Spearman 排名相關係數驗證，結果最好的�
   - 不用產業別的絕對數字門檻（例如「毛利率要 > 15%」），因為同一個絕對值
     在不同產業之間沒有可比性。改用「跟自己過去比」的方向性檢查——這是
     Piotroski F-Score 能跨產業使用的原因，這裡沿用同樣的邏輯。
-  - 「營業現金流 ÷ 稅後淨利」是盈餘品質的紅旗指標，獨立設成硬性淘汰條件，
-    不算進 F-score 的計分裡——帳面淨利如果沒有現金流佐證，後面算出來的
-    任何分數都是建立在不可信的地基上，不該讓其他項目的高分把這個蓋過去。
+  - 硬性淘汰條件獨立於 F-score 之外，只保留「最新一季稅後淨利 > 0」——本業
+    都在虧損的公司，後面算出來的任何分數都不該讓它過關。原本還要求「營業
+    現金流 ≥ 淨利 80%」（盈餘品質紅旗），用 2025/5~2026/5 的台股回溯驗證
+    （見 kg_eval_results/report_financial_screen_*.md）發現這個條件沒有鑑別
+    力、甚至方向相反：單季現金流低於淨利的公司，之後兩季營運惡化的比例
+    （18.8%）反而低於通過的（33.2%），因為快速成長的公司會把現金投入存貨
+    與應收帳款，現金流自然偏低；改成近四季合計也沒有改善。淨利為正則有鑑別
+    力（淘汰 40.2% vs 通過 25.0%）。
+    注意：驗證用的成績是「之後兩季的營運惡化」，測不到帳面盈餘灌水、會計
+    操作這類風險，所以拿掉現金流條件的意思是「在這個成績上沒有幫助」，
+    不是證明盈餘品質不重要。
   - F-score 的每一項檢查如果因為資料深度不足（例如 yfinance 只回溯 7 季，
     抓不到 3 年前同季資料）而無法計算，就從 max_score 排除，不會被當成
     「沒通過」硬算進失敗，也不會假裝通過——用比例（score/max_score）而不是
@@ -65,14 +73,16 @@ RISK_TIER_CONFIG = {
 }
 
 
-# ── 硬性淘汰：盈餘品質 ─────────────────────────────────────────────────────
+# ── 硬性淘汰：最新一季稅後淨利為正 ───────────────────────────────────────
 
 def passes_earnings_quality_gate(latest: dict) -> bool:
+    """
+    只看最新一季稅後淨利是否為正，缺資料視為不通過。原本還有「營業現金流 ≥ 淨利
+    80%」，驗證後拿掉（理由見檔案開頭說明）。函式名稱與 hard_gate_pass 欄位維持
+    不變，避免動到呼叫端。
+    """
     net_income = latest.get("net_income")
-    ocf = latest.get("operating_cash_flow")
-    if net_income is None or net_income <= 0:
-        return False
-    return ocf is not None and ocf >= 0.8 * net_income
+    return net_income is not None and net_income > 0
 
 
 # ── F-score 式檢查表 ─────────────────────────────────────────────────────
@@ -448,7 +458,7 @@ def evaluate_candidate(ticker: str, as_of_date: date, risk_tier: str) -> dict:
 
     reasons_failed = []
     if not hard_gate_pass:
-        reasons_failed.append("營業現金流無法支撐帳面淨利，盈餘品質不通過")
+        reasons_failed.append("最新一季稅後淨利不為正")
     if f["max_score"] and f_ratio < config["f_score_ratio_min"]:
         reasons_failed.append("財務體質評分未達此風險等級門檻")
 

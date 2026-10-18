@@ -11,6 +11,19 @@ from .services.ai_assistant import answer_user
 
 
 # =============================================================================
+# 登入檢查與對話擁有者
+# =============================================================================
+
+def _login_required_response():
+    return JsonResponse({"ok": False, "error": "請先登入"}, status=401)
+
+
+def _own_conversations(request):
+    """只取目前登入者自己的對話。別人的對話一律當作不存在（回 404，不透露是否存在）。"""
+    return Conversation.objects.filter(user_id=request.user.id)
+
+
+# =============================================================================
 # 日期分組輔助
 # =============================================================================
 
@@ -50,6 +63,9 @@ def chat(request):
     POST /ai-assistant/chat/
     Body: { "query": "...", "conversation_id": 123 }  (conversation_id 選填)
     """
+    if not request.user.is_authenticated:
+        return _login_required_response()
+
     try:
         payload = json.loads(request.body.decode("utf-8"))
     except Exception:
@@ -66,13 +82,13 @@ def chat(request):
         # 取得或建立 Conversation
         if conversation_id:
             try:
-                conversation = Conversation.objects.get(pk=conversation_id)
+                conversation = _own_conversations(request).get(pk=conversation_id)
             except Conversation.DoesNotExist:
                 return JsonResponse({"ok": False, "error": "Conversation not found"}, status=404)
         else:
             # 自動以問題前 30 字作為標題
             title = query[:30] + ("..." if len(query) > 30 else "")
-            conversation = Conversation.objects.create(title=title)
+            conversation = Conversation.objects.create(title=title, user_id=request.user.id)
 
         # 載入歷史訊息
         past_messages = conversation.messages.all()
@@ -113,9 +129,12 @@ def chat(request):
 def conversation_list(request):
     """
     GET /ai-assistant/conversations/
-    回傳按日期分組的對話清單
+    回傳目前登入者自己的對話清單（按日期分組）
     """
-    conversations = Conversation.objects.all()
+    if not request.user.is_authenticated:
+        return _login_required_response()
+
+    conversations = _own_conversations(request)
 
     groups: dict = {}
     for conv in conversations:
@@ -147,10 +166,13 @@ def conversation_list(request):
 def conversation_messages(request, conversation_id):
     """
     GET /ai-assistant/conversations/<id>/messages/
-    回傳該對話的所有訊息
+    回傳該對話的所有訊息（只能看自己的對話）
     """
+    if not request.user.is_authenticated:
+        return _login_required_response()
+
     try:
-        conversation = Conversation.objects.get(pk=conversation_id)
+        conversation = _own_conversations(request).get(pk=conversation_id)
     except Conversation.DoesNotExist:
         return JsonResponse({"ok": False, "error": "Conversation not found"}, status=404)
 
@@ -179,9 +201,11 @@ def delete_conversation(request, conversation_id):
     """
     if request.method != "DELETE":
         return JsonResponse({"ok": False, "error": "Method not allowed"}, status=405)
+    if not request.user.is_authenticated:
+        return _login_required_response()
 
     try:
-        conversation = Conversation.objects.get(pk=conversation_id)
+        conversation = _own_conversations(request).get(pk=conversation_id)
     except Conversation.DoesNotExist:
         return JsonResponse({"ok": False, "error": "Conversation not found"}, status=404)
 

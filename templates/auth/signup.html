@@ -26,7 +26,7 @@
   </div>
 
   <div class="space-y-1.5">
-    <label class="font-['Manrope'] text-xs font-bold uppercase tracking-widest text-outline">Email（選填）</label>
+    <label class="font-['Manrope'] text-xs font-bold uppercase tracking-widest text-outline">電子郵件（選填）</label>
     <input
       type="email"
       name="email"
@@ -38,12 +38,22 @@
   <div class="space-y-1.5">
     <label class="font-['Manrope'] text-xs font-bold uppercase tracking-widest text-outline">密碼</label>
     <input
+      id="signup-password1"
       type="password"
       name="password1"
       autocomplete="new-password"
       required
       class="w-full px-5 py-3.5 bg-surface-container-low border border-outline-variant/40 rounded-full focus:outline-none focus:ring-2 focus:ring-secondary text-on-surface font-body text-sm"
-      placeholder="設定密碼（至少 8 個字元）"/>
+      placeholder="設定密碼"/>
+    {# 密碼規則提示，跟 apps/accounts/validators.py 的 LetterDigitPasswordValidator 一致；輸入時即時打勾 #}
+    <ul class="pl-4 pt-1 space-y-1 text-xs text-outline">
+      <li id="pw-rule-length" class="flex items-center gap-1.5">
+        <span class="material-symbols-outlined text-sm">radio_button_unchecked</span>至少 8 個字元
+      </li>
+      <li id="pw-rule-mix" class="flex items-center gap-1.5">
+        <span class="material-symbols-outlined text-sm">radio_button_unchecked</span>需同時包含英文字母和數字
+      </li>
+    </ul>
   </div>
 
   <div class="space-y-1.5">
@@ -115,6 +125,20 @@
         preview.innerHTML = '<img src="' + reader.result + '" class="w-full h-full object-cover"/>';
       };
       reader.readAsDataURL(file);
+    });
+
+    // 密碼規則即時檢查：符合就把該行變綠色打勾
+    var pwInput = document.getElementById('signup-password1');
+    function setRule(id, ok) {
+      var li = document.getElementById(id);
+      li.classList.toggle('text-secondary', ok);
+      li.classList.toggle('text-outline', !ok);
+      li.querySelector('span').textContent = ok ? 'check_circle' : 'radio_button_unchecked';
+    }
+    pwInput.addEventListener('input', function () {
+      var pw = pwInput.value;
+      setRule('pw-rule-length', pw.length >= 8);
+      setRule('pw-rule-mix', /[A-Za-z]/.test(pw) && /\d/.test(pw));
     });
   })();
 </script>

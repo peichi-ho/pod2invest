@@ -1,5 +1,7 @@
 <!-- ═══════════════════════════════════════════════ PAGE: DISCOVER ═══ -->
 <div id="page-discover" class="page active pt-24 px-6 max-w-5xl mx-auto space-y-10">
+
+  <!-- Hero：只留搜尋，讓使用者不用捲動就能看到「本季熱門」的開頭 -->
   <section>
     <div class="relative">
       <!-- 誘餌欄位：Chrome 的自動填入不完全遵守下面搜尋欄的 autocomplete="off"，
@@ -15,39 +17,50 @@
         autocomplete="off"
         name="discover-search-q"
         class="w-full h-14 pl-14 pr-6 bg-surface-container-high rounded-full border-none focus:ring-2 focus:ring-secondary font-body text-on-surface-variant"
-        placeholder="搜尋股票代號、公司名稱、節目或集數"
+        placeholder="今天想了解什麼？搜尋股票代號、公司名稱、節目或集數"
         type="text"/>
       <span class="material-symbols-outlined absolute left-5 top-1/2 -translate-y-1/2 text-outline">search</span>
       <div id="search-dropdown" class="hidden absolute top-full left-0 right-0 mt-2 bg-surface-container-high rounded-2xl shadow-xl z-50 overflow-hidden" style="max-height:420px;overflow-y:auto;"></div>
     </div>
-    <div id="discover-tags" class="flex gap-3 mt-6 overflow-x-auto pb-2 no-scrollbar">
-      <span class="text-outline text-sm self-center">載入中...</span>
-    </div>
   </section>
 
+  <!-- 標籤篩選結果：從「本季熱門」卡片點進來的篩選畫面，
+       顯示時會蓋掉下面所有 section（見 discover.js 的 filterDiscoverByTag） -->
   <section id="tag-results-section" class="hidden">
-    <div class="flex justify-between items-end mb-5">
-      <h2 id="tag-results-title" class="text-2xl font-bold tracking-tight text-tertiary-container font-['Epilogue']">關鍵字結果</h2>
-      <button onclick="filterDiscoverByTag(null)" class="flex items-center gap-1 text-secondary text-sm font-semibold hover:opacity-70 transition-opacity">
-        <span class="material-symbols-outlined text-base">close</span>清除
-      </button>
-    </div>
+    <button onclick="filterDiscoverByTag(null)" class="flex items-center gap-1 text-secondary font-label text-sm font-semibold mb-6 hover:opacity-70 transition-opacity">
+      <span class="material-symbols-outlined text-base">arrow_back_ios</span>返回
+    </button>
+    <h2 id="tag-results-title" class="text-2xl font-bold tracking-tight text-tertiary-container font-['Epilogue'] mb-5">關鍵字結果</h2>
     <div id="tag-results-list" class="space-y-3"></div>
   </section>
 
+  <!-- 本季熱門：首頁最重要的 section，回答「最近投資 Podcast 正在討論什麼？」（近 60 天，見 discover.js 的 _HOT_TOPIC_DAYS） -->
+  <section id="market-focus-section" aria-labelledby="market-focus-heading">
+    <div class="mb-5">
+      <h2 id="market-focus-heading" class="text-3xl font-bold tracking-tight text-tertiary-container font-['Epilogue']">本季熱門</h2>
+      <p class="text-secondary text-sm font-medium mt-1">最近投資 Podcast 正在討論什麼？</p>
+    </div>
+    <div id="market-focus-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      <p class="text-outline text-sm">載入中...</p>
+    </div>
+  </section>
+
+  <!-- 繼續閱讀：依登入狀態與既有偏好排序，不新增推薦演算法 -->
   <section id="continue-listening-section">
     <div class="mb-6">
-      <h2 class="text-3xl font-bold tracking-tight text-tertiary-container font-['Epilogue']">繼續閱讀</h2>
+      <h2 class="text-2xl font-bold tracking-tight text-tertiary-container font-['Epilogue']">繼續閱讀</h2>
     </div>
     <div id="continue-listening-card"><p class="text-outline text-sm">載入中...</p></div>
   </section>
 
-  <section id="verified-insights-section">
+  <!-- 市場共識：不同 Podcast 對熱門標的的看多／看空分佈（沿用原「最新觀點」週訊號資料） -->
+  <section id="verified-insights-section" aria-labelledby="consensus-heading">
     <div class="flex justify-between items-start mb-4">
       <div>
-        <h2 class="text-3xl font-bold tracking-tight text-tertiary-container font-['Epilogue']">最新觀點</h2>
+        <h2 id="consensus-heading" class="text-3xl font-bold tracking-tight text-tertiary-container font-['Epilogue']">市場共識</h2>
+        <p class="text-secondary text-sm font-medium mt-1">不同投資 Podcast 對近期熱門標的有哪些不同看法？</p>
       </div>
-      <div class="flex items-center gap-2">
+      <div class="flex items-center gap-2 flex-shrink-0 mt-1">
         <button id="sig-prev-week" onclick="shiftSignalWeek(1)" class="p-1 rounded-full hover:bg-surface-container transition-colors disabled:opacity-30" disabled>
           <span class="material-symbols-outlined text-outline text-base">chevron_left</span>
         </button>
@@ -58,26 +71,14 @@
       </div>
     </div>
 
-    <!-- 統計列 -->
-    <div class="grid grid-cols-3 gap-3 mb-5">
-      <div class="bg-surface-container-low rounded-xl p-4 text-center border border-outline-variant/10">
-        <div id="stat-total" class="font-['Epilogue'] text-2xl font-bold text-tertiary-container">—</div>
-        <div class="text-[10px] font-bold text-outline uppercase tracking-widest mt-0.5">檔標的被提及</div>
-      </div>
-      <div class="bg-surface-container-low rounded-xl p-4 text-center border border-outline-variant/10">
-        <div id="stat-consensus" class="font-['Epilogue'] text-2xl font-bold text-tertiary-container">—</div>
-        <div class="text-[10px] font-bold text-outline uppercase tracking-widest mt-0.5">檔獲多人共識</div>
-      </div>
-      <div class="bg-surface-container-low rounded-xl p-4 text-center border border-outline-variant/10">
-        <div id="stat-podcasters" class="font-['Epilogue'] text-2xl font-bold text-tertiary-container">—</div>
-        <div class="text-[10px] font-bold text-outline uppercase tracking-widest mt-0.5">位 Podcaster 提供觀點</div>
-      </div>
-    </div>
-
     <!-- 方向 tabs -->
     <div class="flex gap-2 mb-4">
-      <button onclick="setSignalDir('bullish')" id="sig-tab-bullish" class="px-4 py-2 rounded-full text-xs font-bold bg-tertiary-container text-white">看多</button>
-      <button onclick="setSignalDir('bearish')" id="sig-tab-bearish" class="px-4 py-2 rounded-full text-xs font-bold bg-surface-container text-outline">看空</button>
+      <button onclick="setSignalDir('bullish')" id="sig-tab-bullish" class="px-4 py-2 rounded-full text-xs font-bold bg-tertiary-container text-white">
+        <span class="material-symbols-outlined text-sm align-middle">arrow_upward</span> 看多
+      </button>
+      <button onclick="setSignalDir('bearish')" id="sig-tab-bearish" class="px-4 py-2 rounded-full text-xs font-bold bg-surface-container text-outline">
+        <span class="material-symbols-outlined text-sm align-middle">arrow_downward</span> 看空
+      </button>
     </div>
 
     <div id="insights-grid" class="space-y-3">
@@ -85,9 +86,23 @@
     </div>
   </section>
 
+  <!-- 今日市場：輔助資訊，不做大盤指數（後端目前沒有 TAIEX/NASDAQ/S&P 500 資料），
+       改用現有 /api/assets/rankings/ 顯示台股個股行情：使用者追蹤的排最前面，其次是上面
+       「市場共識」本週有提到的個股，不夠才用成交熱門補滿（見 discover.js 的 loadMarketOverview）。
+       卡片數量不固定，改成左右滑動不用 grid 換行。 -->
+  <section id="market-overview-section" aria-labelledby="market-overview-heading">
+    <div class="mb-5">
+      <h2 id="market-overview-heading" class="text-2xl font-bold tracking-tight text-tertiary-container font-['Epilogue']">今日市場</h2>
+    </div>
+    <div id="market-overview-grid" class="flex gap-3 overflow-x-auto pb-2 no-scrollbar">
+      <p class="text-outline text-sm">載入中...</p>
+    </div>
+  </section>
+
+  <!-- 為你推薦：依登入狀態與既有偏好排序，不新增推薦演算法 -->
   <section id="recommended-section" class="pb-6">
     <div class="flex justify-between items-end mb-6">
-      <h2 class="text-3xl font-bold tracking-tight text-tertiary-container font-['Epilogue']">為你推薦</h2>
+      <h2 class="text-2xl font-bold tracking-tight text-tertiary-container font-['Epilogue']">為你推薦</h2>
     </div>
     <div id="recommended-cards" class="flex gap-4 overflow-x-auto pb-4 no-scrollbar -mx-2 px-2">
       <p class="text-outline text-sm">載入中...</p>

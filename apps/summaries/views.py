@@ -73,6 +73,9 @@ def _create_single_record(data: dict, *, mode: str,
         one_sentence_summary=one_sentence,
         investment_takeaways=investment_takeaways,
         tags=tags,
+        primary_tags=data.get("primary_tags", []),
+        analysis_style=data.get("analysis_style", []),
+        investor_strategy=data.get("investor_strategy", []),
         entities=entities,
         arguments=arguments,
         glossary_matches=glossary_matches,
@@ -235,6 +238,9 @@ class SummaryListAPIView(APIView):
                 "podcaster": s.podcaster,
                 "one_sentence_summary": s.one_sentence_summary,
                 "tags": s.tags,
+                "primary_tags": s.primary_tags or [],
+                "analysis_style": s.analysis_style or [],
+                "investor_strategy": s.investor_strategy or [],
                 "entities": s.entities,
                 "published_at": s.published_at.isoformat() if s.published_at else None,
                 "created_at": s.created_at.isoformat(),
@@ -352,6 +358,8 @@ class AllBacktestingAPIView(APIView):
         limit = int(request.query_params.get("limit", 300))
         podcaster = request.query_params.get("podcaster", "").strip()
         before = request.query_params.get("before", "").strip()
+        # 只在指定 podcaster 時有意義：Rankings 頁套用產業篩選後點進節目頁，要只看該產業底下的觀點
+        sector = request.query_params.get("sector", "").strip()
 
         qs = BacktestingRecord.objects.using("summariesdb").exclude(
             result="skip"
@@ -360,8 +368,22 @@ class AllBacktestingAPIView(APIView):
         if podcaster:
             # 透過 summary 的 podcaster 欄位過濾
             from django.db import connections
+            sector_filter_sql = ""
+            params = [podcaster]
+            if sector:
+                # Rankings 的 8 大類（半導體/電子元件、科技類…）是以 tag_ticker_sectors.TICKER_SECTOR
+                # 為準（見該檔案開頭「前端顯示用」），不能直接拿 ticker_map.sector 比對——資料庫裡的
+                # ticker_map.sector 目前可能是別套更細的分類（例如「半導體」「電子/硬體」），拿 Rankings
+                # 的類別名稱去比會永遠篩不到東西。
+                from .management.commands.tag_ticker_sectors import TICKER_SECTOR
+                sector_tickers = [t for t, sec in TICKER_SECTOR.items() if sec == sector]
+                if not sector_tickers:
+                    return Response([])
+                sector_filter_sql = "AND b.ticker = ANY(%s)"
+                params.append(sector_tickers)
+            params.append(limit)
             with connections["summariesdb"].cursor() as c:
-                c.execute("""
+                c.execute(f"""
                     SELECT b.id, b.summary_id, b.ticker, b.asset, b.direction,
                            b.thesis, b.timeframe_raw,
                            b.start_time, b.end_time, b.result,
@@ -370,9 +392,10 @@ class AllBacktestingAPIView(APIView):
                     JOIN summaries_summaryrecord s ON b.summary_id = s.id
                     WHERE b.result != 'skip'
                       AND s.podcaster = %s
+                      {sector_filter_sql}
                     ORDER BY b.id DESC
                     LIMIT %s
-                """, [podcaster, limit])
+                """, params)
                 rows = c.fetchall()
             cols = ["id","summary_id","ticker","asset","direction","thesis",
                     "timeframe_raw","start_time","end_time","result",
