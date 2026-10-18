@@ -22,6 +22,8 @@ ALLOWED_HOSTS = os.getenv("DJANGO_ALLOWED_HOSTS", "127.0.0.1,localhost").split("
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
+# 知識圖譜關係判斷（extract_v2 步驟 3）用較強的模型，flash-lite 判斷過於保守
+KG_RELATION_MODEL = os.getenv("KG_RELATION_MODEL", "gemini-2.5-flash")
 VERTEX_PROJECT_ID = os.getenv("VERTEX_PROJECT_ID", "")
 VERTEX_LOCATION = os.getenv("VERTEX_LOCATION", "us-central1")
 
