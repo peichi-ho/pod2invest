@@ -577,7 +577,7 @@ function renderHeaderAvatar() {
     ? `<img src="${_userProfile.avatar_base64}" alt="${escapeHtml(_userProfile.username || '')}" class="w-full h-full object-cover"/>`
     : initial
       ? initialAvatarHtml(initial, 'text-lg')
-      : `<div class="w-full h-full flex items-center justify-center" style="background:#e5e3d9"><span class="material-symbols-outlined text-white/70 text-2xl" style="font-variation-settings:'FILL' 1">person</span></div>`;
+      : `<div class="w-full h-full flex items-center justify-center" style="background:#113236"><span class="material-symbols-outlined text-white text-2xl" style="font-variation-settings:'FILL' 1">person</span></div>`;
 }
 
 // ── Boot ─────────────────────────────────────────────────────
