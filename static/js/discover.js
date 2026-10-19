@@ -654,22 +654,44 @@ async function loadHotTopics() {
   }
 }
 
+// 台股（.TW／.TWO 結尾的個股、ETF，或台灣加權指數 ^TWII）漲跌配色是紅漲綠跌；
+// 其他市場（目前資料裡就是美股）反過來，綠漲紅跌。
+function _isTwTicker(ticker) {
+  const t = (ticker || '').trim();
+  return /\.TWO?$/i.test(t) || /^\^TWII?$/i.test(t);
+}
+
+// 看多（↑）／看空（↓）箭頭的顏色，依市場決定。這裡是畫在深色底（本季熱門卡片）上，
+// 所以用淺色版的紅／綠，原本白底用的 #ba1a1a／#1e8e3e 在墨綠底上對比不夠。
+const _ARROW_RED_ON_DARK   = 'text-[#ff7b7b]';
+const _ARROW_GREEN_ON_DARK = 'text-[#5ddb8a]';
+function _directionArrowClasses(market) {
+  return market === 'US'
+    ? { up: _ARROW_GREEN_ON_DARK, down: _ARROW_RED_ON_DARK }
+    : { up: _ARROW_RED_ON_DARK,   down: _ARROW_GREEN_ON_DARK };
+}
+
 // 從已經載入的 backtesting 週訊號資料（_signalData，見 loadWeeklySignals）裡，
 // 找同名 asset 的看多/看空 podcaster 人數。找不到（該熱門主題不是個股/ETF、或近期
 // 沒有對應的投資觀點紀錄）就回傳 null，讓卡片只顯示提及次數，不生造共識資料。
+// market：用這些觀點紀錄的 ticker 判斷（'TW'／'US'），同一個名稱對到不同市場時取多數；
+// 紀錄沒有 ticker 就視為台股（跟全站其他地方的預設配色一致）。
 function _consensusForTopic(topicName) {
   if (!_signalData || !_signalData.length) return null;
   const name = (topicName || '').trim();
   if (!name) return null;
   const bullish = new Set();
   const bearish = new Set();
+  let twCount = 0, otherCount = 0;
   for (const r of _signalData) {
     if ((r.asset || '').trim() !== name || !r.podcaster) continue;
     if (r.direction === 'bullish') bullish.add(r.podcaster);
     else if (r.direction === 'bearish') bearish.add(r.podcaster);
+    else continue;
+    if (r.ticker) { if (_isTwTicker(r.ticker)) twCount++; else otherCount++; }
   }
   if (!bullish.size && !bearish.size) return null;
-  return { bullish: bullish.size, bearish: bearish.size };
+  return { bullish: bullish.size, bearish: bearish.size, market: otherCount > twCount ? 'US' : 'TW' };
 }
 
 // 「本季熱門」卡片：取前 6 個熱門主題，只用 hot-nodes 真的有的欄位（name/episodes），
@@ -686,21 +708,32 @@ function renderMarketFocus() {
   grid.innerHTML = topics.map(t => {
     const safe = t.name.replace(/'/g, "\\'");
     const consensus = _consensusForTopic(t.name);
+    const arrow = consensus ? _directionArrowClasses(consensus.market) : null;
     const consensusHtml = consensus ? `
-      <div class="flex items-center gap-2 mt-3 flex-wrap">
-        ${consensus.bullish ? `<span class="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-1 rounded-full bg-surface-container text-secondary"><span class="material-symbols-outlined text-sm">arrow_upward</span>${consensus.bullish} 位看多</span>` : ''}
-        ${consensus.bearish ? `<span class="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-1 rounded-full bg-surface-container text-outline"><span class="material-symbols-outlined text-sm">arrow_downward</span>${consensus.bearish} 位看空</span>` : ''}
+      <div class="flex items-center gap-2 flex-wrap">
+        ${consensus.bullish ? `<span class="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-1 rounded-full bg-white/15 text-white"><span class="material-symbols-outlined text-sm ${arrow.up}">arrow_upward</span>${consensus.bullish} 位看多</span>` : ''}
+        ${consensus.bearish ? `<span class="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-1 rounded-full bg-white/10 text-white/60"><span class="material-symbols-outlined text-sm ${arrow.down}">arrow_downward</span>${consensus.bearish} 位看空</span>` : ''}
       </div>` : '';
+    // 墨綠底（#113236，跟右上角預設頭像、頂部標題同色）配白字，讓首頁最重要的這一區更吸睛；
+    // 底色變深後原本的 text-secondary／text-outline 對比不夠，標籤跟連結都跟著換成淺色系。
+    // 兩行：第一行「主題標題 ＋ 看多／看空 chip（靠右）」，最下面一行「提及集數 ＋ 查看相關內容」。
+    // chip 跟標題同一行，所以有沒有共識資料卡片高度都一樣（chip 比標題矮，不會把那行撐高）。
+    // 卡片用 flex-col，最下面那行 mt-auto 貼底，同一排的卡片標題、底部那行都各自在同一條線上。
+    // 第一行／最下面那行卡片太窄放不下時 flex-wrap 會讓 chip／連結換到下一行，不會爆版。
     return `
       <button type="button"
         onclick="filterDiscoverByTag('${safe}'); document.getElementById('tag-results-section')?.scrollIntoView({behavior:'smooth', block:'start'});"
-        class="text-left bg-surface-container-lowest rounded-2xl p-5 border border-outline-variant/10 hover:shadow-lg hover:border-outline-variant/30 transition-all">
-        <h3 class="font-['Epilogue'] font-bold text-lg text-tertiary-container leading-snug">${escapeHtml(t.name)}</h3>
-        <p class="text-xs text-outline mt-1 font-semibold">Podcast 最近 ${_topicMentionLabel(t)}</p>
-        ${consensusHtml}
-        <span class="inline-flex items-center gap-1 text-secondary text-xs font-bold mt-4">
-          查看相關內容<span class="material-symbols-outlined text-sm">arrow_forward</span>
-        </span>
+        class="flex flex-col text-left bg-tertiary-container rounded-2xl p-5 border border-white/10 hover:shadow-lg hover:bg-[#184248] transition-all">
+        <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+          <h3 class="font-['Epilogue'] font-bold text-2xl text-white leading-snug">${escapeHtml(t.name)}</h3>
+          ${consensusHtml}
+        </div>
+        <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 mt-auto pt-4">
+          <p class="text-xs text-white/70 font-semibold">Podcast 最近 ${_topicMentionLabel(t)}</p>
+          <span class="inline-flex items-center gap-1 text-primary-fixed-dim text-xs font-bold whitespace-nowrap">
+            查看相關內容<span class="material-symbols-outlined text-sm">arrow_forward</span>
+          </span>
+        </div>
       </button>`;
   }).join('');
 }
