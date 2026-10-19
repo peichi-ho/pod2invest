@@ -7,6 +7,7 @@ let _chartDebounce  = null;
 let _hostYield      = null;
 let _hostCalcData   = null;
 let _newsCache      = [];
+let _newsFetchSeq   = 0;   // fetchStockNews() 的請求序號，過期的回應不要蓋掉新的結果
 let _bullUserEdited = false;
 let _bearUserEdited = false;
 let _currentTicker = '';            // 目前已查詢解析出的 ticker（給「查看走勢圖與新聞」按鈕跳轉用）
@@ -1889,29 +1890,46 @@ function renderStockChart(data, ids = {}) {
 async function fetchStockNews(ticker, ids = {}) {
   const section = document.getElementById(ids.section || 'stock-news-section');
   const list    = document.getElementById(ids.list || 'stock-news-list');
-  section.classList.add('hidden');
-  list.innerHTML = '';
+  const seq = ++_newsFetchSeq;
   _newsCache = [];
+  // 一開始就把整個區塊（含「相關新聞」標題）秀出來並顯示載入中，不然新聞是慢慢才載入、
+  // 又排在很下面，使用者根本不會發現下面還有相關新聞。
+  list.innerHTML = _newsStatusHtml('loading');
+  section.classList.remove('hidden');
   try {
     const res  = await fetch(`/api/calculator/stock-news/?ticker=${encodeURIComponent(ticker)}`);
     const data = await res.json();
-    if (!res.ok || !data.news?.length) return;
+    if (seq !== _newsFetchSeq) return; // 使用者已經切到別檔標的，這筆回應過期了，不要蓋掉新的載入狀態
+    if (!res.ok) { list.innerHTML = _newsStatusHtml('error'); return; }
+    if (!data.news?.length) { list.innerHTML = _newsStatusHtml('empty'); return; }
     _newsCache = data.news;
     list.innerHTML = data.news.map((n, i) => {
       const date      = n.pub ? new Date(n.pub).toLocaleDateString('zh-TW') : '';
       const safeTitle = n.title.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
       return `
         <div onclick="openNewsPanel(_newsCache[${i}])"
-             class="flex items-start gap-3 p-3 rounded-lg bg-surface-container-lowest hover:bg-surface-container cursor-pointer transition-colors">
+             class="flex items-start gap-3 p-4 rounded-lg bg-surface-container-low hover:bg-surface-container cursor-pointer transition-colors">
           <div class="flex-1 min-w-0">
             <p class="text-sm font-semibold text-on-surface leading-snug line-clamp-2">${safeTitle}</p>
-            <p class="text-[10px] text-outline mt-1">${n.provider}${date ? ' · ' + date : ''}</p>
+            <p class="text-[11px] text-outline mt-1">${n.provider}${date ? ' · ' + date : ''}</p>
           </div>
-          <span class="material-symbols-outlined text-outline/50 text-sm flex-shrink-0 mt-0.5">chevron_right</span>
+          <span class="material-symbols-outlined text-outline/60 text-sm flex-shrink-0 mt-0.5">chevron_right</span>
         </div>`;
     }).join('');
-    section.classList.remove('hidden');
-  } catch(e) {}
+  } catch(e) {
+    if (seq !== _newsFetchSeq) return;
+    list.innerHTML = _newsStatusHtml('error');
+  }
+}
+
+function _newsStatusHtml(kind) {
+  if (kind === 'loading') {
+    return `<div class="flex items-center gap-2 py-3 text-sm text-outline">
+      <span class="material-symbols-outlined text-base animate-spin">progress_activity</span>載入中...
+    </div>`;
+  }
+  const msg = kind === 'empty' ? '目前沒有相關新聞' : '新聞載入失敗，請稍後再試';
+  return `<p class="py-3 text-sm text-outline">${msg}</p>`;
 }
 
 // ── News panel ────────────────────────────────────────────────

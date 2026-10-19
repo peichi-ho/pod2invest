@@ -92,8 +92,12 @@
       </div>
       <p id="asset-stock-data-asof" class="mt-2 text-xs text-outline"></p>
 
-      <div id="asset-stock-news-section" class="hidden mt-5 pt-4 border-t border-outline-variant/20">
-        <div class="text-xs text-outline font-bold uppercase tracking-widest mb-3">相關新聞</div>
+      <!-- 整個區塊（含標題）由 fetchStockNews() 一開始載入就秀出來，裡面先顯示「載入中...」，
+           不然使用者看不出下面還有相關新聞 -->
+      <div id="asset-stock-news-section" class="hidden mt-8 pt-6 border-t border-outline-variant/20">
+        <h3 class="flex items-center gap-2 font-['Epilogue'] text-xl font-bold text-tertiary-container mb-4">
+          <span class="material-symbols-outlined text-xl text-secondary" style="font-variation-settings:'FILL' 1">newspaper</span>相關新聞
+        </h3>
         <div id="asset-stock-news-list" class="space-y-2"></div>
       </div>
     </div>
