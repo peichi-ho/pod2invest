@@ -58,6 +58,21 @@
   .animate-slide-up { animation: slideUp 0.25s ease; }
   .no-scrollbar::-webkit-scrollbar { display: none; }
   .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+  /* 橫向捲動列（首頁「今日市場」「為你推薦」）：滑鼠沒有橫向滾輪、又藏了捲軸，所以靠邊緣漸層
+     提示「這邊還有內容」，再配一顆箭頭按鈕讓滑鼠使用者點擊捲動。哪一側顯示由 discover.js 的
+     initScrollRows() 依捲動位置設在 .scroll-row 的 data-can-left／data-can-right。 */
+  .scroll-row { position: relative; }
+  .scroll-row-fade { position: absolute; top: 0; bottom: 0; width: 72px; pointer-events: none; opacity: 0; transition: opacity .2s ease; z-index: 5; }
+  .scroll-row-fade--left  { left: 0;  background: linear-gradient(to right, #fcf9f0 12%, rgba(252,249,240,0)); }
+  .scroll-row-fade--right { right: 0; background: linear-gradient(to left,  #fcf9f0 12%, rgba(252,249,240,0)); }
+  .scroll-row-arrow { position: absolute; top: 50%; z-index: 6; width: 36px; height: 36px; margin-top: -18px; border-radius: 9999px; background: #fff; color: #113236; box-shadow: 0 2px 10px rgba(28,28,22,.2); display: flex; align-items: center; justify-content: center; opacity: 0; pointer-events: none; transition: opacity .2s ease, transform .15s ease; }
+  .scroll-row-arrow--left  { left: 6px; }
+  .scroll-row-arrow--right { right: 6px; }
+  .scroll-row-arrow:hover { transform: scale(1.1); }
+  .scroll-row[data-can-left="1"]  .scroll-row-fade--left,  .scroll-row[data-can-right="1"] .scroll-row-fade--right { opacity: 1; }
+  .scroll-row[data-can-left="1"]  .scroll-row-arrow--left, .scroll-row[data-can-right="1"] .scroll-row-arrow--right { opacity: 1; pointer-events: auto; }
+  /* 觸控裝置本來就能滑，箭頭只給有滑鼠的環境；漸層在觸控裝置上仍保留當作「還有更多」的提示 */
+  @media (hover: none) { .scroll-row-arrow { display: none; } }
   .asymmetric-grid { display: grid; grid-template-columns: 1.2fr 0.8fr; gap: 2rem; }
   @media (max-width: 768px) { .asymmetric-grid { grid-template-columns: 1fr; } }
   .nav-btn { color: #286671; }

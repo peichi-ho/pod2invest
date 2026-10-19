@@ -91,8 +91,14 @@
     <div class="mb-5">
       <h2 id="market-overview-heading" class="text-2xl font-bold tracking-tight text-tertiary-container font-['Epilogue']">今日市場</h2>
     </div>
-    <div id="market-overview-grid" class="flex gap-3 overflow-x-auto pb-2 no-scrollbar">
-      <p class="text-outline text-sm">載入中...</p>
+    <div class="scroll-row">
+      <div id="market-overview-grid" data-scroll-track class="flex gap-3 overflow-x-auto pb-2 no-scrollbar">
+        <p class="text-outline text-sm">載入中...</p>
+      </div>
+      <div class="scroll-row-fade scroll-row-fade--left" aria-hidden="true"></div>
+      <div class="scroll-row-fade scroll-row-fade--right" aria-hidden="true"></div>
+      <button type="button" data-scroll-dir="-1" aria-label="向左捲動" class="scroll-row-arrow scroll-row-arrow--left"><span class="material-symbols-outlined">chevron_left</span></button>
+      <button type="button" data-scroll-dir="1" aria-label="向右捲動" class="scroll-row-arrow scroll-row-arrow--right"><span class="material-symbols-outlined">chevron_right</span></button>
     </div>
   </section>
 
@@ -101,8 +107,15 @@
     <div class="flex justify-between items-end mb-6">
       <h2 class="text-2xl font-bold tracking-tight text-tertiary-container font-['Epilogue']">為你推薦</h2>
     </div>
-    <div id="recommended-cards" class="flex gap-4 overflow-x-auto pb-4 no-scrollbar -mx-2 px-2">
-      <p class="text-outline text-sm">載入中...</p>
+    <!-- -mx-2 放在外層 .scroll-row 而不是捲動容器本身，這樣漸層／箭頭才會貼在捲動區的實際邊緣 -->
+    <div class="scroll-row -mx-2">
+      <div id="recommended-cards" data-scroll-track class="flex gap-4 overflow-x-auto pb-4 no-scrollbar px-2">
+        <p class="text-outline text-sm">載入中...</p>
+      </div>
+      <div class="scroll-row-fade scroll-row-fade--left" aria-hidden="true"></div>
+      <div class="scroll-row-fade scroll-row-fade--right" aria-hidden="true"></div>
+      <button type="button" data-scroll-dir="-1" aria-label="向左捲動" class="scroll-row-arrow scroll-row-arrow--left"><span class="material-symbols-outlined">chevron_left</span></button>
+      <button type="button" data-scroll-dir="1" aria-label="向右捲動" class="scroll-row-arrow scroll-row-arrow--right"><span class="material-symbols-outlined">chevron_right</span></button>
     </div>
   </section>
 </div>

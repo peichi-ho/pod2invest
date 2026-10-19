@@ -1038,3 +1038,37 @@ document.addEventListener('click', (e) => {
   const inp = document.getElementById('discover-search');
   if (dd && inp && !dd.contains(e.target) && e.target !== inp) dd.classList.add('hidden');
 });
+
+// ── 橫向捲動列（今日市場／為你推薦）：邊緣漸層 + 左右箭頭 ─────────────────
+// 滑鼠沒有橫向滾輪、捲軸又被藏起來（no-scrollbar），只能靠觸控板才滑得動。這裡依目前捲動位置
+// 在外層 .scroll-row 上設 data-can-left／data-can-right，CSS（templates/base.html）據此決定
+// 哪一側要顯示漸層與箭頭；箭頭一次捲動容器可視寬度的 80%。
+// 卡片是 JS 非同步 innerHTML 塞進來的、頁面切走再回來也會從 display:none 變回可見，所以除了
+// scroll 事件，還要看子節點變動和容器尺寸變化（ResizeObserver）才能保持狀態正確。
+function initScrollRows() {
+  document.querySelectorAll('.scroll-row').forEach(row => {
+    const track = row.querySelector('[data-scroll-track]');
+    if (!track) return;
+
+    const update = () => {
+      const max = track.scrollWidth - track.clientWidth;
+      row.dataset.canLeft  = track.scrollLeft > 4 ? '1' : '';
+      row.dataset.canRight = (max > 4 && track.scrollLeft < max - 4) ? '1' : '';
+    };
+
+    track.addEventListener('scroll', update, { passive: true });
+    window.addEventListener('resize', update);
+    track.addEventListener('load', update, true); // 卡片裡的圖片載入完可能撐開寬度
+    new ResizeObserver(update).observe(track);
+    new MutationObserver(update).observe(track, { childList: true });
+
+    row.querySelectorAll('[data-scroll-dir]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        track.scrollBy({ left: Number(btn.dataset.scrollDir) * track.clientWidth * 0.8, behavior: 'smooth' });
+      });
+    });
+
+    update();
+  });
+}
+document.addEventListener('DOMContentLoaded', initScrollRows);
