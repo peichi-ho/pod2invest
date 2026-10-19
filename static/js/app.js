@@ -390,7 +390,11 @@ function renderAssetNameStar(ticker, displayName, nameClass = '') {
   // （Epilogue，只有拉丁字）的 x-height 去算置中位置，但顯示的中文字實際上是瀏覽器
   // fallback 到系統中文字體去畫的，兩者字體度量對不上，星星按鈕會比文字稍微偏低。
   // 疊一個 -2px 的位移校正，實測跟中文字視覺置中最接近（見 app.js 對齊測試）。
-  return `<span class="inline-flex items-center gap-1 align-middle -translate-y-0.5">
+  // 這個校正是針對「有星星按鈕」（24px 高，把整個 span 撐高）的情況量出來的，所以只有真的畫了星星
+  // （ticker 解析得出台股／ETF）才套用；沒有星星（指數、美股等）時 span 本來就跟文字一樣高，
+  // 再往上推 2px 反而會讓名稱比旁邊的元素高一截。
+  const nudge = star ? ' -translate-y-0.5' : '';
+  return `<span class="inline-flex items-center gap-1 align-middle${nudge}">
     <span class="${nameClass} cursor-pointer hover:underline decoration-dotted underline-offset-2" onclick="event.stopPropagation(); onAssetNameClick('${safeTicker}', '${safeDisplay}')">${safeName}</span>
     ${star}
   </span>`;

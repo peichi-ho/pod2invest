@@ -247,31 +247,38 @@ function toggleSignalDetail(chipBtn, asset, week, podcaster, event) {
   chipBtn.classList.remove('bg-surface-container-low', 'text-on-surface-variant', 'border-outline-variant/30');
   chipBtn.classList.add('bg-secondary', 'text-white', 'border-secondary');
 
-  const resultCfg = {
-    pass:    { label: '✓ 正確',   color: '#0f6e56', bg: '#e1f5ee' },
-    fail:    { label: '✗ 錯誤',   color: '#993c1d', bg: '#faece7' },
-    pending: { label: '⏳ 待驗證', color: '#717879', bg: '#f0eee5' },
-  };
-  const dirLabel = { bullish: '看多', bearish: '看空', neutral: '觀察' };
-  const acc = (_accuracyCache || {})[podcaster];
-
-  detail.innerHTML = records.map(r => {
-    const cfg = resultCfg[r.result] || resultCfg.pending;
-    const episodeName = (r.source_filename || '').replace(/\.srt$/i, '');
-    const dir = dirLabel[r.direction] || '';
-    return `
-      <div class="bg-surface-container-lowest rounded-xl border border-outline-variant/20 p-4">
-        <div class="flex justify-between items-center mb-2">
-          <span class="text-[10px] font-bold px-2 py-0.5 rounded-full" style="background:${cfg.bg};color:${cfg.color}">${cfg.label}</span>
-          <span class="text-[10px] font-semibold text-outline">${dir}</span>
-        </div>
-        <p class="text-sm font-bold text-tertiary-container font-['Epilogue'] leading-snug mb-2">${r.thesis || ''}</p>
-        <div class="text-[11px] text-outline mb-0.5 truncate" title="${episodeName}">${episodeName}</div>
-        ${acc ? `<div class="text-[11px] font-bold text-secondary mt-1">⚡ ${acc.pct}% 準確率</div>` : ''}
-        <button onclick="openDeepDive(${r.summary_id}, false, ${r.id})" class="mt-3 w-full py-2 bg-on-primary-container text-white rounded-full font-label text-[11px] font-bold tracking-widest">閱讀論點</button>
-      </div>`;
-  }).join('') || '<p class="text-outline text-xs py-2">此節目無驗證句</p>';
+  detail.innerHTML = records.map(r => _thesisBoxHtml(r)).join('')
+    || '<p class="text-outline text-xs py-2">此節目無驗證句</p>';
   detail.classList.remove('hidden');
+}
+
+// ── 論點方塊 ──────────────────────────────────────────────────
+// 「市場共識」點開 podcaster 後的觀點、「單一來源」卡片裡的觀點共用同一個版型，
+// 圓角／內距只在這裡改一處，兩種方塊才不會又長得不一樣。
+// 注意：這個專案的 Tailwind 設定把 rounded-xl 改成 3rem（很圓），rounded-md 則是預設的
+// 小圓角，之前兩種方塊就是因為用了不同的 rounded-* 才看起來一個很圓、一個幾乎是直角。
+// p-6：圓角很大，內距太小的話裡面的標籤跟按鈕會貼著弧線，所以內容跟邊緣至少留 24px。
+const _THESIS_RESULT_CFG = {
+  pass:    { label: '✓ 正確',   color: '#0f6e56', bg: '#e1f5ee' },
+  fail:    { label: '✗ 錯誤',   color: '#993c1d', bg: '#faece7' },
+  pending: { label: '⏳ 待驗證', color: '#717879', bg: '#f0eee5' },
+};
+
+// 準確率不放在方塊裡：市場共識的 podcaster chip、單一來源卡片的標頭都已經顯示了。
+// 驗證狀態標籤放在論點文字同一行的右上角，不獨佔一行，方塊才不會多出一整列的高度。
+// 論點是 podcaster 說的一句話，用「」框起來讓使用者一眼看出這是引述的一句話（沒有論點就不顯示空的「」）。
+function _thesisBoxHtml(r, { extraCls = '' } = {}) {
+  const cfg = _THESIS_RESULT_CFG[r.result] || _THESIS_RESULT_CFG.pending;
+  const episodeName = escapeHtml((r.source_filename || '').replace(/\.srt$/i, ''));
+  return `
+    <div class="bg-surface-container-lowest rounded-xl border border-outline-variant/20 p-6 ${extraCls}">
+      <div class="flex items-start justify-between gap-4 mb-3">
+        <p class="min-w-0 flex-1 text-sm font-bold text-tertiary-container font-['Epilogue'] leading-snug">${r.thesis ? `「${escapeHtml(r.thesis)}」` : ''}</p>
+        <span class="flex-shrink-0 whitespace-nowrap text-[10px] font-bold px-2 py-0.5 rounded-full" style="background:${cfg.bg};color:${cfg.color}">${cfg.label}</span>
+      </div>
+      <div class="mb-4 truncate text-[11px] text-outline" title="${episodeName}">${episodeName}</div>
+      <button onclick="openDeepDive(${r.summary_id}, false, ${r.id})" class="w-full py-2.5 bg-on-primary-container text-white rounded-full font-label text-[11px] font-bold tracking-widest">閱讀論點</button>
+    </div>`;
 }
 
 // 通用的「展開清單」收合按鈕：「單一來源」整節清單（顯示更多（+N）／收起）跟單一來源
@@ -385,23 +392,7 @@ function renderSignalCards(records) {
       if (r.podcaster !== p) return false;
       const k = (r.thesis || '').trim(); if (seen.has(k)) return false; seen.add(k); return true;
     });
-    const resultCfg = {
-      pass:    { label: '✓ 正確',   color: '#0f6e56', bg: '#e1f5ee' },
-      fail:    { label: '✗ 錯誤',   color: '#993c1d', bg: '#faece7' },
-      pending: { label: '⏳ 待驗證', color: '#717879', bg: '#f0eee5' },
-    };
-    const renderThesis = r => {
-      const cfg = resultCfg[r.result] || resultCfg.pending;
-      const ep = (r.source_filename || '').replace(/\.srt$/i, '');
-      return `<div class="bg-surface-container-lowest rounded-md border border-outline-variant/20 p-3 mt-2">
-        <div class="flex justify-between items-center mb-1.5">
-          <span class="text-[10px] font-bold px-2 py-0.5 rounded-full" style="background:${cfg.bg};color:${cfg.color}">${cfg.label}</span>
-        </div>
-        <p class="text-sm font-bold text-tertiary-container font-['Epilogue'] leading-snug mb-1.5">${r.thesis || ''}</p>
-        <div class="text-[11px] text-outline truncate mb-2" title="${ep}">${ep}</div>
-        <button onclick="openDeepDive(${r.summary_id}, false, ${r.id})" class="w-full py-1.5 bg-on-primary-container text-white rounded-full font-label text-[11px] font-bold tracking-widest">閱讀論點</button>
-      </div>`;
-    };
+    const renderThesis = r => _thesisBoxHtml(r, { extraCls: 'mt-2' });
 
     // 同一位 podcaster 在同一週對同一標的可能不只發表過一次觀點（不同集數都提到），
     // 先只顯示第一則，其餘收進「其他觀點」收合清單，單一來源卡片才不會被拉得很長。
@@ -410,6 +401,8 @@ function renderSignalCards(records) {
     const restThesisHtml = restRecs.map(renderThesis).join('');
     const hasMoreViews = restRecs.length > 0;
 
+    // 節目名稱用跟市場共識卡片 podcaster chip 一樣的圓角方塊（節目名稱 ＋ 準確率%）；這裡只有一位
+    // podcaster、他的觀點就直接顯示在下面，所以用「已選取」的深青色樣式，跟共識卡片預設展開的那顆一致。
     return `
       <div class="bg-white rounded-2xl overflow-hidden" style="border-left:3px solid #c1c8c9;border-top:0.5px solid #e5e3d9;border-right:0.5px solid #e5e3d9;border-bottom:0.5px solid #e5e3d9;border-radius:0 1rem 1rem 0;">
         <div class="p-4">
@@ -417,9 +410,10 @@ function renderSignalCards(records) {
             <div class="font-['Epilogue'] font-bold text-[17px] text-on-surface leading-tight">${renderAssetNameStar(data.ticker, asset)}</div>
             <span class="text-[11px] px-2.5 py-1 rounded-full bg-surface-container text-outline font-semibold">單一來源</span>
           </div>
-          <div class="flex items-center gap-2 mb-3">
-            <span class="text-[12px] font-bold text-on-surface-variant">${p}</span>
-            ${pct != null ? `<span class="text-[11px] font-semibold text-secondary">⚡ ${pct}% 準確率</span>` : ''}
+          <div class="flex flex-wrap gap-1.5 mb-3">
+            <span class="text-[11px] font-semibold px-2.5 py-1.5 rounded-xl border bg-secondary text-white border-secondary">
+              <span class="font-bold">${escapeHtml(p)}</span>${pct != null ? `<span class="ml-1 opacity-70">${pct}%</span>` : ''}
+            </span>
           </div>
           ${pct != null ? `<div class="h-1 bg-surface-container rounded-full mb-3"><div class="h-full rounded-full" style="width:${pct}%;background:${accBarColor};"></div></div>` : ''}
           ${firstThesisHtml}
@@ -444,8 +438,6 @@ function renderSignalCards(records) {
     const badgeLabel = isStrong ? '強共識' : '弱共識';
     const accs = podcasters.map(p => accMap[p]?.pct).filter(v => v != null);
     const avgAcc = accs.length ? Math.round(accs.reduce((a, b) => a + b, 0) / accs.length) : null;
-    const accBarWidth = avgAcc != null ? avgAcc : 0;
-    const accBarColor = avgAcc >= 70 ? '#286671' : avgAcc >= 55 ? '#d97f12' : '#c1c8c9';
     const assetKey = asset.replace(/'/g, "\\'");
     const chips = podcasters.map(p => {
       const pct = accMap[p]?.pct;
@@ -454,24 +446,23 @@ function renderSignalCards(records) {
         <span class="font-bold">${p}</span>${pct != null ? `<span class="ml-1 opacity-70">${pct}%</span>` : ''}
       </button>`;
     }).join('');
+    // 標題列：左邊「標的名稱 ＋ N 人看多 · 平均準確率」，右邊強／弱共識徽章。
+    // 左邊那組放不下（手機寬度）時 flex-wrap 會讓人數／準確率那顆換到名稱下面。
+    // [&>span]:translate-y-0：renderAssetNameStar() 為了「名稱＋星星」在純文字行裡置中，會把整組往上推 2px；
+    // 但這裡名稱本身就是跟旁邊 chip 用 items-center 置中的 flex 項目（盒子高度剛好等於那組的高度），
+    // 再往上推只會讓名稱比 chip 高一截，所以在這一列把它取消。
     return `
       <div class="bg-white rounded-2xl overflow-hidden" style="border-left:3px solid ${borderColor};border-top:0.5px solid #e5e3d9;border-right:0.5px solid #e5e3d9;border-bottom:0.5px solid #e5e3d9;border-radius:0 1rem 1rem 0;">
         <div class="p-4">
-          <div class="flex justify-between items-start mb-2">
-            <div class="font-['Epilogue'] font-bold text-[17px] text-on-surface leading-tight">${renderAssetNameStar(data.ticker, asset)}</div>
-            <span class="text-[11px] px-2.5 py-1 rounded-full ${badgeClass}">${badgeLabel}（${count}人）</span>
-          </div>
-          <div class="flex flex-wrap gap-1.5 mb-3">
-            <span class="bg-surface-container text-secondary text-[11px] font-semibold px-2.5 py-1 rounded-full">${count} 人看多</span>
-            ${avgAcc != null ? `<span class="bg-surface-container text-secondary text-[11px] font-semibold px-2.5 py-1 rounded-full">平均準確率 ${avgAcc}%</span>` : ''}
+          <div class="flex justify-between items-start gap-3 mb-3">
+            <div class="flex flex-wrap items-center gap-x-3 gap-y-2 min-w-0">
+              <div class="font-['Epilogue'] font-bold text-[17px] text-on-surface leading-tight [&>span]:translate-y-0">${renderAssetNameStar(data.ticker, asset)}</div>
+              <span class="bg-surface-container text-secondary text-[11px] font-semibold px-2.5 py-1 rounded-full whitespace-nowrap">${count} 人${dirFilter === 'bullish' ? '看多' : '看空'}${avgAcc != null ? ` · 平均準確率 ${avgAcc}%` : ''}</span>
+            </div>
+            <span class="flex-shrink-0 text-[11px] px-2.5 py-1 rounded-full ${badgeClass}">${badgeLabel}（${count}人）</span>
           </div>
           <div class="flex flex-wrap gap-1.5 mb-3">${chips}</div>
           <div class="signal-detail hidden mt-2 space-y-2"></div>
-          ${avgAcc != null ? `
-          <div class="mt-3">
-            <div class="flex justify-between text-[10px] font-bold text-outline mb-1"><span>節目平均準確率</span><span>${avgAcc}%</span></div>
-            <div class="h-1 bg-surface-container rounded-full"><div class="h-full rounded-full" style="width:${accBarWidth}%;background:${accBarColor};"></div></div>
-          </div>` : ''}
         </div>
       </div>`;
   }
@@ -505,6 +496,14 @@ function renderSignalCards(records) {
   }
   if (!html) html = `<p class="text-outline text-sm">本週暫無${dirFilter === 'bullish' ? '看多' : '看空'}訊號</p>`;
   grid.innerHTML = html;
+
+  // 共識卡片（2 人以上）預設先展開第一位 podcaster 的觀點，不用每張卡都要自己點一下才看得到內容；
+  // 其他人的 chip 維持收合，點了再切換。單一來源卡片本來就直接顯示觀點，不在這裡處理。
+  // 直接用 chip 的 click() 走既有的 toggleSignalDetail()，展開樣式／資料就不會有兩套邏輯。
+  grid.querySelectorAll('.signal-detail').forEach(detail => {
+    const firstChip = detail.closest('.p-4')?.querySelector('.podcaster-chip');
+    if (firstChip) firstChip.click();
+  });
 }
 
 async function loadWeeklySignals() {
