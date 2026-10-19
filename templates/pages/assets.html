@@ -20,7 +20,7 @@
          結果顯示在輸入框正下方的下拉建議清單，不會動到下面的主排名列表 -->
     <div class="relative mb-5">
       <span class="material-symbols-outlined absolute left-4 top-1/2 -translate-y-1/2 text-outline/60 text-xl pointer-events-none">search</span>
-      <input id="assets-search" type="text" placeholder="搜尋代碼或名稱，如 2330 / 台積電"
+      <input id="assets-search" data-clearable type="text" placeholder="搜尋代碼或名稱，如 2330 / 台積電"
         oninput="onAssetSearchInput()" onkeydown="onAssetSearchKeydown(event)"
         class="w-full pl-11 pr-4 py-3 bg-surface-container-lowest border-none rounded-full focus:ring-2 focus:ring-secondary font-body text-sm text-on-surface-variant"/>
       <div id="assets-search-dropdown" class="hidden absolute left-0 right-0 top-full mt-2 bg-surface-container-lowest rounded-2xl shadow-xl z-50 border border-outline-variant/20 max-h-96 overflow-y-auto"></div>
@@ -51,10 +51,6 @@
 
   <!-- ── 標的詳情 ─────────────────────────────────────────────── -->
   <div id="assets-detail-view" class="hidden">
-    <button onclick="closeAssetDetail()" class="flex items-center gap-1 text-secondary font-label text-sm font-semibold mb-6 hover:opacity-70 transition-opacity">
-      <span class="material-symbols-outlined text-base">arrow_back_ios</span>返回列表
-    </button>
-
     <div class="flex items-start justify-between gap-3 mb-1">
       <div class="flex items-baseline gap-3">
         <h3 id="asset-detail-name" class="font-['Epilogue'] text-3xl font-bold text-tertiary-container"></h3>
@@ -96,8 +92,12 @@
       </div>
       <p id="asset-stock-data-asof" class="mt-2 text-xs text-outline"></p>
 
-      <div id="asset-stock-news-section" class="hidden mt-5 pt-4 border-t border-outline-variant/20">
-        <div class="text-xs text-outline font-bold uppercase tracking-widest mb-3">相關新聞</div>
+      <!-- 整個區塊（含標題）由 fetchStockNews() 一開始載入就秀出來，裡面先顯示「載入中...」，
+           不然使用者看不出下面還有相關新聞 -->
+      <div id="asset-stock-news-section" class="hidden mt-8 pt-6 border-t border-outline-variant/20">
+        <h3 class="flex items-center gap-2 font-['Epilogue'] text-xl font-bold text-tertiary-container mb-4">
+          <span class="material-symbols-outlined text-xl text-secondary" style="font-variation-settings:'FILL' 1">newspaper</span>相關新聞
+        </h3>
         <div id="asset-stock-news-list" class="space-y-2"></div>
       </div>
     </div>

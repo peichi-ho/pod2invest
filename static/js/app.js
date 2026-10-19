@@ -1,6 +1,6 @@
 // ── Shared state ──────────────────────────────────────────────
 let _discoverCache = [];
-let _pageHistory = [];
+let _pageHistory = [];   // [{ page, scrollY, tracks }]，見 goBack() 上方說明
 let _accuracyCache = null;
 let _podcastImages = {};  // show_name → image_url
 let _backOverride = null;       // 下一次 goBack() 要去的頁面，用一次就清掉（例如「查看完整摘要」這種
@@ -10,6 +10,7 @@ let _backOverrideArmed = false; // 是否已經真的顯示過 owner 頁一次�
                                  // 返回、而是改用底部導覽列等其他方式離開，_backOverride 會一直卡著沒
                                  // 被消耗掉，之後在任何頁面按返回都會被劫持跳去過期的目標——showPage()
                                  // 偵測到「已經 armed 過、卻又被呼叫」時會把過期的 override 清掉，見下方。
+let _calcBackVisible = true;    // 計算機頁要不要顯示頂部返回鍵，見 _renderPage()／_updateHeaderBack()
 
 async function loadPodcastImages() {
   try {
@@ -58,22 +59,51 @@ function escapeHtml(str) {
 }
 
 // ── Navigation ────────────────────────────────────────────────
+// _pageHistory 的每一筆是 { page, scrollY, tracks }：離開某一頁（showPage）時順便記下當時的
+// 捲動位置，按返回（goBack）回到那一頁時還原，使用者就回到剛剛點擊連結跳轉時的畫面位置，
+// 不是每次都被丟回頁面最上面。全站的頁面切換都走 showPage()／goBack()，所以所有頁面一次到位。
+//   scrollY：整頁的垂直捲動位置
+//   tracks ：頁面內橫向捲動列（[data-scroll-track]，例如首頁「今日市場」「為你推薦」）各自的
+//            scrollLeft——頁面被 display:none 隱藏後瀏覽器會把它們歸零，要自己記著還原。
+function _captureScrollState(pageId) {
+  const pageEl = document.getElementById('page-' + pageId);
+  return {
+    scrollY: window.scrollY,
+    tracks: pageEl ? [...pageEl.querySelectorAll('[data-scroll-track]')].map(el => el.scrollLeft) : [],
+  };
+}
+
+function _restoreScrollState(pageId, state) {
+  if (!state) return;
+  const pageEl = document.getElementById('page-' + pageId);
+  if (pageEl) {
+    pageEl.querySelectorAll('[data-scroll-track]').forEach((el, i) => {
+      if (state.tracks && state.tracks[i] != null) el.scrollLeft = state.tracks[i];
+    });
+  }
+  window.scrollTo({ top: state.scrollY, left: 0, behavior: 'instant' });
+}
+
 function goBack() {
   if (_backOverride) {
     const target = _backOverride;
     _backOverride = null;
     _backOverrideOwner = null;
     _backOverrideArmed = false;
-    // showPage() 進來時本來就會把同一個頁面名稱再推一次，這裡順便清掉避免多按一次沒反應
-    if (_pageHistory.length && _pageHistory[_pageHistory.length - 1] === target) {
+    // showPage() 進來時本來就會把同一個頁面名稱再推一次，這裡順便清掉避免多按一次沒反應，
+    // 也順便拿它記下的捲動位置來還原。
+    let restore = null;
+    const top = _pageHistory[_pageHistory.length - 1];
+    if (top && top.page === target) {
+      restore = top;
       _pageHistory.pop();
     }
-    _renderPage(target);
+    _renderPage(target, restore);
     return;
   }
   if (_pageHistory.length > 0) {
     const prev = _pageHistory.pop();
-    _renderPage(prev);
+    _renderPage(prev.page, prev);
   }
 }
 
@@ -91,7 +121,8 @@ function showPage(page) {
   const currentActive = document.querySelector('.page.active');
   if (currentActive) {
     const currentId = currentActive.id.replace('page-', '');
-    if (currentId !== page) _pageHistory.push(currentId);
+    // 必須在 _renderPage() 之前記：它會把目前這頁隱藏、並把捲動位置歸零
+    if (currentId !== page) _pageHistory.push({ page: currentId, ..._captureScrollState(currentId) });
   }
   _renderPage(page);
 
@@ -100,7 +131,8 @@ function showPage(page) {
   }
 }
 
-function _renderPage(page) {
+// restore：goBack() 帶進來的捲動狀態；一般前進（showPage）不帶，維持從頁面最上面開始。
+function _renderPage(page, restore = null) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-btn').forEach(b => { b.classList.remove('active'); b.classList.add('opacity-60'); });
   document.getElementById('page-' + page).classList.add('active');
@@ -120,10 +152,45 @@ function _renderPage(page) {
   // 計算機的返回鍵：從底部導覽列直接點進來（等於在切分頁，不是從某個頁面鑽進來）
   // 就不需要顯示，其他入口（深度剖析頁的「試算」、Profile 頁的「New Sim」）都是直接呼叫
   // showPage('calculator')，不會經過 navHome()，所以這個旗標不會被誤設。用完立刻消耗掉，
-  // 不會影響下一次導覽。
-  const calcBackBtn = document.getElementById('calc-back-btn');
-  if (calcBackBtn) calcBackBtn.classList.toggle('hidden', page === 'calculator' && !!window._enteredViaBottomNav);
+  // 不會影響下一次導覽，所以結果先存進 _calcBackVisible，之後 _updateHeaderBack() 再被
+  // 別的情況呼叫（例如 Assets 詳情頁開關）時不會誤用已經被清掉的旗標。
+  _calcBackVisible = !(page === 'calculator' && !!window._enteredViaBottomNav);
   window._enteredViaBottomNav = false;
+
+  _updateHeaderBack();
+  // 放在最後、各頁的 onXxxPageShow() 之後才還原，頁面高度才是最終的，不會被夾回去
+  _restoreScrollState(page, restore);
+}
+
+// ── 頂部橫幅的返回鍵 ──────────────────────────────────────────
+// 全站只有這一顆返回鍵（templates/base.html 的 #header-back-btn），各頁自己不放。
+// 兩種「頁內子畫面」（Assets 詳情、Discover 的熱門主題篩選結果）不是獨立的 page，
+// 不會經過 _renderPage()，所以它們開關時要自己呼叫 _updateHeaderBack()。
+function _updateHeaderBack() {
+  const btn = document.getElementById('header-back-btn');
+  if (!btn) return;
+  const active = document.querySelector('.page.active');
+  const page = active ? active.id.replace('page-', '') : '';
+  let show = false;
+  if (['deep-dive', 'podcaster', 'graph', 'profile'].includes(page)) show = true;
+  else if (page === 'calculator') show = _calcBackVisible;
+  else if (page === 'assets') show = !document.getElementById('assets-detail-view')?.classList.contains('hidden');
+  else if (page === 'discover') show = !document.getElementById('tag-results-section')?.classList.contains('hidden');
+  btn.classList.toggle('hidden', !show);
+}
+
+function onHeaderBack() {
+  const active = document.querySelector('.page.active');
+  const page = active ? active.id.replace('page-', '') : '';
+  if (page === 'assets' && !document.getElementById('assets-detail-view')?.classList.contains('hidden')) {
+    closeAssetDetail();
+    return;
+  }
+  if (page === 'discover' && !document.getElementById('tag-results-section')?.classList.contains('hidden')) {
+    filterDiscoverByTag(null);
+    return;
+  }
+  goBack();
 }
 
 // ── Accuracy cache (shared by discover, rankings, podcaster) ──
@@ -323,7 +390,11 @@ function renderAssetNameStar(ticker, displayName, nameClass = '') {
   // （Epilogue，只有拉丁字）的 x-height 去算置中位置，但顯示的中文字實際上是瀏覽器
   // fallback 到系統中文字體去畫的，兩者字體度量對不上，星星按鈕會比文字稍微偏低。
   // 疊一個 -2px 的位移校正，實測跟中文字視覺置中最接近（見 app.js 對齊測試）。
-  return `<span class="inline-flex items-center gap-1 align-middle -translate-y-0.5">
+  // 這個校正是針對「有星星按鈕」（24px 高，把整個 span 撐高）的情況量出來的，所以只有真的畫了星星
+  // （ticker 解析得出台股／ETF）才套用；沒有星星（指數、美股等）時 span 本來就跟文字一樣高，
+  // 再往上推 2px 反而會讓名稱比旁邊的元素高一截。
+  const nudge = star ? ' -translate-y-0.5' : '';
+  return `<span class="inline-flex items-center gap-1 align-middle${nudge}">
     <span class="${nameClass} cursor-pointer hover:underline decoration-dotted underline-offset-2" onclick="event.stopPropagation(); onAssetNameClick('${safeTicker}', '${safeDisplay}')">${safeName}</span>
     ${star}
   </span>`;
@@ -390,13 +461,14 @@ async function toggleEpisodeFavorite(btnEl, summaryId) {
   }
 }
 
-// 書籤造型收藏按鈕，deep_dive.js（單集日期旁邊）／profile.js 共用。
-function renderEpisodeBookmarkButton(summaryId, cls = 'w-8 h-8') {
+// 書籤造型收藏按鈕，deep_dive.js（單集標題旁邊）／profile.js 共用。
+// iconCls：書籤 icon 本身的大小，標題旁邊的版本會比清單裡的大。
+function renderEpisodeBookmarkButton(summaryId, cls = 'w-8 h-8', iconCls = 'text-xl') {
   const isFav = !!(_episodeFavoritesCache && _episodeFavoritesCache.has(summaryId));
   return `<button type="button" data-ep-fav-id="${summaryId}" onclick="event.stopPropagation(); toggleEpisodeFavorite(this, ${summaryId})"
     class="inline-flex items-center justify-center ${cls} flex-shrink-0 ${isFav ? 'text-[#d97f12]' : 'text-outline/40'} hover:opacity-70 transition-opacity"
     title="收藏這一集">
-    <span class="material-symbols-outlined text-xl" style="font-variation-settings:'FILL' ${isFav ? 1 : 0}">bookmark</span>
+    <span class="material-symbols-outlined ${iconCls}" style="font-variation-settings:'FILL' ${isFav ? 1 : 0}">bookmark</span>
   </button>`;
 }
 
@@ -510,8 +582,34 @@ function renderHeaderAvatar() {
     ? `<img src="${_userProfile.avatar_base64}" alt="${escapeHtml(_userProfile.username || '')}" class="w-full h-full object-cover"/>`
     : initial
       ? initialAvatarHtml(initial, 'text-lg')
-      : `<div class="w-full h-full flex items-center justify-center" style="background:#e5e3d9"><span class="material-symbols-outlined text-white/70 text-2xl" style="font-variation-settings:'FILL' 1">person</span></div>`;
+      : `<div class="w-full h-full flex items-center justify-center" style="background:#113236"><span class="material-symbols-outlined text-white text-2xl" style="font-variation-settings:'FILL' 1">person</span></div>`;
 }
+
+// ── 搜尋框的清除（✕）按鈕 ─────────────────────────────────────
+// 在輸入框加上 data-clearable 就會在右邊多一顆 ✕，點下去清空文字。顯示／隱藏全部交給 CSS
+// （templates/base.html 的 input:placeholder-shown + .input-clear-btn），這裡只管插入按鈕和點擊：
+// 清空後補送一個 input 事件，各搜尋框原本寫在 oninput 的邏輯（收起下拉、清掉已選標的提示）
+// 就照常跑，不用每個搜尋框各自再接一份「清除」邏輯。
+function initClearableInputs() {
+  document.querySelectorAll('input[data-clearable]').forEach(input => {
+    if (input.nextElementSibling?.classList.contains('input-clear-btn')) return;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'input-clear-btn';
+    btn.setAttribute('aria-label', '清除搜尋內容');
+    btn.title = '清除';
+    btn.innerHTML = '<span class="material-symbols-outlined" style="font-size:18px">close</span>';
+    btn.addEventListener('mousedown', e => e.preventDefault()); // 按 ✕ 時不要讓輸入框失焦
+    btn.addEventListener('click', () => {
+      input.value = '';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.focus();
+    });
+    input.insertAdjacentElement('afterend', btn); // 一定要緊接在輸入框後面，CSS 的相鄰選擇器才抓得到
+    input.style.paddingRight = '3rem';            // 文字不要被 ✕ 蓋住
+  });
+}
+document.addEventListener('DOMContentLoaded', initClearableInputs);
 
 // ── Boot ─────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {

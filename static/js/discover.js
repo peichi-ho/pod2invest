@@ -247,31 +247,38 @@ function toggleSignalDetail(chipBtn, asset, week, podcaster, event) {
   chipBtn.classList.remove('bg-surface-container-low', 'text-on-surface-variant', 'border-outline-variant/30');
   chipBtn.classList.add('bg-secondary', 'text-white', 'border-secondary');
 
-  const resultCfg = {
-    pass:    { label: '✓ 正確',   color: '#0f6e56', bg: '#e1f5ee' },
-    fail:    { label: '✗ 錯誤',   color: '#993c1d', bg: '#faece7' },
-    pending: { label: '⏳ 待驗證', color: '#717879', bg: '#f0eee5' },
-  };
-  const dirLabel = { bullish: '看多', bearish: '看空', neutral: '觀察' };
-  const acc = (_accuracyCache || {})[podcaster];
-
-  detail.innerHTML = records.map(r => {
-    const cfg = resultCfg[r.result] || resultCfg.pending;
-    const episodeName = (r.source_filename || '').replace(/\.srt$/i, '');
-    const dir = dirLabel[r.direction] || '';
-    return `
-      <div class="bg-surface-container-lowest rounded-xl border border-outline-variant/20 p-4">
-        <div class="flex justify-between items-center mb-2">
-          <span class="text-[10px] font-bold px-2 py-0.5 rounded-full" style="background:${cfg.bg};color:${cfg.color}">${cfg.label}</span>
-          <span class="text-[10px] font-semibold text-outline">${dir}</span>
-        </div>
-        <p class="text-sm font-bold text-tertiary-container font-['Epilogue'] leading-snug mb-2">${r.thesis || ''}</p>
-        <div class="text-[11px] text-outline mb-0.5 truncate" title="${episodeName}">${episodeName}</div>
-        ${acc ? `<div class="text-[11px] font-bold text-secondary mt-1">⚡ ${acc.pct}% 準確率</div>` : ''}
-        <button onclick="openDeepDive(${r.summary_id}, false, ${r.id})" class="mt-3 w-full py-2 bg-on-primary-container text-white rounded-full font-label text-[11px] font-bold tracking-widest">閱讀論點</button>
-      </div>`;
-  }).join('') || '<p class="text-outline text-xs py-2">此節目無驗證句</p>';
+  detail.innerHTML = records.map(r => _thesisBoxHtml(r)).join('')
+    || '<p class="text-outline text-xs py-2">此節目無驗證句</p>';
   detail.classList.remove('hidden');
+}
+
+// ── 論點方塊 ──────────────────────────────────────────────────
+// 「市場共識」點開 podcaster 後的觀點、「單一來源」卡片裡的觀點共用同一個版型，
+// 圓角／內距只在這裡改一處，兩種方塊才不會又長得不一樣。
+// 注意：這個專案的 Tailwind 設定把 rounded-xl 改成 3rem（很圓），rounded-md 則是預設的
+// 小圓角，之前兩種方塊就是因為用了不同的 rounded-* 才看起來一個很圓、一個幾乎是直角。
+// p-6：圓角很大，內距太小的話裡面的標籤跟按鈕會貼著弧線，所以內容跟邊緣至少留 24px。
+const _THESIS_RESULT_CFG = {
+  pass:    { label: '✓ 正確',   color: '#0f6e56', bg: '#e1f5ee' },
+  fail:    { label: '✗ 錯誤',   color: '#993c1d', bg: '#faece7' },
+  pending: { label: '⏳ 待驗證', color: '#717879', bg: '#f0eee5' },
+};
+
+// 準確率不放在方塊裡：市場共識的 podcaster chip、單一來源卡片的標頭都已經顯示了。
+// 驗證狀態標籤放在論點文字同一行的右上角，不獨佔一行，方塊才不會多出一整列的高度。
+// 論點是 podcaster 說的一句話，用「」框起來讓使用者一眼看出這是引述的一句話（沒有論點就不顯示空的「」）。
+function _thesisBoxHtml(r, { extraCls = '' } = {}) {
+  const cfg = _THESIS_RESULT_CFG[r.result] || _THESIS_RESULT_CFG.pending;
+  const episodeName = escapeHtml((r.source_filename || '').replace(/\.srt$/i, ''));
+  return `
+    <div class="bg-surface-container-lowest rounded-xl border border-outline-variant/20 p-6 ${extraCls}">
+      <div class="flex items-start justify-between gap-4 mb-3">
+        <p class="min-w-0 flex-1 text-sm font-bold text-tertiary-container font-['Epilogue'] leading-snug">${r.thesis ? `「${escapeHtml(r.thesis)}」` : ''}</p>
+        <span class="flex-shrink-0 whitespace-nowrap text-[10px] font-bold px-2 py-0.5 rounded-full" style="background:${cfg.bg};color:${cfg.color}">${cfg.label}</span>
+      </div>
+      <div class="mb-4 truncate text-[11px] text-outline" title="${episodeName}">${episodeName}</div>
+      <button onclick="openDeepDive(${r.summary_id}, false, ${r.id})" class="w-full py-2.5 bg-on-primary-container text-white rounded-full font-label text-[11px] font-bold tracking-widest">閱讀論點</button>
+    </div>`;
 }
 
 // 通用的「展開清單」收合按鈕：「單一來源」整節清單（顯示更多（+N）／收起）跟單一來源
@@ -385,23 +392,7 @@ function renderSignalCards(records) {
       if (r.podcaster !== p) return false;
       const k = (r.thesis || '').trim(); if (seen.has(k)) return false; seen.add(k); return true;
     });
-    const resultCfg = {
-      pass:    { label: '✓ 正確',   color: '#0f6e56', bg: '#e1f5ee' },
-      fail:    { label: '✗ 錯誤',   color: '#993c1d', bg: '#faece7' },
-      pending: { label: '⏳ 待驗證', color: '#717879', bg: '#f0eee5' },
-    };
-    const renderThesis = r => {
-      const cfg = resultCfg[r.result] || resultCfg.pending;
-      const ep = (r.source_filename || '').replace(/\.srt$/i, '');
-      return `<div class="bg-surface-container-lowest rounded-md border border-outline-variant/20 p-3 mt-2">
-        <div class="flex justify-between items-center mb-1.5">
-          <span class="text-[10px] font-bold px-2 py-0.5 rounded-full" style="background:${cfg.bg};color:${cfg.color}">${cfg.label}</span>
-        </div>
-        <p class="text-sm font-bold text-tertiary-container font-['Epilogue'] leading-snug mb-1.5">${r.thesis || ''}</p>
-        <div class="text-[11px] text-outline truncate mb-2" title="${ep}">${ep}</div>
-        <button onclick="openDeepDive(${r.summary_id}, false, ${r.id})" class="w-full py-1.5 bg-on-primary-container text-white rounded-full font-label text-[11px] font-bold tracking-widest">閱讀論點</button>
-      </div>`;
-    };
+    const renderThesis = r => _thesisBoxHtml(r, { extraCls: 'mt-2' });
 
     // 同一位 podcaster 在同一週對同一標的可能不只發表過一次觀點（不同集數都提到），
     // 先只顯示第一則，其餘收進「其他觀點」收合清單，單一來源卡片才不會被拉得很長。
@@ -410,6 +401,8 @@ function renderSignalCards(records) {
     const restThesisHtml = restRecs.map(renderThesis).join('');
     const hasMoreViews = restRecs.length > 0;
 
+    // 節目名稱用跟市場共識卡片 podcaster chip 一樣的圓角方塊（節目名稱 ＋ 準確率%）；這裡只有一位
+    // podcaster、他的觀點就直接顯示在下面，所以用「已選取」的深青色樣式，跟共識卡片預設展開的那顆一致。
     return `
       <div class="bg-white rounded-2xl overflow-hidden" style="border-left:3px solid #c1c8c9;border-top:0.5px solid #e5e3d9;border-right:0.5px solid #e5e3d9;border-bottom:0.5px solid #e5e3d9;border-radius:0 1rem 1rem 0;">
         <div class="p-4">
@@ -417,9 +410,10 @@ function renderSignalCards(records) {
             <div class="font-['Epilogue'] font-bold text-[17px] text-on-surface leading-tight">${renderAssetNameStar(data.ticker, asset)}</div>
             <span class="text-[11px] px-2.5 py-1 rounded-full bg-surface-container text-outline font-semibold">單一來源</span>
           </div>
-          <div class="flex items-center gap-2 mb-3">
-            <span class="text-[12px] font-bold text-on-surface-variant">${p}</span>
-            ${pct != null ? `<span class="text-[11px] font-semibold text-secondary">⚡ ${pct}% 準確率</span>` : ''}
+          <div class="flex flex-wrap gap-1.5 mb-3">
+            <span class="text-[11px] font-semibold px-2.5 py-1.5 rounded-xl border bg-secondary text-white border-secondary">
+              <span class="font-bold">${escapeHtml(p)}</span>${pct != null ? `<span class="ml-1 opacity-70">${pct}%</span>` : ''}
+            </span>
           </div>
           ${pct != null ? `<div class="h-1 bg-surface-container rounded-full mb-3"><div class="h-full rounded-full" style="width:${pct}%;background:${accBarColor};"></div></div>` : ''}
           ${firstThesisHtml}
@@ -444,8 +438,6 @@ function renderSignalCards(records) {
     const badgeLabel = isStrong ? '強共識' : '弱共識';
     const accs = podcasters.map(p => accMap[p]?.pct).filter(v => v != null);
     const avgAcc = accs.length ? Math.round(accs.reduce((a, b) => a + b, 0) / accs.length) : null;
-    const accBarWidth = avgAcc != null ? avgAcc : 0;
-    const accBarColor = avgAcc >= 70 ? '#286671' : avgAcc >= 55 ? '#d97f12' : '#c1c8c9';
     const assetKey = asset.replace(/'/g, "\\'");
     const chips = podcasters.map(p => {
       const pct = accMap[p]?.pct;
@@ -454,24 +446,23 @@ function renderSignalCards(records) {
         <span class="font-bold">${p}</span>${pct != null ? `<span class="ml-1 opacity-70">${pct}%</span>` : ''}
       </button>`;
     }).join('');
+    // 標題列：左邊「標的名稱 ＋ N 人看多 · 平均準確率」，右邊強／弱共識徽章。
+    // 左邊那組放不下（手機寬度）時 flex-wrap 會讓人數／準確率那顆換到名稱下面。
+    // [&>span]:translate-y-0：renderAssetNameStar() 為了「名稱＋星星」在純文字行裡置中，會把整組往上推 2px；
+    // 但這裡名稱本身就是跟旁邊 chip 用 items-center 置中的 flex 項目（盒子高度剛好等於那組的高度），
+    // 再往上推只會讓名稱比 chip 高一截，所以在這一列把它取消。
     return `
       <div class="bg-white rounded-2xl overflow-hidden" style="border-left:3px solid ${borderColor};border-top:0.5px solid #e5e3d9;border-right:0.5px solid #e5e3d9;border-bottom:0.5px solid #e5e3d9;border-radius:0 1rem 1rem 0;">
         <div class="p-4">
-          <div class="flex justify-between items-start mb-2">
-            <div class="font-['Epilogue'] font-bold text-[17px] text-on-surface leading-tight">${renderAssetNameStar(data.ticker, asset)}</div>
-            <span class="text-[11px] px-2.5 py-1 rounded-full ${badgeClass}">${badgeLabel}（${count}人）</span>
-          </div>
-          <div class="flex flex-wrap gap-1.5 mb-3">
-            <span class="bg-surface-container text-secondary text-[11px] font-semibold px-2.5 py-1 rounded-full">${count} 人看多</span>
-            ${avgAcc != null ? `<span class="bg-surface-container text-secondary text-[11px] font-semibold px-2.5 py-1 rounded-full">平均準確率 ${avgAcc}%</span>` : ''}
+          <div class="flex justify-between items-start gap-3 mb-3">
+            <div class="flex flex-wrap items-center gap-x-3 gap-y-2 min-w-0">
+              <div class="font-['Epilogue'] font-bold text-[17px] text-on-surface leading-tight [&>span]:translate-y-0">${renderAssetNameStar(data.ticker, asset)}</div>
+              <span class="bg-surface-container text-secondary text-[11px] font-semibold px-2.5 py-1 rounded-full whitespace-nowrap">${count} 人${dirFilter === 'bullish' ? '看多' : '看空'}${avgAcc != null ? ` · 平均準確率 ${avgAcc}%` : ''}</span>
+            </div>
+            <span class="flex-shrink-0 text-[11px] px-2.5 py-1 rounded-full ${badgeClass}">${badgeLabel}（${count}人）</span>
           </div>
           <div class="flex flex-wrap gap-1.5 mb-3">${chips}</div>
           <div class="signal-detail hidden mt-2 space-y-2"></div>
-          ${avgAcc != null ? `
-          <div class="mt-3">
-            <div class="flex justify-between text-[10px] font-bold text-outline mb-1"><span>節目平均準確率</span><span>${avgAcc}%</span></div>
-            <div class="h-1 bg-surface-container rounded-full"><div class="h-full rounded-full" style="width:${accBarWidth}%;background:${accBarColor};"></div></div>
-          </div>` : ''}
         </div>
       </div>`;
   }
@@ -505,6 +496,14 @@ function renderSignalCards(records) {
   }
   if (!html) html = `<p class="text-outline text-sm">本週暫無${dirFilter === 'bullish' ? '看多' : '看空'}訊號</p>`;
   grid.innerHTML = html;
+
+  // 共識卡片（2 人以上）預設先展開第一位 podcaster 的觀點，不用每張卡都要自己點一下才看得到內容；
+  // 其他人的 chip 維持收合，點了再切換。單一來源卡片本來就直接顯示觀點，不在這裡處理。
+  // 直接用 chip 的 click() 走既有的 toggleSignalDetail()，展開樣式／資料就不會有兩套邏輯。
+  grid.querySelectorAll('.signal-detail').forEach(detail => {
+    const firstChip = detail.closest('.p-4')?.querySelector('.podcaster-chip');
+    if (firstChip) firstChip.click();
+  });
 }
 
 async function loadWeeklySignals() {
@@ -530,6 +529,8 @@ async function loadWeeklySignals() {
 }
 
 // ── 熱門主題篩選（從「本季熱門」卡片點進來）─────────────────────
+let _discoverStateBeforeTag = null; // 點進主題篩選前首頁的捲動位置，返回時還原
+
 async function filterDiscoverByTag(tagName) {
   const resultsSection     = document.getElementById('tag-results-section');
   // 標籤篩選畫面會蓋掉首頁其他所有 section，這份清單要跟
@@ -545,11 +546,17 @@ async function filterDiscoverByTag(tagName) {
   if (!tagName) {
     resultsSection.classList.add('hidden');
     otherSections.forEach(el => el.classList.remove('hidden'));
+    _updateHeaderBack();
+    // 其他 section 剛剛被整段隱藏過，頁面變短、橫向捲動列也被歸零，這裡一併還原回點進來前的樣子
+    _restoreScrollState('discover', _discoverStateBeforeTag);
     return;
   }
 
+  // 要在隱藏其他 section 之前記，不然頁面高度已經變了；已經在篩選畫面裡切換主題時不要覆蓋
+  if (resultsSection.classList.contains('hidden')) _discoverStateBeforeTag = _captureScrollState('discover');
   resultsSection.classList.remove('hidden');
   otherSections.forEach(el => el.classList.add('hidden'));
+  _updateHeaderBack(); // 篩選結果是頁內子畫面，不會經過 _renderPage()，要自己通知頂部返回鍵
   document.getElementById('tag-results-title').textContent = `「${tagName}」相關節目`;
 
   const list = document.getElementById('tag-results-list');
@@ -646,22 +653,44 @@ async function loadHotTopics() {
   }
 }
 
+// 台股（.TW／.TWO 結尾的個股、ETF，或台灣加權指數 ^TWII）漲跌配色是紅漲綠跌；
+// 其他市場（目前資料裡就是美股）反過來，綠漲紅跌。
+function _isTwTicker(ticker) {
+  const t = (ticker || '').trim();
+  return /\.TWO?$/i.test(t) || /^\^TWII?$/i.test(t);
+}
+
+// 看多（↑）／看空（↓）箭頭的顏色，依市場決定。這裡是畫在深色底（本季熱門卡片）上，
+// 所以用淺色版的紅／綠，原本白底用的 #ba1a1a／#1e8e3e 在墨綠底上對比不夠。
+const _ARROW_RED_ON_DARK   = 'text-[#ff7b7b]';
+const _ARROW_GREEN_ON_DARK = 'text-[#5ddb8a]';
+function _directionArrowClasses(market) {
+  return market === 'US'
+    ? { up: _ARROW_GREEN_ON_DARK, down: _ARROW_RED_ON_DARK }
+    : { up: _ARROW_RED_ON_DARK,   down: _ARROW_GREEN_ON_DARK };
+}
+
 // 從已經載入的 backtesting 週訊號資料（_signalData，見 loadWeeklySignals）裡，
 // 找同名 asset 的看多/看空 podcaster 人數。找不到（該熱門主題不是個股/ETF、或近期
 // 沒有對應的投資觀點紀錄）就回傳 null，讓卡片只顯示提及次數，不生造共識資料。
+// market：用這些觀點紀錄的 ticker 判斷（'TW'／'US'），同一個名稱對到不同市場時取多數；
+// 紀錄沒有 ticker 就視為台股（跟全站其他地方的預設配色一致）。
 function _consensusForTopic(topicName) {
   if (!_signalData || !_signalData.length) return null;
   const name = (topicName || '').trim();
   if (!name) return null;
   const bullish = new Set();
   const bearish = new Set();
+  let twCount = 0, otherCount = 0;
   for (const r of _signalData) {
     if ((r.asset || '').trim() !== name || !r.podcaster) continue;
     if (r.direction === 'bullish') bullish.add(r.podcaster);
     else if (r.direction === 'bearish') bearish.add(r.podcaster);
+    else continue;
+    if (r.ticker) { if (_isTwTicker(r.ticker)) twCount++; else otherCount++; }
   }
   if (!bullish.size && !bearish.size) return null;
-  return { bullish: bullish.size, bearish: bearish.size };
+  return { bullish: bullish.size, bearish: bearish.size, market: otherCount > twCount ? 'US' : 'TW' };
 }
 
 // 「本季熱門」卡片：取前 6 個熱門主題，只用 hot-nodes 真的有的欄位（name/episodes），
@@ -678,21 +707,32 @@ function renderMarketFocus() {
   grid.innerHTML = topics.map(t => {
     const safe = t.name.replace(/'/g, "\\'");
     const consensus = _consensusForTopic(t.name);
+    const arrow = consensus ? _directionArrowClasses(consensus.market) : null;
     const consensusHtml = consensus ? `
-      <div class="flex items-center gap-2 mt-3 flex-wrap">
-        ${consensus.bullish ? `<span class="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-1 rounded-full bg-surface-container text-secondary"><span class="material-symbols-outlined text-sm">arrow_upward</span>${consensus.bullish} 位看多</span>` : ''}
-        ${consensus.bearish ? `<span class="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-1 rounded-full bg-surface-container text-outline"><span class="material-symbols-outlined text-sm">arrow_downward</span>${consensus.bearish} 位看空</span>` : ''}
+      <div class="flex items-center gap-2 flex-wrap">
+        ${consensus.bullish ? `<span class="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-1 rounded-full bg-white/15 text-white"><span class="material-symbols-outlined text-sm ${arrow.up}">arrow_upward</span>${consensus.bullish} 位看多</span>` : ''}
+        ${consensus.bearish ? `<span class="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-1 rounded-full bg-white/10 text-white/60"><span class="material-symbols-outlined text-sm ${arrow.down}">arrow_downward</span>${consensus.bearish} 位看空</span>` : ''}
       </div>` : '';
+    // 墨綠底（#113236，跟右上角預設頭像、頂部標題同色）配白字，讓首頁最重要的這一區更吸睛；
+    // 底色變深後原本的 text-secondary／text-outline 對比不夠，標籤跟連結都跟著換成淺色系。
+    // 兩行：第一行「主題標題 ＋ 看多／看空 chip（靠右）」，最下面一行「提及集數 ＋ 查看相關內容」。
+    // chip 跟標題同一行，所以有沒有共識資料卡片高度都一樣（chip 比標題矮，不會把那行撐高）。
+    // 卡片用 flex-col，最下面那行 mt-auto 貼底，同一排的卡片標題、底部那行都各自在同一條線上。
+    // 第一行／最下面那行卡片太窄放不下時 flex-wrap 會讓 chip／連結換到下一行，不會爆版。
     return `
       <button type="button"
         onclick="filterDiscoverByTag('${safe}'); document.getElementById('tag-results-section')?.scrollIntoView({behavior:'smooth', block:'start'});"
-        class="text-left bg-surface-container-lowest rounded-2xl p-5 border border-outline-variant/10 hover:shadow-lg hover:border-outline-variant/30 transition-all">
-        <h3 class="font-['Epilogue'] font-bold text-lg text-tertiary-container leading-snug">${escapeHtml(t.name)}</h3>
-        <p class="text-xs text-outline mt-1 font-semibold">Podcast 最近 ${_topicMentionLabel(t)}</p>
-        ${consensusHtml}
-        <span class="inline-flex items-center gap-1 text-secondary text-xs font-bold mt-4">
-          查看相關內容<span class="material-symbols-outlined text-sm">arrow_forward</span>
-        </span>
+        class="flex flex-col text-left bg-tertiary-container rounded-2xl p-5 border border-white/10 hover:shadow-lg hover:bg-[#184248] transition-all">
+        <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+          <h3 class="font-['Epilogue'] font-bold text-2xl text-white leading-snug">${escapeHtml(t.name)}</h3>
+          ${consensusHtml}
+        </div>
+        <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 mt-auto pt-4">
+          <p class="text-xs text-white/70 font-semibold">Podcast 最近 ${_topicMentionLabel(t)}</p>
+          <span class="inline-flex items-center gap-1 text-primary-fixed-dim text-xs font-bold whitespace-nowrap">
+            查看相關內容<span class="material-symbols-outlined text-sm">arrow_forward</span>
+          </span>
+        </div>
       </button>`;
   }).join('');
 }
@@ -1030,3 +1070,37 @@ document.addEventListener('click', (e) => {
   const inp = document.getElementById('discover-search');
   if (dd && inp && !dd.contains(e.target) && e.target !== inp) dd.classList.add('hidden');
 });
+
+// ── 橫向捲動列（今日市場／為你推薦）：邊緣漸層 + 左右箭頭 ─────────────────
+// 滑鼠沒有橫向滾輪、捲軸又被藏起來（no-scrollbar），只能靠觸控板才滑得動。這裡依目前捲動位置
+// 在外層 .scroll-row 上設 data-can-left／data-can-right，CSS（templates/base.html）據此決定
+// 哪一側要顯示漸層與箭頭；箭頭一次捲動容器可視寬度的 80%。
+// 卡片是 JS 非同步 innerHTML 塞進來的、頁面切走再回來也會從 display:none 變回可見，所以除了
+// scroll 事件，還要看子節點變動和容器尺寸變化（ResizeObserver）才能保持狀態正確。
+function initScrollRows() {
+  document.querySelectorAll('.scroll-row').forEach(row => {
+    const track = row.querySelector('[data-scroll-track]');
+    if (!track) return;
+
+    const update = () => {
+      const max = track.scrollWidth - track.clientWidth;
+      row.dataset.canLeft  = track.scrollLeft > 4 ? '1' : '';
+      row.dataset.canRight = (max > 4 && track.scrollLeft < max - 4) ? '1' : '';
+    };
+
+    track.addEventListener('scroll', update, { passive: true });
+    window.addEventListener('resize', update);
+    track.addEventListener('load', update, true); // 卡片裡的圖片載入完可能撐開寬度
+    new ResizeObserver(update).observe(track);
+    new MutationObserver(update).observe(track, { childList: true });
+
+    row.querySelectorAll('[data-scroll-dir]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        track.scrollBy({ left: Number(btn.dataset.scrollDir) * track.clientWidth * 0.8, behavior: 'smooth' });
+      });
+    });
+
+    update();
+  });
+}
+document.addEventListener('DOMContentLoaded', initScrollRows);

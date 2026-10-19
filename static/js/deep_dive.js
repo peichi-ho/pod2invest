@@ -307,7 +307,8 @@ async function loadDeepDive(summaryId) {
     const episodeTitle = s.source_filename?.replace(/\.srt$/i, '') || s.one_sentence_summary?.slice(0, 40) + '...';
     const showName     = s.podcaster || '未知節目';
 
-    document.getElementById('dd-title').textContent = episodeTitle;
+    const titleEl = document.getElementById('dd-title');
+    titleEl.textContent = episodeTitle;
     const podcasterEl = document.getElementById('dd-podcaster');
     const podBtn = document.createElement('button');
     podBtn.className = 'font-semibold underline underline-offset-2 hover:text-secondary transition-colors';
@@ -321,9 +322,15 @@ async function loadDeepDive(summaryId) {
       dateSpan.textContent = ' · ' + s.published_at.slice(0, 10);
       podcasterEl.appendChild(dateSpan);
     }
-    // 節目日期右邊的書籤收藏按鈕——await 快取才畫，不然已收藏的集數會先閃一下未收藏的樣式。
+    // 集數標題右邊的書籤收藏按鈕（接在標題文字最後面，標題換行時會跟著最後一行）——await 快取才畫，
+    // 不然已收藏的集數會先閃一下未收藏的樣式。await 期間如果使用者已經切到別集，標題已經被
+    // 換掉了，這裡就不要把上一集的按鈕塞進新標題。
     await _ensureEpisodeFavoritesCache();
-    podcasterEl.insertAdjacentHTML('beforeend', renderEpisodeBookmarkButton(s.id, 'w-6 h-6 -mt-1 ml-1.5 align-middle'));
+    if (summaryId === currentSummaryId) {
+      // -translate-y-0.5：中文標題字體度量跟 align-middle 的算法對不上，書籤會比文字視覺中心偏低
+      // 約 2px（跟 app.js renderAssetNameStar() 的星號同一個問題），實測往上補 2px 最接近置中。
+      titleEl.insertAdjacentHTML('beforeend', renderEpisodeBookmarkButton(s.id, 'w-9 h-9 ml-1 align-middle -translate-y-0.5', 'text-2xl'));
+    }
     document.getElementById('dd-one-sentence').textContent = '"' + s.one_sentence_summary + '"';
 
     // 打開單集頁面自動記一筆觀看紀錄（同一集重複打開後端會 upsert，不會累加重複項目）。
@@ -410,28 +417,6 @@ async function loadDeepDive(summaryId) {
           }
           _ddTargetBacktestId = null;
         }
-
-        // 本集提及的標的（去重），可以直接點名字/星星跳轉、收藏——不含 Critical Thesis
-        // Points 那段自由文字裡的公司名（那邊沒有 ticker 可以解析）。
-        const tickerSection = document.getElementById('dd-ticker-section');
-        const tickerList = document.getElementById('dd-ticker-list');
-        const seenTickers = new Set();
-        const chipHtml = records.filter(r => {
-          if (!resolveAssetCategory(r.ticker)) return false;
-          const dedupeKey = r.ticker.toUpperCase();
-          if (seenTickers.has(dedupeKey)) return false;
-          seenTickers.add(dedupeKey);
-          return true;
-        }).map(r => `
-          <div class="p-4 rounded-lg bg-surface-container-lowest border border-outline-variant/20 font-['Epilogue'] font-bold text-base text-tertiary-container">
-            ${renderAssetNameStar(r.ticker, r.asset || r.ticker)}
-          </div>`).join('');
-        if (chipHtml) {
-          tickerList.innerHTML = chipHtml;
-          tickerSection.classList.remove('hidden');
-        } else {
-          tickerSection.classList.add('hidden');
-        }
       })
       .catch(() => { document.getElementById('dd-viewpoints').innerHTML = '<p class="text-outline text-sm">載入失敗</p>'; });
 
@@ -466,8 +451,6 @@ async function loadDeepDive(summaryId) {
     // 已經有新手版本（打開的就是新手版、或這集兩種版本在同一筆資料裡）就直接畫；
     // 打開的是資深版的話，等上面那支請求回來再畫，避免先閃一下資深版內容。
     if (ddSummaryData.novice || !s.source_filename) renderDdTakeaways(summaryId);
-
-    document.getElementById('dd-ticker-section').classList.add('hidden');
 
     if (_discoverCache.length) renderRelated(_discoverCache, summaryId, s.tags);
     else fetch('/api/summaries/?limit=30').then(r => r.json())
