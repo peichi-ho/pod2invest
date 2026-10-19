@@ -1,6 +1,6 @@
 // ── Shared state ──────────────────────────────────────────────
 let _discoverCache = [];
-let _pageHistory = [];
+let _pageHistory = [];   // [{ page, scrollY, tracks }]，見 goBack() 上方說明
 let _accuracyCache = null;
 let _podcastImages = {};  // show_name → image_url
 let _backOverride = null;       // 下一次 goBack() 要去的頁面，用一次就清掉（例如「查看完整摘要」這種
@@ -10,6 +10,7 @@ let _backOverrideArmed = false; // 是否已經真的顯示過 owner 頁一次�
                                  // 返回、而是改用底部導覽列等其他方式離開，_backOverride 會一直卡著沒
                                  // 被消耗掉，之後在任何頁面按返回都會被劫持跳去過期的目標——showPage()
                                  // 偵測到「已經 armed 過、卻又被呼叫」時會把過期的 override 清掉，見下方。
+let _calcBackVisible = true;    // 計算機頁要不要顯示頂部返回鍵，見 _renderPage()／_updateHeaderBack()
 
 async function loadPodcastImages() {
   try {
@@ -58,22 +59,51 @@ function escapeHtml(str) {
 }
 
 // ── Navigation ────────────────────────────────────────────────
+// _pageHistory 的每一筆是 { page, scrollY, tracks }：離開某一頁（showPage）時順便記下當時的
+// 捲動位置，按返回（goBack）回到那一頁時還原，使用者就回到剛剛點擊連結跳轉時的畫面位置，
+// 不是每次都被丟回頁面最上面。全站的頁面切換都走 showPage()／goBack()，所以所有頁面一次到位。
+//   scrollY：整頁的垂直捲動位置
+//   tracks ：頁面內橫向捲動列（[data-scroll-track]，例如首頁「今日市場」「為你推薦」）各自的
+//            scrollLeft——頁面被 display:none 隱藏後瀏覽器會把它們歸零，要自己記著還原。
+function _captureScrollState(pageId) {
+  const pageEl = document.getElementById('page-' + pageId);
+  return {
+    scrollY: window.scrollY,
+    tracks: pageEl ? [...pageEl.querySelectorAll('[data-scroll-track]')].map(el => el.scrollLeft) : [],
+  };
+}
+
+function _restoreScrollState(pageId, state) {
+  if (!state) return;
+  const pageEl = document.getElementById('page-' + pageId);
+  if (pageEl) {
+    pageEl.querySelectorAll('[data-scroll-track]').forEach((el, i) => {
+      if (state.tracks && state.tracks[i] != null) el.scrollLeft = state.tracks[i];
+    });
+  }
+  window.scrollTo({ top: state.scrollY, left: 0, behavior: 'instant' });
+}
+
 function goBack() {
   if (_backOverride) {
     const target = _backOverride;
     _backOverride = null;
     _backOverrideOwner = null;
     _backOverrideArmed = false;
-    // showPage() 進來時本來就會把同一個頁面名稱再推一次，這裡順便清掉避免多按一次沒反應
-    if (_pageHistory.length && _pageHistory[_pageHistory.length - 1] === target) {
+    // showPage() 進來時本來就會把同一個頁面名稱再推一次，這裡順便清掉避免多按一次沒反應，
+    // 也順便拿它記下的捲動位置來還原。
+    let restore = null;
+    const top = _pageHistory[_pageHistory.length - 1];
+    if (top && top.page === target) {
+      restore = top;
       _pageHistory.pop();
     }
-    _renderPage(target);
+    _renderPage(target, restore);
     return;
   }
   if (_pageHistory.length > 0) {
     const prev = _pageHistory.pop();
-    _renderPage(prev);
+    _renderPage(prev.page, prev);
   }
 }
 
@@ -91,7 +121,8 @@ function showPage(page) {
   const currentActive = document.querySelector('.page.active');
   if (currentActive) {
     const currentId = currentActive.id.replace('page-', '');
-    if (currentId !== page) _pageHistory.push(currentId);
+    // 必須在 _renderPage() 之前記：它會把目前這頁隱藏、並把捲動位置歸零
+    if (currentId !== page) _pageHistory.push({ page: currentId, ..._captureScrollState(currentId) });
   }
   _renderPage(page);
 
@@ -100,7 +131,8 @@ function showPage(page) {
   }
 }
 
-function _renderPage(page) {
+// restore：goBack() 帶進來的捲動狀態；一般前進（showPage）不帶，維持從頁面最上面開始。
+function _renderPage(page, restore = null) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-btn').forEach(b => { b.classList.remove('active'); b.classList.add('opacity-60'); });
   document.getElementById('page-' + page).classList.add('active');
@@ -120,10 +152,45 @@ function _renderPage(page) {
   // 計算機的返回鍵：從底部導覽列直接點進來（等於在切分頁，不是從某個頁面鑽進來）
   // 就不需要顯示，其他入口（深度剖析頁的「試算」、Profile 頁的「New Sim」）都是直接呼叫
   // showPage('calculator')，不會經過 navHome()，所以這個旗標不會被誤設。用完立刻消耗掉，
-  // 不會影響下一次導覽。
-  const calcBackBtn = document.getElementById('calc-back-btn');
-  if (calcBackBtn) calcBackBtn.classList.toggle('hidden', page === 'calculator' && !!window._enteredViaBottomNav);
+  // 不會影響下一次導覽，所以結果先存進 _calcBackVisible，之後 _updateHeaderBack() 再被
+  // 別的情況呼叫（例如 Assets 詳情頁開關）時不會誤用已經被清掉的旗標。
+  _calcBackVisible = !(page === 'calculator' && !!window._enteredViaBottomNav);
   window._enteredViaBottomNav = false;
+
+  _updateHeaderBack();
+  // 放在最後、各頁的 onXxxPageShow() 之後才還原，頁面高度才是最終的，不會被夾回去
+  _restoreScrollState(page, restore);
+}
+
+// ── 頂部橫幅的返回鍵 ──────────────────────────────────────────
+// 全站只有這一顆返回鍵（templates/base.html 的 #header-back-btn），各頁自己不放。
+// 兩種「頁內子畫面」（Assets 詳情、Discover 的熱門主題篩選結果）不是獨立的 page，
+// 不會經過 _renderPage()，所以它們開關時要自己呼叫 _updateHeaderBack()。
+function _updateHeaderBack() {
+  const btn = document.getElementById('header-back-btn');
+  if (!btn) return;
+  const active = document.querySelector('.page.active');
+  const page = active ? active.id.replace('page-', '') : '';
+  let show = false;
+  if (['deep-dive', 'podcaster', 'graph', 'profile'].includes(page)) show = true;
+  else if (page === 'calculator') show = _calcBackVisible;
+  else if (page === 'assets') show = !document.getElementById('assets-detail-view')?.classList.contains('hidden');
+  else if (page === 'discover') show = !document.getElementById('tag-results-section')?.classList.contains('hidden');
+  btn.classList.toggle('hidden', !show);
+}
+
+function onHeaderBack() {
+  const active = document.querySelector('.page.active');
+  const page = active ? active.id.replace('page-', '') : '';
+  if (page === 'assets' && !document.getElementById('assets-detail-view')?.classList.contains('hidden')) {
+    closeAssetDetail();
+    return;
+  }
+  if (page === 'discover' && !document.getElementById('tag-results-section')?.classList.contains('hidden')) {
+    filterDiscoverByTag(null);
+    return;
+  }
+  goBack();
 }
 
 // ── Accuracy cache (shared by discover, rankings, podcaster) ──

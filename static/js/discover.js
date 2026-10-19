@@ -530,6 +530,8 @@ async function loadWeeklySignals() {
 }
 
 // ── 熱門主題篩選（從「本季熱門」卡片點進來）─────────────────────
+let _discoverStateBeforeTag = null; // 點進主題篩選前首頁的捲動位置，返回時還原
+
 async function filterDiscoverByTag(tagName) {
   const resultsSection     = document.getElementById('tag-results-section');
   // 標籤篩選畫面會蓋掉首頁其他所有 section，這份清單要跟
@@ -545,11 +547,17 @@ async function filterDiscoverByTag(tagName) {
   if (!tagName) {
     resultsSection.classList.add('hidden');
     otherSections.forEach(el => el.classList.remove('hidden'));
+    _updateHeaderBack();
+    // 其他 section 剛剛被整段隱藏過，頁面變短、橫向捲動列也被歸零，這裡一併還原回點進來前的樣子
+    _restoreScrollState('discover', _discoverStateBeforeTag);
     return;
   }
 
+  // 要在隱藏其他 section 之前記，不然頁面高度已經變了；已經在篩選畫面裡切換主題時不要覆蓋
+  if (resultsSection.classList.contains('hidden')) _discoverStateBeforeTag = _captureScrollState('discover');
   resultsSection.classList.remove('hidden');
   otherSections.forEach(el => el.classList.add('hidden'));
+  _updateHeaderBack(); // 篩選結果是頁內子畫面，不會經過 _renderPage()，要自己通知頂部返回鍵
   document.getElementById('tag-results-title').textContent = `「${tagName}」相關節目`;
 
   const list = document.getElementById('tag-results-list');

@@ -20,6 +20,7 @@ let _assetsSortId = 'volume';
 let _assetsSearchTimer = null;
 let _assetsFetchSeq = 0;   // 過期回應防護，仿照 calculator.js 的 _scenarioFetchSeq 寫法
 let _assetsRows = [];      // 目前排名列表資料，點擊項目時查詢用（不用另外打一次 API 拿名稱）
+let _assetListScrollState = null; // 從列表點進詳情頁前的捲動位置，見 openAssetDetail()／closeAssetDetail()
 
 function initAssetsPage() {
   _renderAssetCategoryTabs();
@@ -379,7 +380,12 @@ function openAssetDetail(indexOrAsset) {
   _assetDetailCategory = category;
   _assetDetailSymbol = row.symbol;
 
-  document.getElementById('assets-list-view').classList.add('hidden');
+  // 從列表點進詳情頁前先記住列表捲到哪（要在隱藏列表之前記），closeAssetDetail() 才能還原。
+  // 已經在詳情頁裡（列表本來就是隱藏的）就不要覆蓋掉先前記的位置。
+  const listView = document.getElementById('assets-list-view');
+  if (!listView.classList.contains('hidden')) _assetListScrollState = _captureScrollState('assets');
+
+  listView.classList.add('hidden');
   document.getElementById('assets-detail-view').classList.remove('hidden');
   document.getElementById('asset-detail-name').textContent = row.name || row.symbol;
   document.getElementById('asset-detail-symbol').textContent = row.symbol;
@@ -393,6 +399,7 @@ function openAssetDetail(indexOrAsset) {
   _fetchAndRenderAssetChart(row.symbol, '1y');
   fetchStockNews(`${row.symbol}.TW`, ASSET_NEWS_IDS);
   window.scrollTo(0, 0);
+  _updateHeaderBack(); // 詳情頁是頁內子畫面，不會經過 _renderPage()，要自己通知頂部返回鍵
 }
 
 function closeAssetDetail() {
@@ -401,8 +408,10 @@ function closeAssetDetail() {
   // 如果是從別的頁面（例如首頁搜尋結果）跳進來看這支標的，_backOverride 會被設成原本
   // 那個頁面——這裡要直接跳回去，不能只收合成本頁清單，不然使用者會卡在 Assets 排行榜，
   // 回不去剛剛的搜尋結果。正常從 Assets 頁面自己點進詳情頁的情況不會設 _backOverride，
-  // 行為維持原樣（就只是收合成清單）。
+  // 行為維持原樣（就只是收合成清單），並把列表捲回剛剛點進詳情頁時的位置。
   if (_backOverride) goBack();
+  else _restoreScrollState('assets', _assetListScrollState);
+  _updateHeaderBack();
 }
 
 function setAssetStockPeriod(period) {
