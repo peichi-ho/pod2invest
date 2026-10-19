@@ -457,13 +457,14 @@ async function toggleEpisodeFavorite(btnEl, summaryId) {
   }
 }
 
-// 書籤造型收藏按鈕，deep_dive.js（單集日期旁邊）／profile.js 共用。
-function renderEpisodeBookmarkButton(summaryId, cls = 'w-8 h-8') {
+// 書籤造型收藏按鈕，deep_dive.js（單集標題旁邊）／profile.js 共用。
+// iconCls：書籤 icon 本身的大小，標題旁邊的版本會比清單裡的大。
+function renderEpisodeBookmarkButton(summaryId, cls = 'w-8 h-8', iconCls = 'text-xl') {
   const isFav = !!(_episodeFavoritesCache && _episodeFavoritesCache.has(summaryId));
   return `<button type="button" data-ep-fav-id="${summaryId}" onclick="event.stopPropagation(); toggleEpisodeFavorite(this, ${summaryId})"
     class="inline-flex items-center justify-center ${cls} flex-shrink-0 ${isFav ? 'text-[#d97f12]' : 'text-outline/40'} hover:opacity-70 transition-opacity"
     title="收藏這一集">
-    <span class="material-symbols-outlined text-xl" style="font-variation-settings:'FILL' ${isFav ? 1 : 0}">bookmark</span>
+    <span class="material-symbols-outlined ${iconCls}" style="font-variation-settings:'FILL' ${isFav ? 1 : 0}">bookmark</span>
   </button>`;
 }
 
