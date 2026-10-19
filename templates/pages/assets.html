@@ -20,7 +20,7 @@
          結果顯示在輸入框正下方的下拉建議清單，不會動到下面的主排名列表 -->
     <div class="relative mb-5">
       <span class="material-symbols-outlined absolute left-4 top-1/2 -translate-y-1/2 text-outline/60 text-xl pointer-events-none">search</span>
-      <input id="assets-search" type="text" placeholder="搜尋代碼或名稱，如 2330 / 台積電"
+      <input id="assets-search" data-clearable type="text" placeholder="搜尋代碼或名稱，如 2330 / 台積電"
         oninput="onAssetSearchInput()" onkeydown="onAssetSearchKeydown(event)"
         class="w-full pl-11 pr-4 py-3 bg-surface-container-lowest border-none rounded-full focus:ring-2 focus:ring-secondary font-body text-sm text-on-surface-variant"/>
       <div id="assets-search-dropdown" class="hidden absolute left-0 right-0 top-full mt-2 bg-surface-container-lowest rounded-2xl shadow-xl z-50 border border-outline-variant/20 max-h-96 overflow-y-auto"></div>

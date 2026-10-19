@@ -19,7 +19,7 @@
       <div id="panel-manual">
         <label class="font-label text-sm font-bold uppercase tracking-widest text-outline">股票代號或名稱</label>
         <div class="relative mt-2 max-w-md">
-          <input id="in-ticker" type="text" value="2330.TW" autocomplete="off" spellcheck="false"
+          <input id="in-ticker" data-clearable type="text" value="2330.TW" autocomplete="off" spellcheck="false"
             placeholder="輸入代號或名稱，如 2330 / 台積電 / NVDA"
             oninput="onTickerSearchInput()" onkeydown="onTickerSearchKeydown(event)"
             class="w-full px-4 py-3 bg-surface-container-lowest border-none rounded-full focus:ring-2 focus:ring-secondary font-body text-on-surface-variant"/>

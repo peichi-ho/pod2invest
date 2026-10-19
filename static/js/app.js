@@ -580,6 +580,32 @@ function renderHeaderAvatar() {
       : `<div class="w-full h-full flex items-center justify-center" style="background:#113236"><span class="material-symbols-outlined text-white text-2xl" style="font-variation-settings:'FILL' 1">person</span></div>`;
 }
 
+// ── 搜尋框的清除（✕）按鈕 ─────────────────────────────────────
+// 在輸入框加上 data-clearable 就會在右邊多一顆 ✕，點下去清空文字。顯示／隱藏全部交給 CSS
+// （templates/base.html 的 input:placeholder-shown + .input-clear-btn），這裡只管插入按鈕和點擊：
+// 清空後補送一個 input 事件，各搜尋框原本寫在 oninput 的邏輯（收起下拉、清掉已選標的提示）
+// 就照常跑，不用每個搜尋框各自再接一份「清除」邏輯。
+function initClearableInputs() {
+  document.querySelectorAll('input[data-clearable]').forEach(input => {
+    if (input.nextElementSibling?.classList.contains('input-clear-btn')) return;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'input-clear-btn';
+    btn.setAttribute('aria-label', '清除搜尋內容');
+    btn.title = '清除';
+    btn.innerHTML = '<span class="material-symbols-outlined" style="font-size:18px">close</span>';
+    btn.addEventListener('mousedown', e => e.preventDefault()); // 按 ✕ 時不要讓輸入框失焦
+    btn.addEventListener('click', () => {
+      input.value = '';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.focus();
+    });
+    input.insertAdjacentElement('afterend', btn); // 一定要緊接在輸入框後面，CSS 的相鄰選擇器才抓得到
+    input.style.paddingRight = '3rem';            // 文字不要被 ✕ 蓋住
+  });
+}
+document.addEventListener('DOMContentLoaded', initClearableInputs);
+
 // ── Boot ─────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   loadPodcastImages();

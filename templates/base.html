@@ -73,6 +73,12 @@
   .scroll-row[data-can-left="1"]  .scroll-row-arrow--left, .scroll-row[data-can-right="1"] .scroll-row-arrow--right { opacity: 1; pointer-events: auto; }
   /* 觸控裝置本來就能滑，箭頭只給有滑鼠的環境；漸層在觸控裝置上仍保留當作「還有更多」的提示 */
   @media (hover: none) { .scroll-row-arrow { display: none; } }
+  /* 搜尋框右側的清除（✕）按鈕，由 app.js 的 initClearableInputs() 對有 data-clearable 的輸入框插入。
+     用 :placeholder-shown 判斷有沒有內容——有內容（沒在顯示 placeholder）才出現，程式碼直接設定
+     輸入框的值（例如計算機預設的 2330.TW、選到下拉選項）時也會即時反應，不用另外同步狀態。 */
+  .input-clear-btn { position: absolute; right: .875rem; top: 50%; transform: translateY(-50%); z-index: 2; width: 28px; height: 28px; border-radius: 9999px; display: flex; align-items: center; justify-content: center; color: #717879; background: transparent; transition: background-color .15s ease, color .15s ease; }
+  .input-clear-btn:hover { background: #e5e3d9; color: #113236; }
+  input:placeholder-shown + .input-clear-btn { display: none; }
   .asymmetric-grid { display: grid; grid-template-columns: 1.2fr 0.8fr; gap: 2rem; }
   @media (max-width: 768px) { .asymmetric-grid { grid-template-columns: 1fr; } }
   .nav-btn { color: #286671; }
