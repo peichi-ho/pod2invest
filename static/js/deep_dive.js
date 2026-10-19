@@ -4,6 +4,29 @@ let ddCurrentMode = 'novice';
 let _ddAutoPlay   = false;
 let _ddTargetBacktestId = null;
 let _ddTargetArgTerms   = null;  // 從搜尋結果點進來時帶的命中字串，見 renderDdModeContent()
+let _ddActiveArgBtn     = null;  // 目前由哪顆「關鍵論點」播放鈕啟動的播放；只有它會顯示暫停 icon
+let _ddAudioSyncBound   = false;
+
+// 播放／暫停 icon 統一由 <audio> 的 play/pause/ended 事件驅動，這樣不管是關鍵論點的按鈕、
+// 上方主播放器、或是播到結尾，各處的 icon 都不會彼此對不上。
+function _ddSyncPlayIcons() {
+  const audio   = document.getElementById('dd-audio');
+  const playing = !!audio && !audio.paused && !audio.ended;
+  const mainIcon = document.getElementById('dd-play-icon');
+  if (mainIcon) mainIcon.textContent = playing ? 'pause' : 'play_arrow';
+  document.querySelectorAll('.dd-arg-play-btn').forEach(btn => {
+    const icon = btn.querySelector('.dd-arg-play-icon');
+    if (icon) icon.textContent = (playing && btn === _ddActiveArgBtn) ? 'pause' : 'play_arrow';
+  });
+}
+
+function _ddBindAudioIconSync() {
+  if (_ddAudioSyncBound) return;
+  const audio = document.getElementById('dd-audio');
+  if (!audio) return;
+  ['play', 'pause', 'ended'].forEach(evt => audio.addEventListener(evt, _ddSyncPlayIcons));
+  _ddAudioSyncBound = true;
+}
 
 function openDeepDive(summaryId, autoPlay = false, targetBacktestId = null, targetArgTerms = null) {
   // 訪客（未登入）可以自由瀏覽首頁/排行榜/搜尋，但打開單集深度摘要要先登入——
@@ -19,6 +42,8 @@ function openDeepDive(summaryId, autoPlay = false, targetBacktestId = null, targ
   _ddAutoPlay      = autoPlay;
   _ddTargetBacktestId = targetBacktestId;
   _ddTargetArgTerms   = targetArgTerms;
+  _ddActiveArgBtn     = null;
+  _ddBindAudioIconSync();
   showPage('deep-dive');
   loadDeepDive(summaryId);
   loadMindmap(summaryId);
@@ -157,6 +182,7 @@ function renderDdModeContent(mode) {
 
   const args = s.arguments || [];
   window._ddArgs = args;
+  _ddActiveArgBtn = null; // 下面會整段 innerHTML 重畫，舊的按鈕參照會失效
   let argHtml = '';
   args.forEach((arg, i) => {
     const isLast      = i === args.length - 1;
@@ -183,8 +209,8 @@ function renderDdModeContent(mode) {
       <div class="${isLast ? '' : 'border-b border-outline-variant/30'} py-8 px-2 rounded-lg" data-arg-index="${i}">
         <div class="flex flex-col md:flex-row gap-5">
           <div class="md:w-28 flex-shrink-0">
-            <button onclick="playAtTimestamp('${timestamp}')" class="bg-secondary-container text-tertiary-container font-bold px-4 py-2 rounded-full text-sm hover:scale-95 transition-transform flex items-center gap-2">
-              <span class="material-symbols-outlined text-sm" style="font-variation-settings: 'FILL' 1;">play_arrow</span>
+            <button onclick="toggleArgAudio(this, '${timestamp}')" class="dd-arg-play-btn bg-secondary-container text-tertiary-container font-bold px-4 py-2 rounded-full text-sm hover:scale-95 transition-transform flex items-center gap-2">
+              <span class="dd-arg-play-icon material-symbols-outlined text-sm" style="font-variation-settings: 'FILL' 1;">play_arrow</span>
               ${timestamp}
             </button>
           </div>
@@ -507,7 +533,9 @@ function seekAudio(event) {
   audio.currentTime = ratio * audio.duration;
 }
 
-function playAtTimestamp(ts) {
+// argBtn：從「關鍵論點」按鈕啟動時帶入，讓該顆按鈕顯示暫停 icon；其他入口（例如觀點驗證）不帶，
+// 會把先前記的關鍵論點按鈕清掉，避免兩邊同時顯示「播放中」。
+function playAtTimestamp(ts, argBtn = null) {
   const audioEl = document.getElementById('dd-audio');
   if (!audioEl || !audioEl.src) { alert('此集無音檔連結'); return; }
   const parts   = ts.split(':').map(Number);
@@ -515,9 +543,22 @@ function playAtTimestamp(ts) {
   if (parts.length === 2) seconds = parts[0] * 60 + parts[1];
   else if (parts.length === 3) seconds = parts[0] * 3600 + parts[1] * 60 + parts[2];
   audioEl.currentTime = seconds;
-  audioEl.play();
-  document.getElementById('dd-play-icon').textContent = 'pause';
-  document.getElementById('dd-audio-player').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  audioEl.play().catch(() => _ddSyncPlayIcons()); // 被瀏覽器擋掉時 icon 要退回播放狀態
+  _ddActiveArgBtn = argBtn;
+  // 已經在播放中時再呼叫 play() 不會觸發 play 事件，所以這裡要主動同步一次 icon
+  _ddSyncPlayIcons();
+}
+
+// 關鍵論點的播放鈕：同一顆再按一次＝暫停（暫停後再按＝從目前位置繼續）；
+// 按另一顆＝跳到那一段播放。播完（ended）後再按會從該段時間點重新播。
+function toggleArgAudio(btn, ts) {
+  const audioEl = document.getElementById('dd-audio');
+  if (audioEl && audioEl.src && _ddActiveArgBtn === btn && !audioEl.ended) {
+    if (audioEl.paused) audioEl.play().catch(() => {});
+    else audioEl.pause();
+    return; // icon 由 play/pause 事件觸發 _ddSyncPlayIcons() 更新
+  }
+  playAtTimestamp(ts, btn);
 }
 
 // ── Mind map ──────────────────────────────────────────────────
