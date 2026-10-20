@@ -182,6 +182,16 @@ class TickerMap(models.Model):
     verified   = models.BooleanField(default=False)              # 人工確認過
     created_at = models.DateTimeField(auto_now_add=True)
     zh_name    = models.CharField(max_length=50, blank=True)
+    # 這個別名對到大表(IndustryClassification)的哪一檔標的；前端顯示名稱以大表為準。
+    # ticker 欄位暫時保留(resolve_ticker 等還在讀)。對不到大表的留 null，不猜。
+    # SET_NULL：大表是全專案共用的，刪掉大表一列不該連帶刪掉別名。
+    classification = models.ForeignKey(
+        "IndustryClassification",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="aliases",
+    )
 
     class Meta:
         db_table  = "ticker_map"
@@ -210,6 +220,14 @@ class IndustryClassification(models.Model):
     sector_name   = models.CharField(max_length=50, blank=True)   # 中文sector，主要美股才有
     # 這筆分類實際用哪套方法查到的："twse" / "yfinance" / ""(兩邊都查無資料)
     source        = models.CharField(max_length=20, blank=True)
+    # 標的名稱——全平台顯示名稱以這兩欄為準(見 display_name)。由
+    # manage.py backfill_industry_names 填入：台股用TWSE/TPEx官方簡稱，
+    # 美股英文名用yfinance，中文名只從TickerMap既有的zh_name補，不自己翻譯。
+    zh_name       = models.CharField(max_length=100, blank=True)  # 台積電 / 輝達
+    en_name       = models.CharField(max_length=200, blank=True)  # TSMC / NVIDIA
+    # 名稱實際從哪裡來的："twse" / "tpex" / "twse_quote" / "tpex_quote" / "yfinance" / "tickermap"
+    # 中英文來源不同時用 "+" 串起來，例如 "tickermap+yfinance"
+    name_source   = models.CharField(max_length=40, blank=True)
     updated_at    = models.DateTimeField(auto_now=True)
 
     class Meta:
@@ -218,6 +236,11 @@ class IndustryClassification(models.Model):
 
     def __str__(self):
         return f"{self.ticker} ({self.market}) → {self.industry_name or '(未分類)'}"
+
+    @property
+    def display_name(self) -> str:
+        """前端顯示用：中文名優先，沒有就英文名，都沒有才顯示ticker。"""
+        return self.zh_name or self.en_name or self.ticker
 
 
 class FinancialReportCache(models.Model):
