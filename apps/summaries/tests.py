@@ -48,3 +48,17 @@ class TwCodeTickerTests(SimpleTestCase):
     def test_not_tw_code(self):
         self.assertIsNone(_rule_based_ticker("00685LL", allow_raw_ticker=False))
         self.assertIsNone(_rule_based_ticker("123", allow_raw_ticker=False))
+
+
+class AliasMapTwCodeTests(SimpleTestCase):
+    # 用 TWSE／TPEx 官方代號清單核對過的更正
+    def test_otc_suffix(self):
+        for asset in ["神盾", "茂達", "廣明", "宜鼎", "弘塑", "加百裕", "崑鼎", "東洋", "元太", "鈺創", "波若威"]:
+            self.assertTrue(_rule_based_ticker(asset).endswith(".TWO"), asset)
+
+    def test_wrong_codes(self):
+        for asset, ticker in [("系微", "6231.TWO"), ("十銓", "4967.TW"), ("訊芯", "6451.TW"),
+                              ("豐達科", "3004.TW"), ("台特化", "4772.TWO"), ("聖暉", "5536.TWO"),
+                              ("志強", "6768.TW"), ("精銳", "4583.TW"), ("中鋼特", "2002A.TW"),
+                              ("貿聯", "3665.TW"), ("貿聯-KY", "3665.TW"), ("貿聯KY", "3665.TW")]:
+            self.assertEqual(_rule_based_ticker(asset), ticker, asset)
