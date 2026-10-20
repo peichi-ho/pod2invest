@@ -33,3 +33,18 @@ class ResolveTickerTests(SimpleTestCase):
     def test_raw_ticker_after_ticker_map(self):
         self.assertEqual(resolve_ticker("AAOI"), "AAOI")
         self.assertEqual(resolve_ticker("CPU"), "")
+
+
+class TwCodeTickerTests(SimpleTestCase):
+    def test_letter_suffix_etf_codes(self):
+        for asset, ticker in [("00685L", "00685L.TW"), ("00632R", "00632R.TW"),
+                              ("00981A", "00981A.TW"), ("00635U", "00635U.TW"),
+                              ("00679B", "00679B.TWO"), ("00679b", "00679B.TWO"),
+                              ("2330", "2330.TW"), ("006208", "006208.TW")]:
+            self.assertEqual(_rule_based_ticker(asset), ticker, asset)
+            # SimpleTestCase 查不到大表，退回同一個預設
+            self.assertEqual(resolve_ticker(asset), ticker, asset)
+
+    def test_not_tw_code(self):
+        self.assertIsNone(_rule_based_ticker("00685LL", allow_raw_ticker=False))
+        self.assertIsNone(_rule_based_ticker("123", allow_raw_ticker=False))

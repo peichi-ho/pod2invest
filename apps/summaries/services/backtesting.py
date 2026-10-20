@@ -298,6 +298,20 @@ def _raw_ticker(asset: str) -> Optional[str]:
     return None
 
 
+# 台股代號：4～6 碼數字，ETF 可能多 1 個英文字母結尾（00685L 槓桿、00632R 反向、
+# 00679B 債券、00981A 主動式、00635U 期貨）
+_TW_CODE_RE = re.compile(r"^\d{4,6}[A-Za-z]?$")
+
+
+def _tw_code_ticker(code: str) -> str:
+    """
+    不查資料庫時的台股代號後綴：B 結尾的債券 ETF 幾乎都在櫃買中心掛牌，用 .TWO，
+    其他預設 .TW。純數字上櫃股（例如 8299）要靠 resolve_ticker() 查大表才分得出來。
+    """
+    code = code.upper()
+    return f"{code}.TWO" if code.endswith("B") else f"{code}.TW"
+
+
 def _rule_based_ticker(asset: str, allow_raw_ticker: bool = True) -> Optional[str]:
     """
     第一層：規則直判，不查資料庫。
@@ -306,9 +320,9 @@ def _rule_based_ticker(asset: str, allow_raw_ticker: bool = True) -> Optional[st
     """
     a = asset.strip()
 
-    # 純數字台股代號
-    if re.match(r"^\d{4,6}$", a):
-        return f"{a}.TW"
+    # 台股代號（含英文字母結尾的 ETF）
+    if _TW_CODE_RE.match(a):
+        return _tw_code_ticker(a)
 
     # ── 知名公司中文 / 別名 對應 ─────────────────────────────────────────────
     ALIAS_MAP = {
@@ -513,10 +527,6 @@ def _rule_based_ticker(asset: str, allow_raw_ticker: bool = True) -> Optional[st
         if any(k in a for k in keys):
             return ticker
 
-    # ── ETF 代號（含 B 結尾債券 ETF）────────────────────────────────────────
-    if re.match(r"^\d{5}[BbRr]$", a):
-        return f"{a}.TW"
-
     # 已是英文 ticker（純大寫字母，最多 6 碼）。
     # 放在別名對照表之後才判斷，避免像 NVIDIA 這種剛好全大寫又<=6碼的
     # 公司名被誤判成合法ticker而跳過別名/TickerMap查詢。
@@ -531,6 +541,24 @@ def resolve_ticker(asset: str) -> str:
     股票名稱 → Yahoo Finance ticker。
     查不到回傳空字串（後續標記 skip）。
     """
+    # 台股代號：上市 .TW／上櫃 .TWO 看大表 IndustryClassification 有哪一個，
+    # 大表沒收錄（多數 ETF）就照 _tw_code_ticker() 的預設
+    a = asset.strip()
+    if _TW_CODE_RE.match(a):
+        code = a.upper()
+        try:
+            from apps.summaries.models import IndustryClassification
+            found = set(
+                IndustryClassification.objects.using("summariesdb")
+                .filter(ticker__in=[f"{code}.TW", f"{code}.TWO"])
+                .values_list("ticker", flat=True)
+            )
+            if len(found) == 1:
+                return found.pop()
+        except Exception:
+            pass
+        return _tw_code_ticker(code)
+
     # 第一層：規則（原樣放行英文 ticker 那條留到 TickerMap 之後）
     t = _rule_based_ticker(asset, allow_raw_ticker=False)
     if t:
