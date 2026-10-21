@@ -82,3 +82,23 @@ class AliasMapTwCodeTests(SimpleTestCase):
         for asset, ticker in [("日圓", "JPYUSD=X"), ("日元", "JPYUSD=X"), ("日圓/台幣匯率", "JPYTWD=X"),
                               ("美元兌日圓", "JPY=X")]:
             self.assertEqual(_rule_based_ticker(asset), ticker, asset)
+
+
+class TpexIndexPriceTests(SimpleTestCase):
+    """櫃買指數（^TWOTCI）改抓櫃買中心月查詢，解析成跟 yfinance 一樣的收盤價 Series。"""
+
+    def test_parses_monthly_json(self):
+        from datetime import date
+        from unittest import mock
+        from apps.summaries.services import price_history
+
+        payload = {"tables": [{"data": [
+            ["2025/06/02", "226.93", "226.93", "221.29", "222.04", "-5.23"],
+            ["2025/06/03", "222.37", "223.97", "222.36", "1,222.50", "0.46"],
+        ]}]}
+        resp = mock.Mock(**{"json.return_value": payload, "raise_for_status.return_value": None})
+        price_history._tpex_month_cache.clear()
+        with mock.patch.object(price_history.requests, "get", return_value=resp):
+            s = price_history.get_close_history("^TWOTCI", date(2025, 6, 1), date(2025, 6, 4))
+        self.assertEqual(list(s.values), [222.04, 1222.50])
+        self.assertEqual(str(s.index[0].date()), "2025-06-02")
