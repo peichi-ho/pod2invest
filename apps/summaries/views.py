@@ -353,7 +353,12 @@ class BacktestingBySummaryAPIView(APIView):
 
 
 class AllBacktestingAPIView(APIView):
-    """全部 backtesting 紀錄（排除 skip），附帶 podcaster / source_filename。"""
+    """全部 backtesting 紀錄（排除 skip），附帶 podcaster / source_filename。
+
+    只取 pro 摘要的回測列：novice 的回測列是 pro 的複本，全部納入時同一筆預測會出現兩次，
+    LIMIT 也會被重複列吃掉一半（節目頁、Weekly Signals 的次數也會加倍）。
+    單集頁（BacktestingBySummaryAPIView）照 summary_id 取，novice 頁面仍讀自己那份。
+    """
     def get(self, request):
         limit = int(request.query_params.get("limit", 300))
         podcaster = request.query_params.get("podcaster", "").strip()
@@ -391,6 +396,7 @@ class AllBacktestingAPIView(APIView):
                     FROM backtesting b
                     JOIN summaries_summaryrecord s ON b.summary_id = s.id
                     WHERE b.result != 'skip'
+                      AND s.mode = 'pro'
                       AND s.podcaster = %s
                       {sector_filter_sql}
                     ORDER BY b.id DESC
@@ -418,7 +424,7 @@ class AllBacktestingAPIView(APIView):
                            s.podcaster, s.source_filename
                     FROM backtesting b
                     JOIN summaries_summaryrecord s ON b.summary_id = s.id
-                    WHERE b.result != 'skip' AND b.start_time < %s
+                    WHERE b.result != 'skip' AND s.mode = 'pro' AND b.start_time < %s
                     ORDER BY b.start_time DESC, b.id DESC
                     LIMIT %s
                 """, [before, limit])
@@ -439,6 +445,7 @@ class AllBacktestingAPIView(APIView):
                         FROM backtesting b
                         JOIN summaries_summaryrecord s ON b.summary_id = s.id
                         WHERE b.result != 'skip'
+                          AND s.mode = 'pro'
                           AND s.podcaster IS NOT NULL AND s.podcaster != ''
                     )
                     SELECT id, summary_id, ticker, asset, direction,

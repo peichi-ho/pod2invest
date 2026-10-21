@@ -21,18 +21,22 @@ from apps.summaries.models import SpeakerAccuracy
 
 # ── SQL ─────────────────────────────────────────────────────────────────────
 
-# 全體準確率（sector = ''），相同 podcaster + thesis 只算一次
+# 全體準確率（sector = ''）。只取 pro 摘要的回測列：novice 的 outlook_calls 是從 pro 複製的，
+# 同一集兩份回測列內容一樣，全部納入會算兩次（跟計算機 scenario.py 一樣只取 pro）。
+# 去重 key 用整筆預測（同集、同標的、同方向、同期間、同論述），不能只用 thesis：
+# 同一句論述常同時點名好幾檔標的，那是不同的預測。
 _SQL_OVERALL = """
 WITH deduped AS (
-    SELECT DISTINCT ON (sr.podcaster, b.thesis)
+    SELECT DISTINCT ON (sr.podcaster, b.episode_id, b.asset, b.ticker, b.direction, b.timeframe_raw, b.start_time, b.end_time, b.thesis)
         sr.podcaster,
         b.result
     FROM backtesting b
     JOIN summaries_summaryrecord sr ON b.summary_id = sr.id
     WHERE b.result IN ('pass','fail','skip')
+      AND sr.mode = 'pro'
       AND sr.podcaster != ''
       AND b.thesis != ''
-    ORDER BY sr.podcaster, b.thesis, b.id
+    ORDER BY sr.podcaster, b.episode_id, b.asset, b.ticker, b.direction, b.timeframe_raw, b.start_time, b.end_time, b.thesis, b.id
 )
 SELECT
     podcaster,
@@ -46,10 +50,10 @@ GROUP BY podcaster
 ORDER BY podcaster;
 """
 
-# 分產業準確率，同樣對 (podcaster, sector, thesis) 去重
+# 分產業準確率，同樣對 (podcaster, sector, 預測) 去重
 _SQL_BY_SECTOR = """
 WITH deduped AS (
-    SELECT DISTINCT ON (sr.podcaster, tm_agg.sector, b.thesis)
+    SELECT DISTINCT ON (sr.podcaster, tm_agg.sector, b.episode_id, b.asset, b.ticker, b.direction, b.timeframe_raw, b.start_time, b.end_time, b.thesis)
         sr.podcaster,
         tm_agg.sector,
         b.result
@@ -62,9 +66,10 @@ WITH deduped AS (
         GROUP BY ticker
     ) tm_agg ON b.ticker = tm_agg.ticker
     WHERE b.result IN ('pass','fail','skip')
+      AND sr.mode = 'pro'
       AND sr.podcaster != ''
       AND b.thesis != ''
-    ORDER BY sr.podcaster, tm_agg.sector, b.thesis, b.id
+    ORDER BY sr.podcaster, tm_agg.sector, b.episode_id, b.asset, b.ticker, b.direction, b.timeframe_raw, b.start_time, b.end_time, b.thesis, b.id
 )
 SELECT
     podcaster,

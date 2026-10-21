@@ -31,9 +31,11 @@ class Command(BaseCommand):
         min_eval = options["min_eval"]
 
         # 一次撈完所有非 pending 記錄，附帶 podcaster
+        # 只取 pro：novice 的回測列是 pro 的複本，全部納入每筆會算兩次
         qs = (
             BacktestingRecord.objects
             .using("summariesdb")
+            .filter(summary__mode="pro")
             .exclude(result="pending")
             .select_related("summary")
             .values("result", "summary__podcaster", "asset", "ticker",
