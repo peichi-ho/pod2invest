@@ -311,6 +311,18 @@ def _raw_ticker(asset: str) -> Optional[str]:
 # 台股代號：4～6 碼數字，ETF 可能多 1 個英文字母結尾（00685L 槓桿、00632R 反向、
 # 00679B 債券、00981A 主動式、00635U 期貨）
 _TW_CODE_RE = re.compile(r"^\d{4,6}[A-Za-z]?$")
+# 名稱後面括號附代號，例如「元大S&P黃金 (00635U)」「國泰費城半導體ETF (00830)」：
+# 代號才是準的，要先用代號判斷，不然名稱裡的「S&P」「費城半導體」會先被指數規則接走
+_TW_CODE_IN_PARENS_RE = re.compile(r"[（(]\s*(\d{4,6}[A-Za-z]?)\s*[)）]")
+
+
+def _tw_code_of(asset: str) -> Optional[str]:
+    """asset 本身是台股代號，或名稱後面括號附了台股代號，就回傳代號（大寫）。"""
+    a = asset.strip()
+    if _TW_CODE_RE.match(a):
+        return a.upper()
+    m = _TW_CODE_IN_PARENS_RE.search(a)
+    return m.group(1).upper() if m else None
 
 
 def _tw_code_ticker(code: str) -> str:
@@ -330,9 +342,10 @@ def _rule_based_ticker(asset: str, allow_raw_ticker: bool = True) -> Optional[st
     """
     a = asset.strip()
 
-    # 台股代號（含英文字母結尾的 ETF）
-    if _TW_CODE_RE.match(a):
-        return _tw_code_ticker(a)
+    # 台股代號（含英文字母結尾的 ETF；也包含名稱後面括號附的代號）
+    code = _tw_code_of(a)
+    if code:
+        return _tw_code_ticker(code)
 
     # ── 知名公司中文 / 別名 對應 ─────────────────────────────────────────────
     ALIAS_MAP = {
@@ -553,9 +566,8 @@ def resolve_ticker(asset: str) -> str:
     """
     # 台股代號：上市 .TW／上櫃 .TWO 看大表 IndustryClassification 有哪一個，
     # 大表沒收錄（多數 ETF）就照 _tw_code_ticker() 的預設
-    a = asset.strip()
-    if _TW_CODE_RE.match(a):
-        code = a.upper()
+    code = _tw_code_of(asset)
+    if code:
         try:
             from apps.summaries.models import IndustryClassification
             found = set(
