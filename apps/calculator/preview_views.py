@@ -298,9 +298,10 @@ class StockSearchPreviewAPIView(APIView):
 
     GET參數：q。回傳 {"results": [{ticker, name, market, exact}]}，最多8筆。
     資料來源(依序合併、去重)：
-      1. TickerMap(summariesdb，約250檔，台股與美股的中文名稱，團隊維護)
-      2. 證交所上市股票清單(views._get_tw_stock_map，24小時快取)，補 TickerMap 沒收的台股
-      3. 輸入看起來就是代號(例如 AMD)但上面都找不到時，原樣當作代號回傳，不擋掉使用者
+      1. TickerMap(summariesdb，台股與美股的別名，團隊維護)
+      2. 大表 IndustryClassification(全部標的的顯示名稱／中文名／英文名)
+      3. 證交所上市股票清單(views._get_tw_stock_map，24小時快取)，補 TickerMap 沒收的台股
+      4. 輸入看起來就是代號(例如 AMD)但上面都找不到時，原樣當作代號回傳，不擋掉使用者
     排序：代號／名稱完全相同 > 代號開頭 > 名稱開頭 > 名稱或代號包含。
     exact=True 代表「代號或名稱跟輸入完全一樣」，前端用它判斷是不是可以直接帶入。
     """
@@ -382,6 +383,12 @@ class StockSearchPreviewAPIView(APIView):
         for r in rows:
             consider(r["ticker"], [r.get("zh_name"), r.get("asset_name")], r.get("exchange") or "")
 
+        # 大表 IndustryClassification(約2,600檔，含 TickerMap 沒收的美股、ETF、上櫃股)，
+        # 用顯示名稱、中文名、英文名比對，例如「希捷」「Seagate」都找得到 STX
+        from apps.summaries.services.display_names import search_entries
+        for ticker, names in search_entries():
+            consider(ticker, names)
+
         # 證交所上市清單(含 TickerMap 沒收的)。查不到時(連線失敗)就只用上面的結果。
         try:
             from .views import _get_tw_stock_map
@@ -391,7 +398,8 @@ class StockSearchPreviewAPIView(APIView):
             pass
 
         # 輸入本身就像代號(例如 AMD、BRK-B、2330.TW)，但都沒找到：原樣當作代號給使用者選
-        if re.fullmatch(r"[A-Za-z0-9.\-^=]{1,15}", q) and not any(v["ticker"].lower() == ql for v in found.values()):
+        # 已經有名稱相同或開頭相同的結果(例如輸入「Seagate」找到 STX)就不再多塞一個假代號「SEAGATE」
+        if re.fullmatch(r"[A-Za-z0-9.\-^=]{1,15}", q) and not any(v["ticker"].lower() == ql or v["rank"] <= 2 for v in found.values()):
             tk = q.upper()
             if tk.isdigit():
                 tk = tk + ".TW"

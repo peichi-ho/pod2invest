@@ -15,6 +15,7 @@ _CACHE_TTL_SECONDS = 600
 _KEEP_KY = {"材料"}
 _lock = threading.Lock()
 _cache: dict[str, str] = {}
+_entries: list[tuple[str, list[str]]] = []  # 搜尋用：(ticker, [顯示名稱, 中文名, 英文名])
 _cache_loaded_at = 0.0
 
 
@@ -43,30 +44,40 @@ def format_display_name(ticker: str, zh_name: str, en_name: str, market: str, in
     return name or ticker
 
 
-def _load() -> dict[str, str]:
+def _load() -> tuple[dict[str, str], list[tuple[str, list[str]]]]:
     from apps.summaries.models import IndustryClassification
-    out = {}
+    names, entries = {}, []
     for ticker, zh_name, en_name, market, industry_name in (
         IndustryClassification.objects.using("summariesdb")
         .values_list("ticker", "zh_name", "en_name", "market", "industry_name")
     ):
-        if zh_name or en_name:
-            out[ticker] = format_display_name(ticker, zh_name, en_name, market, industry_name)
-    return out
+        if not (zh_name or en_name):
+            continue
+        display = format_display_name(ticker, zh_name, en_name, market, industry_name)
+        names[ticker] = display
+        aliases = [display, (zh_name or "").replace("*", "").strip(), en_name or ""]
+        entries.append((ticker, list(dict.fromkeys(a for a in aliases if a))))
+    return names, entries
 
 
 def _get_cache() -> dict[str, str]:
-    global _cache, _cache_loaded_at
+    global _cache, _entries, _cache_loaded_at
     if time.time() - _cache_loaded_at < _CACHE_TTL_SECONDS:
         return _cache
     with _lock:
         if time.time() - _cache_loaded_at >= _CACHE_TTL_SECONDS:
             try:
-                _cache = _load()
+                _cache, _entries = _load()
             except Exception:
                 pass  # 資料庫暫時連不上就沿用舊快取，不讓整個 API 失敗
             _cache_loaded_at = time.time()
     return _cache
+
+
+def search_entries() -> list[tuple[str, list[str]]]:
+    """大表全部標的的 (ticker, [顯示名稱, 中文名, 英文名])，給搜尋建議比對用。"""
+    _get_cache()
+    return _entries
 
 
 def display_name_for(ticker: str | None) -> str | None:
