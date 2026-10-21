@@ -71,6 +71,12 @@ class AliasMapTwCodeTests(SimpleTestCase):
         for asset in ["VNA", "XTI", "ASKY", "PCB", "EVG", "NAC"]:
             self.assertIsNone(_rule_based_ticker(asset), asset)
 
+    def test_tw_code_in_parentheses(self):
+        # 括號裡的代號優先，不能被名稱裡的「S&P」「費城半導體」接走變成指數
+        for asset, ticker in [("元大S&P黃金 (00635U)", "00635U.TW"), ("元大S&P黃金正2 (00708L)", "00708L.TW"),
+                              ("國泰費城半導體ETF (00830)", "00830.TW")]:
+            self.assertEqual(_rule_based_ticker(asset), ticker, asset)
+
     def test_yen_direction(self):
         # 講日圓本身要用日圓升值時會漲的 JPYUSD=X，不能用美元兌日圓的 JPY=X
         for asset, ticker in [("日圓", "JPYUSD=X"), ("日元", "JPYUSD=X"), ("日圓/台幣匯率", "JPYTWD=X"),
