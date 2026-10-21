@@ -62,3 +62,7 @@ class AliasMapTwCodeTests(SimpleTestCase):
                               ("志強", "6768.TW"), ("精銳", "4583.TW"), ("中鋼特", "2002A.TW"),
                               ("貿聯", "3665.TW"), ("貿聯-KY", "3665.TW"), ("貿聯KY", "3665.TW")]:
             self.assertEqual(_rule_based_ticker(asset), ticker, asset)
+
+    def test_misspelled_names(self):
+        for asset, ticker in [("JPP-KY", "5284.TW"), ("升達科", "3491.TWO"), ("麥克", "6831.TW")]:
+            self.assertEqual(_rule_based_ticker(asset), ticker, asset)
