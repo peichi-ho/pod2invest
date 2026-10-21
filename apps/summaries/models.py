@@ -240,9 +240,9 @@ class IndustryClassification(models.Model):
     @property
     def display_name(self) -> str:
         """前端顯示用：中文名優先，沒有就英文名，都沒有才顯示ticker。
-        TWSE 官方簡稱裡的「*」（例如「國巨*」）顯示時拿掉。"""
-        name = (self.zh_name or self.en_name or "").replace("*", "").strip()
-        return name or self.ticker
+        KY、期貨、ETF 等顯示規則見 apps/summaries/services/display_names.py 的 format_display_name。"""
+        from apps.summaries.services.display_names import format_display_name
+        return format_display_name(self.ticker, self.zh_name, self.en_name, self.market, self.industry_name)
 
 
 class FinancialReportCache(models.Model):

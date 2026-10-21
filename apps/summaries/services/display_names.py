@@ -1,29 +1,57 @@
 """
-標的顯示名稱：全平台以大表 IndustryClassification 的 display_name 為準
-（中文名優先，沒有才用英文名，都沒有才是 ticker）。
+標的顯示名稱：全平台以大表 IndustryClassification 為準
+（中文名優先，沒有才用英文名，都沒有才是 ticker；顯示規則見 format_display_name）。
 
 大表約兩千多筆，整張載進記憶體快取，每 10 分鐘重新整理一次，
 API 每次回傳不用再查資料庫。查不到的 ticker 回傳 None，由呼叫端決定退回哪個名稱。
 """
+import re
 import threading
 import time
 
 _CACHE_TTL_SECONDS = 600
+
+# 拿掉「-KY」後會變成一般名詞、看不出是公司的，保留 -KY（使用者確認：4763 材料-KY）
+_KEEP_KY = {"材料"}
 _lock = threading.Lock()
 _cache: dict[str, str] = {}
 _cache_loaded_at = 0.0
 
 
+def format_display_name(ticker: str, zh_name: str, en_name: str, market: str, industry_name: str) -> str:
+    """
+    大表一列 → 前端顯示的名稱。名稱本身存在大表(zh_name 優先，沒有才用 en_name)，
+    這裡只套顯示規則，不改資料：
+      - TWSE 官方簡稱裡的「*」拿掉（「國巨*」→「國巨」）
+      - KY 股拿掉「-KY」（「臻鼎-KY」→「臻鼎」），口語幾乎不講；拿掉後會像一般名詞的保留（_KEEP_KY）
+      - 期貨拿掉「期貨」（「黃金期貨」→「黃金」），節目講的是商品本身
+      - 美股 ETF 直接顯示代號（QQQ、VOO），大家都講代號
+      - 台股 ETF 顯示「代號 名稱」（「0050 元大台灣50」），節目都講代號，只有全名認不出來
+    都沒有名稱就顯示 ticker。
+    """
+    name = (zh_name or en_name or "").replace("*", "").strip()
+    stripped = re.sub(r"-?KY$", "", name).strip()
+    if stripped not in _KEEP_KY:
+        name = stripped
+    if industry_name == "期貨" and name.endswith("期貨") and len(name) > 2:
+        name = name[:-2]
+    if industry_name == "ETF" and market == "US":
+        return ticker
+    if industry_name == "ETF" and market == "TW":
+        code = ticker.split(".")[0]
+        return f"{code} {name}" if name else code
+    return name or ticker
+
+
 def _load() -> dict[str, str]:
     from apps.summaries.models import IndustryClassification
     out = {}
-    for ticker, zh_name, en_name in (
-        IndustryClassification.objects.using("summariesdb").values_list("ticker", "zh_name", "en_name")
+    for ticker, zh_name, en_name, market, industry_name in (
+        IndustryClassification.objects.using("summariesdb")
+        .values_list("ticker", "zh_name", "en_name", "market", "industry_name")
     ):
-        # TWSE 官方簡稱會在部分公司名稱加「*」（例如「國巨*」「91APP*-KY」），顯示時拿掉
-        name = (zh_name or en_name or "").replace("*", "").strip()
-        if name:
-            out[ticker] = name
+        if zh_name or en_name:
+            out[ticker] = format_display_name(ticker, zh_name, en_name, market, industry_name)
     return out
 
 
