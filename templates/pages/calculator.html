@@ -197,6 +197,45 @@
       </div>
     </div>
 
+    <!-- 論點情境試算：只在「從節目挑選」模式顯示，見 static/js/thesis_calc.js、apps/calculator/thesis_views.py -->
+    <section id="thesis-panel" class="hidden mt-6 bg-surface-container-low rounded-xl p-6 lg:p-8 space-y-5">
+      <div class="flex flex-wrap items-baseline justify-between gap-2 border-b border-outline-variant/20 pb-4">
+        <div>
+          <h3 class="font-['Epilogue'] text-xl font-bold text-tertiary-container">論點情境試算</h3>
+          <p class="text-sm text-outline mt-1">把節目的論點拆成財務情境，推算 12 個月後的 EPS 與目標價。以節目發布日 <span id="thesis-asof" class="font-bold">—</span> 的股價與當時已公告的財報為基準。</p>
+        </div>
+        <select id="thesis-select" class="hidden text-sm px-3 py-2 bg-surface-container border border-outline-variant/50 rounded-DEFAULT text-on-surface-variant max-w-full" onchange="onThesisSelect(this.value)"></select>
+      </div>
+      <p id="thesis-status" class="text-sm text-outline">選一集節目後，這裡會列出它的論點與情境。</p>
+      <div id="thesis-body" class="hidden space-y-5">
+        <p id="thesis-text" class="border-l-4 border-secondary bg-surface-container rounded-r-lg px-4 py-3 text-[15px] leading-7 text-on-surface"></p>
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+          <!-- 左：情境勾選 -->
+          <div class="lg:col-span-7 space-y-4 min-w-0">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="text-sm font-bold text-outline">快速套用</span>
+              <button type="button" class="mode-btn px-3 py-1 rounded-full text-sm font-bold border border-outline-variant/40" onclick="thesisPreset('base')">都不勾（Base）</button>
+              <button type="button" id="thesis-preset-support" class="mode-btn px-3 py-1 rounded-full text-sm font-bold border border-outline-variant/40 disabled:opacity-40 disabled:cursor-not-allowed" onclick="thesisPreset('support')">節目的論點</button>
+              <button type="button" id="thesis-preset-against" class="mode-btn px-3 py-1 rounded-full text-sm font-bold border border-outline-variant/40 disabled:opacity-40 disabled:cursor-not-allowed" onclick="thesisPreset('against')">反方情境</button>
+            </div>
+            <div id="thesis-scenarios" class="space-y-4"></div>
+          </div>
+          <!-- 右：參數與結果 -->
+          <div class="lg:col-span-5 space-y-4 min-w-0">
+            <div id="thesis-result" class="bg-surface-container-lowest rounded-xl p-5 space-y-3"></div>
+            <div class="bg-surface-container-lowest rounded-xl p-5 space-y-4">
+              <div class="flex items-center justify-between gap-2">
+                <h4 class="text-sm font-bold text-tertiary-container uppercase tracking-widest">試算參數</h4>
+                <button type="button" id="thesis-reset" class="hidden text-xs font-bold text-secondary hover:underline" onclick="thesisResetOverrides()">回到情境預設值</button>
+              </div>
+              <div id="thesis-levers" class="space-y-4"></div>
+            </div>
+            <p id="thesis-baseline" class="text-xs text-outline leading-relaxed"></p>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- Disclaimer -->
     <p class="text-xs text-outline/60 leading-relaxed mt-6">
             ⚠️ 免責聲明：本試算工具僅供參考，所有數據與模擬結果不構成投資建議。投資涉及風險，過去績效不代表未來表現，投資人應自行判斷並承擔投資決策之責任。

@@ -34,6 +34,9 @@ function setMode(m) {
   document.getElementById('mode-btn-episode').classList.toggle('active', m === 'episode');
   document.getElementById('panel-manual').classList.toggle('hidden', m !== 'manual');
   document.getElementById('panel-episode').classList.toggle('hidden', m !== 'episode');
+  // 論點情境試算只在「從節目挑選」模式顯示，見 static/js/thesis_calc.js
+  const thesisPanel = document.getElementById('thesis-panel');
+  if (thesisPanel) thesisPanel.classList.toggle('hidden', m !== 'episode');
 }
 
 function syncFromSlider(key) {
@@ -315,6 +318,7 @@ function onEpisodeChange() {
 
   document.getElementById('episode-rationale').textContent = ep.rationale || '(無)';
   loadSourceText(scoreId);
+  if (typeof loadThesisValuation === 'function') loadThesisValuation(scoreId);
 }
 
 // 「AI實際讀到的完整輸入」原本是一整坨純文字，改成：每個【標題】一張卡片，
