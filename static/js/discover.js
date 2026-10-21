@@ -340,16 +340,35 @@ function renderSignalCards(records) {
       _signalRecordsByAssetWeek[key].push(r);
   }
 
-  const weekMap = {};
+  // r.asset 是後端統一過的大表名稱（同一檔標的的各種寫法都會是同一個名字），所以同一檔標的
+  // 會歸在同一張卡。卡片方向用多數決：看多、看空各有幾位節目，多的那邊決定方向，
+  // 卡片上列出的節目也只算多數那邊，另一邊的人數記在 opposite（同票數時沿用第一筆的方向）。
+  const groupMap = {};
   for (const r of records) {
     if (!r.start_time) continue;
     const week = _toWeekMon(r.start_time);
-    if (!weekMap[week]) weekMap[week] = {};
+    if (!groupMap[week]) groupMap[week] = {};
     const asset = r.asset || '';
-    if (!weekMap[week][asset]) weekMap[week][asset] = { podcasters: {}, dir: r.direction, ticker: r.ticker };
+    if (!groupMap[week][asset]) groupMap[week][asset] = { byDir: {}, firstDir: r.direction, ticker: r.ticker };
+    const g = groupMap[week][asset];
+    if (!g.ticker && r.ticker) g.ticker = r.ticker;
+    const dir = r.direction || '';
     const p = r.podcaster || '未知';
-    if (!weekMap[week][asset].podcasters[p]) weekMap[week][asset].podcasters[p] = 0;
-    weekMap[week][asset].podcasters[p]++;
+    if (!g.byDir[dir]) g.byDir[dir] = {};
+    g.byDir[dir][p] = (g.byDir[dir][p] || 0) + 1;
+  }
+  const weekMap = {};
+  for (const [week, assets] of Object.entries(groupMap)) {
+    weekMap[week] = {};
+    for (const [asset, g] of Object.entries(assets)) {
+      const nBull = Object.keys(g.byDir.bullish || {}).length;
+      const nBear = Object.keys(g.byDir.bearish || {}).length;
+      let dir = g.firstDir;
+      if (nBull > nBear) dir = 'bullish';
+      else if (nBear > nBull) dir = 'bearish';
+      const opposite = dir === 'bullish' ? nBear : dir === 'bearish' ? nBull : 0;
+      weekMap[week][asset] = { podcasters: g.byDir[dir] || {}, dir, ticker: g.ticker, opposite };
+    }
   }
 
   const weeks = Object.keys(weekMap).sort().reverse();
@@ -408,7 +427,7 @@ function renderSignalCards(records) {
         <div class="p-4">
           <div class="flex justify-between items-start mb-2">
             <div class="font-['Epilogue'] font-bold text-[17px] text-on-surface leading-tight">${renderAssetNameStar(data.ticker, asset)}</div>
-            <span class="text-[11px] px-2.5 py-1 rounded-full bg-surface-container text-outline font-semibold">單一來源</span>
+            <span class="text-[11px] px-2.5 py-1 rounded-full bg-surface-container text-outline font-semibold">單一來源${data.opposite ? `（另有 ${data.opposite} 人${data.dir === 'bullish' ? '看空' : '看多'}）` : ''}</span>
           </div>
           <div class="flex flex-wrap gap-1.5 mb-3">
             <span class="text-[11px] font-semibold px-2.5 py-1.5 rounded-xl border bg-secondary text-white border-secondary">
@@ -457,7 +476,7 @@ function renderSignalCards(records) {
           <div class="flex justify-between items-start gap-3 mb-3">
             <div class="flex flex-wrap items-center gap-x-3 gap-y-2 min-w-0">
               <div class="font-['Epilogue'] font-bold text-[17px] text-on-surface leading-tight [&>span]:translate-y-0">${renderAssetNameStar(data.ticker, asset)}</div>
-              <span class="bg-surface-container text-secondary text-[11px] font-semibold px-2.5 py-1 rounded-full whitespace-nowrap">${count} 人${dirFilter === 'bullish' ? '看多' : '看空'}${avgAcc != null ? ` · 平均準確率 ${avgAcc}%` : ''}</span>
+              <span class="bg-surface-container text-secondary text-[11px] font-semibold px-2.5 py-1 rounded-full whitespace-nowrap">${count} 人${dirFilter === 'bullish' ? '看多' : '看空'}${data.opposite ? `（另有 ${data.opposite} 人${dirFilter === 'bullish' ? '看空' : '看多'}）` : ''}${avgAcc != null ? ` · 平均準確率 ${avgAcc}%` : ''}</span>
             </div>
             <span class="flex-shrink-0 text-[11px] px-2.5 py-1 rounded-full ${badgeClass}">${badgeLabel}（${count}人）</span>
           </div>
