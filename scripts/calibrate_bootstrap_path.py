@@ -64,7 +64,8 @@ print("=" * 70)
 
 all_scored = list(
     StockSentimentScore.objects.using("summariesdb")
-    .filter(base__isnull=False, annual_vol__isnull=False)
+    # 只取 pro：novice 的分數是同一集的複本，兩份都納入樣本會重複一倍
+    .filter(base__isnull=False, annual_vol__isnull=False, summary__mode="pro")
     .select_related("summary")
     .values("id", "summary_id", "ticker", "risk_score", "macro_score", "summary__published_at")
 )
