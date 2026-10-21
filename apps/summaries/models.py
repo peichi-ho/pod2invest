@@ -200,6 +200,14 @@ class TickerMap(models.Model):
     def __str__(self):
         return f"{self.asset_name} → {self.ticker}"
 
+    def save(self, *args, **kwargs):
+        # 新增或改了 ticker 的別名，自動連到大表同一個 ticker 那一列；大表沒有就維持 null(不猜)，
+        # 可以之後用 manage.py link_tickermap_classification 檢查哪些還沒連上。
+        if self.ticker and (self.classification_id is None or self.classification.ticker != self.ticker):
+            db = kwargs.get("using") or self._state.db or "summariesdb"
+            self.classification = IndustryClassification.objects.using(db).filter(ticker=self.ticker).first()
+        super().save(*args, **kwargs)
+
 
 class IndustryClassification(models.Model):
     """
