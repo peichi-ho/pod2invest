@@ -14,6 +14,8 @@ management command：把驗證句(BacktestingRecord)拆解成論點情境，存�
   python manage.py backfill_thesis_scenarios --redo           # 已經有同版本結果的也重算
   python manage.py backfill_thesis_scenarios --all-tickers    # 連沒有財報資料的股票也拆
   python manage.py backfill_thesis_scenarios --same-as v3     # 只處理 v3 已經跑過的那些驗證句(比較版本用)
+  python manage.py backfill_thesis_scenarios --recheck --dry-run  # 用存好的 AI 原始輸出重跑程式檢查，只統計不寫入
+  python manage.py backfill_thesis_scenarios --recheck            # 同上並寫回(不呼叫 Gemini，改了檢查規則時用)
 已經算過(同 prompt 版本、狀態不是 failed)的預設跳過，所以中斷後直接重跑就會接著做。
 """
 import os
@@ -28,6 +30,8 @@ from apps.summaries.services.gemini import make_client
 from apps.summaries.services.thesis_scenario import (
     PROMPT_VERSION,
     extract_thesis_scenarios,
+    find_grounded_stock_topics,
+    recheck_thesis_scenarios,
     financial_sector_tickers,
     is_extractable_ticker,
 )
@@ -43,11 +47,15 @@ class Command(BaseCommand):
         parser.add_argument("--all-tickers", action="store_true", help="連沒有財報資料的股票也處理")
         parser.add_argument("--same-as", type=str, default=None,
                             help="只處理這個 prompt 版本已經跑過的驗證句（例如 v3），比較不同版本用")
+        parser.add_argument("--recheck", action="store_true",
+                            help="不呼叫 Gemini，用已存的 AI 原始輸出重跑程式端檢查（改了檢查規則時用）")
         parser.add_argument("--dry-run", action="store_true", help="只算會處理幾筆，不呼叫Gemini、不寫入")
 
     def handle(self, *args, **options):
         limit = options["limit"]
         dry_run = options["dry_run"]
+        if options["recheck"]:
+            return self._recheck(dry_run, options["ticker"], limit)
 
         qs = (
             BacktestingRecord.objects.using("summariesdb")
@@ -155,3 +163,82 @@ class Command(BaseCommand):
                 ))
                 connections["summariesdb"].close()
                 time.sleep(wait)
+
+    def _recheck(self, dry_run: bool, ticker, limit):
+        """
+        對這個 prompt 版本已存的結果，用 ai_scenarios 重跑程式端檢查，統計前後差異；
+        不是 dry-run 才寫回。failed 的那幾筆沒有 AI 輸出，跳過(要重新呼叫 Gemini 才能補)。
+        同一集的「個股」段落只查一次(topics_by_summary)，兩千多筆不用重查上萬次資料庫。
+        """
+        import json
+        from apps.summaries.models import SummaryRecord
+
+        qs = (ThesisScenarioExtraction.objects.using("summariesdb")
+              .filter(prompt_version=PROMPT_VERSION)
+              .exclude(status=ThesisScenarioExtraction.STATUS_FAILED)
+              .order_by("id"))
+        if ticker:
+            qs = qs.filter(ticker=ticker)
+        rows = list(qs[:limit] if limit else qs)
+        records = BacktestingRecord.objects.using("summariesdb").in_bulk([r.backtest_record_id for r in rows])
+        # 摘要帶著整份 arguments JSON，一次撈上千集會讓 Supabase 連線中斷，分批每次 100 集
+        summary_ids = sorted({r.summary_id for r in rows})
+        summaries = {}
+        for start in range(0, len(summary_ids), 100):
+            summaries.update(SummaryRecord.objects.using("summariesdb")
+                             .in_bulk(summary_ids[start:start + 100]))
+        self.stdout.write(f"重算 {len(rows)} 筆（{len(summaries)} 集）" + (" [dry-run]" if dry_run else ""))
+
+        def figures_filled(scenarios):
+            return sum(1 for s in scenarios for v in (s.get("figures") or {}).values()
+                       if v is not None and not isinstance(v, bool))
+
+        topics_by_summary = {}
+        changed = status_changed = 0
+        filled_before = filled_after = 0
+        reasons_before, reasons_after = {}, {}
+        for i, row in enumerate(rows, 1):
+            record = records.get(row.backtest_record_id)
+            if record is None:
+                continue
+            record.summary = summaries[row.summary_id]
+            if row.summary_id not in topics_by_summary:
+                try:
+                    topics_by_summary[row.summary_id] = find_grounded_stock_topics(record.summary)
+                except Exception:
+                    topics_by_summary[row.summary_id] = []
+            new = recheck_thesis_scenarios(record, row.ai_scenarios, topics_by_summary[row.summary_id])
+
+            filled_before += figures_filled(row.scenarios)
+            filled_after += figures_filled(new["scenarios"])
+            for d in row.dropped:
+                reasons_before[d["reason"]] = reasons_before.get(d["reason"], 0) + 1
+            for d in new["dropped"]:
+                reasons_after[d["reason"]] = reasons_after.get(d["reason"], 0) + 1
+
+            same = json.dumps(new["scenarios"], sort_keys=True) == json.dumps(row.scenarios, sort_keys=True) \
+                and json.dumps(new["dropped"], sort_keys=True) == json.dumps(row.dropped, sort_keys=True)
+            if same:
+                continue
+            changed += 1
+            status_changed += new["status"] != row.status
+            if not dry_run:
+                row.status, row.scenarios, row.dropped = new["status"], new["scenarios"], new["dropped"]
+                for attempt in range(1, 6):
+                    try:
+                        row.save(using="summariesdb", update_fields=["status", "scenarios", "dropped", "updated_at"])
+                        break
+                    except OperationalError:
+                        if attempt == 5:
+                            raise
+                        connections["summariesdb"].close()
+                        time.sleep(min(5 * attempt, 30))
+            if i % 200 == 0:
+                self.stdout.write(f"  ...{i}/{len(rows)}")
+
+        self.stdout.write(self.style.SUCCESS(
+            f"有變動 {changed} 筆（其中狀態改變 {status_changed} 筆）；"
+            f"有數字的欄位 {filled_before} → {filled_after}"
+        ))
+        for reason in sorted(set(reasons_before) | set(reasons_after)):
+            self.stdout.write(f"  丟掉原因「{reason}」：{reasons_before.get(reason, 0)} → {reasons_after.get(reason, 0)}")

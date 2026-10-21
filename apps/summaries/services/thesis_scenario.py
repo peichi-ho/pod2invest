@@ -153,16 +153,17 @@ def build_type_list() -> str:
     return "\n".join(lines)
 
 
-def build_context(record) -> str:
+def build_context(record, topics: Optional[list] = None) -> str:
     """
     同一集裡這檔股票的「個股：X」段落 + 有點名它的操作建議/風險提示。
     刻意不放「總體經濟環境」整段——那是整集共用的背景，原型 v1 的總經情境幾乎都是從那裡
     滲進來、跟這家公司無關。找不到這檔股票的段落就回傳「(無)」，只用驗證句本身。
     """
-    try:
-        topics = find_grounded_stock_topics(record.summary)
-    except Exception:
-        topics = []
+    if topics is None:
+        try:
+            topics = find_grounded_stock_topics(record.summary)
+        except Exception:
+            topics = []
     match = next((t for t in topics if t["ticker"] == record.ticker), None)
     if not match:
         return "(無)"
@@ -197,6 +198,59 @@ _PRICE_END_RE = re.compile(r"股價|漲幅|跌幅|反彈|拉回")
 _CURRENT_STATE_TYPES = {"MIX_UPGRADE", "NEW_BUSINESS", "PRICE_UP"}
 _CURRENT_STATE_RE = re.compile(r"創.{0,6}新高|近.{0,4}年.{0,2}新高|已達|已經達|領導地位|龍頭|壟斷|領頭羊|獨門")
 _NUMBER_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
+_CN_NUMBER_RE = re.compile(r"[零〇一二兩三四五六七八九十百千萬]+")
+_CN_DIGITS = {"零": 0, "〇": 0, "一": 1, "二": 2, "兩": 2, "三": 3, "四": 4,
+              "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+_CN_UNITS = {"十": 10, "百": 100, "千": 1000, "萬": 10000}
+
+
+def parse_chinese_number(text: str) -> Optional[int]:
+    """
+    把節目口語裡的中文數字轉成整數：一百→100、兩千→2000、十五→15、一百零五→105。
+    也處理口語省略尾端單位的講法：兩百二→220、一千五→1500、一萬二→12000。
+    只有單一個數字字(沒有單位，例如「一」「兩」)回傳 None——那通常是「一家」「兩個」，不是金額。
+    """
+    if not text or not any(ch in _CN_UNITS for ch in text):
+        return None
+    total, section, digit = 0, 0, None
+    last_unit, prev_was_unit = None, False
+    for ch in text:
+        if ch in _CN_DIGITS:
+            digit = _CN_DIGITS[ch]
+            prev_was_unit = False
+        else:
+            unit = _CN_UNITS[ch]
+            if unit == 10000:
+                section = (section + (digit or 0)) * unit
+                total += section
+                section = 0
+            else:
+                section += (1 if digit is None else digit) * unit
+            digit, last_unit, prev_was_unit = None, unit, True
+    if digit is not None:
+        # 「兩百二」：最後一個數字緊接在單位後面、中間沒有「零」，代表下一位(二十)，不是個位
+        if last_unit and last_unit >= 100 and text[-2] in _CN_UNITS:
+            section += digit * (last_unit // 10)
+        else:
+            section += digit
+    return total + section
+
+
+def numbers_in_text(text: str) -> set[float]:
+    """
+    quote 裡出現的所有數字：阿拉伯數字(含千分位)，以及中文數字。
+    「104,105」這種用逗號列舉的數字，除了整串(104105)也拆開各算一個，不然 AI 填的 104 會被誤判成對不到。
+    """
+    found = set()
+    for n in _NUMBER_RE.findall(text or ""):
+        found.add(float(n.replace(",", "")))
+        if "," in n:
+            found.update(float(part) for part in n.split(",") if part and part.replace(".", "", 1).isdigit())
+    for n in _CN_NUMBER_RE.findall(text or ""):
+        v = parse_chinese_number(n)
+        if v is not None:
+            found.add(float(v))
+    return found
 MIN_QUOTE_CHARS = 4      # 「看多」這種兩個字的 quote 沒有依據價值
 FUZZY_MATCH_RATIO = 0.8  # quote 每一段至少要有 8 成連續對得上原文
 
@@ -274,7 +328,7 @@ def verify_figures(scenario_type: str, raw_figures, quote: str, published_year: 
     if not fields:
         return {}, []
     raw = raw_figures if isinstance(raw_figures, dict) else {}
-    in_quote = {float(n.replace(",", "")) for n in _NUMBER_RE.findall(quote)}
+    in_quote = numbers_in_text(quote)
 
     figures, removed = {}, []
     for f in fields:
@@ -419,13 +473,7 @@ def extract_thesis_scenarios(client, model: str, record) -> dict:
         return {"status": "failed", "scenarios": [], "ai_scenarios": [], "dropped": [],
                 "no_driver_reason": "", "error": str(e)[:500]}
 
-    source_text = f"{record.thesis}\n{record.evidence_quote}\n{context_text}"
-    kept, dropped = apply_checks(
-        [s for s in ai_scenarios if isinstance(s, dict)], record.direction, source_text,
-        record.asset, record.ticker,
-        published_year=record.summary.published_at.year if record.summary.published_at else None,
-    )
-    scenarios = dedupe_scenarios(kept)
+    scenarios, dropped = _postprocess(record, ai_scenarios, context_text)
     return {
         "status": "ok" if scenarios else "no_driver",
         "scenarios": scenarios,
@@ -434,6 +482,29 @@ def extract_thesis_scenarios(client, model: str, record) -> dict:
         "no_driver_reason": str(obj.get("no_driver_reason") or "")[:500],
         "error": "",
     }
+
+
+def _postprocess(record, ai_scenarios: list, context_text: str) -> tuple[list, list]:
+    """程式端檢查 + 去重，呼叫 Gemini 跟離線重算(recheck_thesis_scenarios)共用同一套。"""
+    source_text = f"{record.thesis}\n{record.evidence_quote}\n{context_text}"
+    kept, dropped = apply_checks(
+        [s for s in ai_scenarios if isinstance(s, dict)], record.direction, source_text,
+        record.asset, record.ticker,
+        published_year=record.summary.published_at.year if record.summary.published_at else None,
+    )
+    return dedupe_scenarios(kept), dropped
+
+
+def recheck_thesis_scenarios(record, ai_scenarios: list, topics: Optional[list] = None) -> dict:
+    """
+    不呼叫 Gemini，用已經存好的 AI 原始輸出重跑一次程式端檢查——改了檢查規則(例如補上
+    中文數字轉換)時用這個重算，不用再花 API 費用、結果也不會因為 AI 重拆而變動。
+    回傳的 dict 只有會被檢查影響的欄位(status/scenarios/dropped)。
+    topics：同一集的「個股」段落(find_grounded_stock_topics 的結果)，批次重算時同一集
+    只查一次再傳進來，不用每一筆驗證句都重查。
+    """
+    scenarios, dropped = _postprocess(record, ai_scenarios or [], build_context(record, topics))
+    return {"status": "ok" if scenarios else "no_driver", "scenarios": scenarios, "dropped": dropped}
 
 
 def is_extractable_ticker(ticker: Optional[str]) -> bool:
