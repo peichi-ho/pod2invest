@@ -598,6 +598,7 @@ class SpeakerHistory:
                     SELECT ticker, MAX(sector) AS sector FROM ticker_map GROUP BY ticker
                 ) tm ON tm.ticker = b.ticker
                 WHERE b.result IN ('pass', 'fail')
+                  AND sr.mode = 'pro'
                   AND sr.podcaster != '' AND b.thesis != ''
                   AND b.end_time IS NOT NULL
                 ORDER BY sr.podcaster, b.thesis, b.id
