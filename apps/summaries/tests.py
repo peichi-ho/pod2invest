@@ -67,6 +67,10 @@ class AliasMapTwCodeTests(SimpleTestCase):
         for asset, ticker in [("JPP-KY", "5284.TW"), ("升達科", "3491.TWO"), ("麥克", "6831.TW")]:
             self.assertEqual(_rule_based_ticker(asset), ticker, asset)
 
+    def test_not_ticker_terms(self):
+        for asset in ["VNA", "XTI", "ASKY", "PCB"]:
+            self.assertIsNone(_rule_based_ticker(asset), asset)
+
     def test_yen_direction(self):
         # 講日圓本身要用日圓升值時會漲的 JPYUSD=X，不能用美元兌日圓的 JPY=X
         for asset, ticker in [("日圓", "JPYUSD=X"), ("日元", "JPYUSD=X"), ("日圓/台幣匯率", "JPYTWD=X"),

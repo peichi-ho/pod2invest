@@ -291,6 +291,9 @@ COMMODITY_TICKER_MAP = {
 _NON_TICKER_TERMS = {
     "AI", "ABF", "ASIC", "AWS", "CPO", "CPU", "DRAM", "GPU", "HBM", "HDD",
     "NAND", "PCB", "RFID", "SSD", "XAI",
+    # 節目裡指的不是單一標的、使用者確認要當成查無 ticker 的(2026-10-21)：
+    # VNA 是在講越南、XTI 是在講光通股、ASKY 是 BBU 族群
+    "VNA", "XTI", "ASKY",
 }
 _RAW_TICKER_RE = re.compile(r"^[A-Z]{1,6}$")
 
