@@ -417,7 +417,7 @@ def _rule_based_ticker(asset: str, allow_raw_ticker: bool = True) -> Optional[st
         "智易":    "3596.TW",
         "中環":    "2323.TW",
         "廣宇":    "2328.TW",
-        "麥克":    "2158.TW",
+        "麥克":    "6831.TW",  # 邁科的誤寫
         # ── 台股：電子通路 / 其他科技 ──
         "伊雲谷":  "6689.TW",
         # ── 台股：傳統 / 材料 ──
@@ -484,8 +484,8 @@ def _rule_based_ticker(asset: str, allow_raw_ticker: bool = True) -> Optional[st
         "鈺創":    "5351.TWO",
         "森崴能源": "6806.TW",
         "櫻花":    "9911.TW",
-        "JPP-KY":  "6545.TW",
-        "升達科":  "8072.TW",
+        "JPP-KY":  "5284.TW",
+        "升達科":  "3491.TWO",  # 昇達科的同音誤寫
         "MPMaterial": "MP",
         "Confluent": "CFLT",
         "Lulu Lemon": "LULU",  "lululemon": "LULU",
