@@ -350,7 +350,7 @@ def _rule_based_ticker(asset: str, allow_raw_ticker: bool = True) -> Optional[st
         "思科":    "CSCO",  "Cisco":      "CSCO",
         "IBM":     "IBM",
         "戴爾":    "DELL",  "Dell":       "DELL",
-        "惠普":    "HPE",   "HP":         "HPE",
+        "惠普":    "HPE",   "HP":         "HPQ",  # HP 指 HP Inc.（HPQ）；HPE 是惠普企業
         "Seagate": "STX",   "希捷":       "STX",
         "美光":    "MU",    "Micron":     "MU",
         "應用材料": "AMAT", "Applied Materials": "AMAT",
