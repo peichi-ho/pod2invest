@@ -68,7 +68,7 @@ class AliasMapTwCodeTests(SimpleTestCase):
             self.assertEqual(_rule_based_ticker(asset), ticker, asset)
 
     def test_not_ticker_terms(self):
-        for asset in ["VNA", "XTI", "ASKY", "PCB"]:
+        for asset in ["VNA", "XTI", "ASKY", "PCB", "EVG", "NAC"]:
             self.assertIsNone(_rule_based_ticker(asset), asset)
 
     def test_yen_direction(self):

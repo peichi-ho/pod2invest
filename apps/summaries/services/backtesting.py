@@ -294,6 +294,8 @@ _NON_TICKER_TERMS = {
     # 節目裡指的不是單一標的、使用者確認要當成查無 ticker 的(2026-10-21)：
     # VNA 是在講越南、XTI 是在講光通股、ASKY 是 BBU 族群
     "VNA", "XTI", "ASKY",
+    # EVG 是沒上市的歐洲設備商 EV Group、NAC 是藥名（乙醯半胱胺酸），都不是可交易的標的
+    "EVG", "NAC",
 }
 _RAW_TICKER_RE = re.compile(r"^[A-Z]{1,6}$")
 
