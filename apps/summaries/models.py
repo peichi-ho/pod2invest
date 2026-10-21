@@ -259,3 +259,63 @@ class FinancialReportCache(models.Model):
         return f"{self.ticker} @ {self.fiscal_period_end}"
 
 
+
+class ThesisScenarioExtraction(models.Model):
+    """
+    一筆驗證句(BacktestingRecord)被拆解成的「論點情境」（論點情境試算用，見
+    apps/summaries/services/thesis_scenario.py）。
+
+    每筆驗證句 × prompt 版本一列，情境本身存成 JSON 陣列(scenarios)——試算頁面一次只讀
+    一筆驗證句的全部情境，不需要拆成子表。每個情境的形狀：
+      {"type": "DEMAND_UP", "effect": "up", "stance": "support",
+       "chain": ["AI需求增加", "出貨增加", "營收成長"], "quote": "<原文片段>",
+       "fixes": [], "extra_quotes": []}
+    情境影響哪個財務參數由 thesis_scenario.SCENARIO_TYPES 決定，不存在這裡，
+    之後調整對照表不用回頭改資料。
+
+    結果是批次算好存起來的，不在使用者打開頁面時即時呼叫 Gemini——temperature=0 也
+    不完全穩定，即時呼叫會讓同一集不同時間打開看到不同情境。
+    """
+    STATUS_OK        = "ok"         # 至少拆出一個情境
+    STATUS_NO_DRIVER = "no_driver"  # 論點太空泛，沒有可對應的驅動因素
+    STATUS_FAILED    = "failed"     # 呼叫 Gemini 或解析失敗，下次批次會重試
+    STATUS_CHOICES = [
+        (STATUS_OK,        "OK"),
+        (STATUS_NO_DRIVER, "No driver"),
+        (STATUS_FAILED,    "Failed"),
+    ]
+
+    backtest_record = models.ForeignKey(
+        BacktestingRecord,
+        on_delete=models.CASCADE,
+        related_name="thesis_scenario_extractions",
+    )
+    summary = models.ForeignKey(
+        SummaryRecord,
+        on_delete=models.CASCADE,
+        related_name="thesis_scenario_extractions",
+    )
+    ticker     = models.CharField(max_length=20)
+    asset_name = models.CharField(max_length=100)
+
+    prompt_version = models.CharField(max_length=20)
+    model_name     = models.CharField(max_length=100)
+    status         = models.CharField(max_length=20, choices=STATUS_CHOICES)
+
+    scenarios        = models.JSONField(default=list, blank=True)  # 檢查、去重後，試算頁面用這個
+    ai_scenarios     = models.JSONField(default=list, blank=True)  # AI 原始輸出，改檢查規則可離線重算
+    dropped          = models.JSONField(default=list, blank=True)  # 被檢查丟掉的情境跟原因
+    no_driver_reason = models.TextField(blank=True, default="")
+    error            = models.TextField(blank=True, default="")
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table  = "thesis_scenario_extraction"
+        app_label = "summaries"
+        unique_together = ("backtest_record", "prompt_version")
+        indexes = [models.Index(fields=["ticker"])]
+
+    def __str__(self):
+        return f"{self.asset_name}({self.ticker}) {self.prompt_version} {self.status} {len(self.scenarios)}個情境"
