@@ -17,6 +17,12 @@ from .industry_benchmarks import get_industry_benchmarks
 from .etf_twse_meta import get_etf_twse_meta
 
 
+def _display_name(symbol: str) -> str | None:
+    """全平台標的名稱以大表 IndustryClassification 為準（上市 .TW、上櫃 .TWO 都查）。"""
+    from apps.summaries.services.display_names import display_name_for
+    return display_name_for(f"{symbol}.TW") or display_name_for(f"{symbol}.TWO")
+
+
 def get_tw_stock_basic_info(symbol: str) -> dict | None:
     try:
         ticker = yf.Ticker(f"{symbol}.TW")
@@ -35,7 +41,7 @@ def get_tw_stock_basic_info(symbol: str) -> dict | None:
 
     return {
         'symbol': symbol,
-        'name': info.get('longName') or info.get('shortName') or symbol,
+        'name': _display_name(symbol) or info.get('longName') or info.get('shortName') or symbol,
         'market_cap': info.get('marketCap'),
         'market_cap_change_1y': info.get('52WeekChange'),
         'pe_ratio': info.get('trailingPE'),
@@ -100,7 +106,7 @@ def get_tw_etf_basic_info(symbol: str) -> dict | None:
     # _etfTrackingIndexValue() 決定，後端不組字串。
     return {
         'symbol': symbol,
-        'name': info.get('longName') or info.get('shortName') or symbol,
+        'name': _display_name(symbol) or info.get('longName') or info.get('shortName') or symbol,
         'strategy_type': strategy_type,
         'theme': classification.get('theme'),
         'tracking_index_name': meta.get('tracking_index_name'),

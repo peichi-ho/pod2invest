@@ -239,8 +239,10 @@ class IndustryClassification(models.Model):
 
     @property
     def display_name(self) -> str:
-        """前端顯示用：中文名優先，沒有就英文名，都沒有才顯示ticker。"""
-        return self.zh_name or self.en_name or self.ticker
+        """前端顯示用：中文名優先，沒有就英文名，都沒有才顯示ticker。
+        TWSE 官方簡稱裡的「*」（例如「國巨*」）顯示時拿掉。"""
+        name = (self.zh_name or self.en_name or "").replace("*", "").strip()
+        return name or self.ticker
 
 
 class FinancialReportCache(models.Model):
