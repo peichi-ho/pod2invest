@@ -25,6 +25,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.calculator.services.bootstrap_path_simulator_v2 import run_bootstrap_path_simulation_v2
+from apps.summaries.services.display_names import display_name_for
 
 MAX_SIMULATIONS = 3000  # 瀏覽器互動用的預覽工具，限制上限避免單次請求跑太久
 N_SAMPLE_PATHS_RETURNED = 20  # 前端畫背景線用，不用把模組預設的50條全部傳過去
@@ -177,7 +178,7 @@ class BootstrapPathPreviewAPIView(APIView):
             "aggressive_return": result.aggressive_return,
             "score_id": score_id or None,
             "asof_date": asof_date.date().isoformat() if asof_date is not None else None,
-            "asset_name": score.asset_name if score is not None else None,
+            "asset_name": (display_name_for(score.ticker) or score.asset_name) if score is not None else None,
             "actual_line": actual_line,
         })
 
@@ -272,7 +273,7 @@ class EpisodeListPreviewAPIView(APIView):
                     "summary_id": r["summary_id"],  # 給前端「跳轉到原文」連結用，見bootstrap_path.html
                     "episode_id": r["episode_id"],  # 給「從deep dive頁面試算按鈕跳轉過來」配對用
                     "ticker": r["ticker"],
-                    "asset_name": r["asset_name"],
+                    "asset_name": display_name_for(r["ticker"]) or r["asset_name"],
                     "published_at": r["_sm"]["published_at"].date().isoformat(),
                     "podcaster": r["_sm"]["podcaster"],
                     "risk_score": r["risk_score"],
@@ -370,7 +371,7 @@ class StockSearchPreviewAPIView(APIView):
                 best = 4
             if best is None:
                 return
-            display = next((n for n in names if re.search(r"[一-鿿]", n)), names[0])
+            display = display_name_for(ticker) or next((n for n in names if re.search(r"[一-鿿]", n)), names[0])
             cur = found.get(ticker)
             if cur is None or best < cur["rank"]:
                 found[ticker] = {

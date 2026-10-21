@@ -12,6 +12,7 @@ import requests
 from bs4 import BeautifulSoup
 from rest_framework.views import APIView
 from rest_framework.response import Response
+from apps.summaries.services.display_names import display_name_for
 
 try:
     from deep_translator import GoogleTranslator
@@ -516,6 +517,10 @@ def _resolve_ticker(query: str) -> str | dict:
 
 
 def _get_display_name(ticker: str) -> str:
+    # 全平台標的名稱以大表 IndustryClassification 為準，大表沒收錄才退回 TWSE 清單／yfinance
+    name = display_name_for(ticker)
+    if name:
+        return name
     code = ticker.replace('.TW', '')
     tw_map = _get_tw_stock_map()
     if code in tw_map:
@@ -1082,7 +1087,7 @@ class StockTimelineAPIView(APIView):
                 'score_id': r.id,
                 'summary_id': r.summary_id,
                 'episode_id': r.summary.episode_id,
-                'asset_name': r.asset_name,
+                'asset_name': display_name_for(r.ticker) or r.asset_name,
                 'published_at': r.summary.published_at.date().isoformat() if r.summary.published_at else None,
                 'podcaster': r.summary.podcaster,
                 'macro_score': r.macro_score,
@@ -1222,7 +1227,7 @@ class EnsureEpisodeScoreAPIView(APIView):
             'score_id': score.id,
             'summary_id': score.summary_id,
             'episode_id': record.episode_id,
-            'asset_name': score.asset_name,
+            'asset_name': display_name_for(score.ticker) or score.asset_name,
             'ticker': score.ticker,
             'published_at': record.published_at.date().isoformat() if record.published_at else None,
             'podcaster': record.podcaster,
@@ -1289,7 +1294,7 @@ class ScenarioAPIView(APIView):
             return Response({'error': f'模擬失敗: {e}'}, status=422)
 
         return Response({
-            'asset_name': score.asset_name,
+            'asset_name': display_name_for(score.ticker) or score.asset_name,
             'ticker': score.ticker,
             'summary_id': score.summary_id,
             'published_at': asof_date.date().isoformat() if asof_date else None,
@@ -1362,7 +1367,7 @@ class WeightedScenarioAPIView(APIView):
             return Response({'error': f'模擬失敗: {e}'}, status=422)
 
         return Response({
-            'asset_name': score.asset_name,
+            'asset_name': display_name_for(score.ticker) or score.asset_name,
             'ticker': score.ticker,
             'published_at': selected_date.isoformat(),
             'base': score.base,

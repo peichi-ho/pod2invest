@@ -249,47 +249,80 @@ def calc_end_time(timeframe_raw: str, start: date) -> Optional[date]:
 # 區域變數）是為了讓 thesis_score.py 的資產名稱分組（把「S&P 500指數」跟
 # 「標普500指數」、「S&P500」歸成同一組）能直接複用同一份表做「整串完全
 # 相等」的嚴格比對，不用另外複製一份容易跟這裡兜不起來。
-# _rule_based_ticker() 本身的比對邏輯（子字串 in）沒有變，行為完全不變。
+# _rule_based_ticker() 用「關鍵字是 asset 的子字串」比對，照 dict 順序取第一個
+# 命中的，所以比較具體的關鍵字一定要排在會吃掉它的短關鍵字前面：
+#   「納斯達克100指數」要先命中 ^NDX，不能被「納斯達克」吃成 ^IXIC；
+#   「日股大盤」「美股大盤」要先命中各自的指數，不能被「大盤」吃成 ^TWII。
 INDEX_TICKER_MAP = {
+    ("納斯達克100", "那斯達克100", "Nasdaq 100", "Nasdaq100", "NASDAQ 100", "NASDAQ100", "納指100"): "^NDX",
+    ("日經", "日股大盤"): "^N225",
+    ("S&P500", "S&P 500", "S&P", "標準普爾", "標普", "標普500", "美股大盤"): "^GSPC",
     ("台股加權", "加權指數", "大盤", "台北股市", "台股"): "^TWII",
     ("那斯達克", "Nasdaq", "nasdaq", "納斯達克", "納指"): "^IXIC",
-    ("S&P500", "S&P 500", "S&P", "標準普爾", "標普", "標普500"): "^GSPC",
     ("費半", "費城半導體指數", "費城半導體"): "^SOX",
     ("道瓊",): "^DJI",
     ("羅素",): "^RUT",
     ("上證", "滬指"): "000001.SS",
     ("櫃買指數", "OTC", "上櫃指數", "櫃買"): "^TWOTCI",
-    ("Stoxx 600", "stoxx600"): "^STOXX50E",
+    # Stoxx 600 是 ^STOXX；^STOXX50E 是 Euro Stoxx 50，不同指數
+    ("Stoxx 600", "stoxx600", "STOXX 600"): "^STOXX",
 }
 
 COMMODITY_TICKER_MAP = {
     ("黃金",):               "GC=F",
-    ("原油", "油價", "美油", "布油"): "CL=F",
+    ("原油", "油價", "美油", "布油", "WTI"): "CL=F",
     ("白銀",):               "SI=F",
     ("天然氣",):             "NG=F",
     ("日圓", "日元"):        "JPY=X",
-    ("美元指數",):           "DX=F",
+    # DX=F 在 Yahoo 查不到資料（舊紀錄全是 skip），美元指數現貨是 DX-Y.NYB
+    ("美元指數",):           "DX-Y.NYB",
     ("比特幣",):             "BTC-USD",
     ("白金",):               "PL=F",
     ("石油",):               "CL=F",
 }
 
+# 全大寫、長度又跟 ticker 一樣的技術名詞／未上市公司，不能被「已是英文 ticker」
+# 那條規則原樣放行（AI 剛好是 C3.ai 的代號，但在節目裡幾乎都指 AI 題材）。
+_NON_TICKER_TERMS = {
+    "AI", "ABF", "ASIC", "AWS", "CPO", "CPU", "DRAM", "GPU", "HBM", "HDD",
+    "NAND", "PCB", "RFID", "SSD", "XAI",
+}
+_RAW_TICKER_RE = re.compile(r"^[A-Z]{1,6}$")
 
-def _rule_based_ticker(asset: str) -> Optional[str]:
-    """第一層：規則直判，不查資料庫。"""
+
+def _raw_ticker(asset: str) -> Optional[str]:
+    """asset 本身長得像英文 ticker（純大寫字母、最多 6 碼）就原樣回傳。"""
+    a = asset.strip()
+    if _RAW_TICKER_RE.match(a) and a not in _NON_TICKER_TERMS:
+        return a
+    return None
+
+
+# 台股代號：4～6 碼數字，ETF 可能多 1 個英文字母結尾（00685L 槓桿、00632R 反向、
+# 00679B 債券、00981A 主動式、00635U 期貨）
+_TW_CODE_RE = re.compile(r"^\d{4,6}[A-Za-z]?$")
+
+
+def _tw_code_ticker(code: str) -> str:
+    """
+    不查資料庫時的台股代號後綴：B 結尾的債券 ETF 幾乎都在櫃買中心掛牌，用 .TWO，
+    其他預設 .TW。純數字上櫃股（例如 8299）要靠 resolve_ticker() 查大表才分得出來。
+    """
+    code = code.upper()
+    return f"{code}.TWO" if code.endswith("B") else f"{code}.TW"
+
+
+def _rule_based_ticker(asset: str, allow_raw_ticker: bool = True) -> Optional[str]:
+    """
+    第一層：規則直判，不查資料庫。
+    allow_raw_ticker=False 時不套用「已是英文 ticker 就原樣回傳」那條規則，
+    讓 resolve_ticker() 可以先查 TickerMap 再退回原樣放行。
+    """
     a = asset.strip()
 
-    # 純數字台股代號
-    if re.match(r"^\d{4,6}$", a):
-        return f"{a}.TW"
-
-    for keys, ticker in INDEX_TICKER_MAP.items():
-        if any(k in a for k in keys):
-            return ticker
-
-    for keys, ticker in COMMODITY_TICKER_MAP.items():
-        if any(k in a for k in keys):
-            return ticker
+    # 台股代號（含英文字母結尾的 ETF）
+    if _TW_CODE_RE.match(a):
+        return _tw_code_ticker(a)
 
     # ── 知名公司中文 / 別名 對應 ─────────────────────────────────────────────
     ALIAS_MAP = {
@@ -353,18 +386,18 @@ def _rule_based_ticker(asset: str) -> Optional[str]:
         "中磊":    "5388.TW",
         "啟碁":    "6285.TW",
         "立積":    "4968.TW",
-        "神盾":    "6462.TW",
-        "茂達":    "6138.TW",
-        "系微":    "6203.TW",
+        "神盾":    "6462.TWO",
+        "茂達":    "6138.TWO",
+        "系微":    "6231.TWO",
         "宇瞻":    "8271.TW",
         "創見":    "2451.TW",
-        "訊芯":    "6251.TW",
+        "訊芯":    "6451.TW",
         "昆盈":    "2365.TW",
         "耀華":    "2367.TW",
-        "廣明":    "6188.TW",
+        "廣明":    "6188.TWO",
         "亞光":    "3019.TW",
-        "十銓":    "3567.TW",
-        "宜鼎":    "5289.TW",
+        "十銓":    "4967.TW",
+        "宜鼎":    "5289.TWO",
         "仲琦":    "2419.TW",
         # ── 台股：科技硬體 ──
         "鴻海":    "2317.TW",
@@ -372,19 +405,19 @@ def _rule_based_ticker(asset: str) -> Optional[str]:
         "台達電":  "2308.TW",
         "鴻準":    "2354.TW",
         "勤誠":    "8210.TW",
-        "弘塑":    "3131.TW",
+        "弘塑":    "3131.TWO",
         "迅得":    "6438.TW",
         "嘉澤":    "3533.TW",
         "致茂":    "2360.TW",
         "穎崴":    "6515.TW",
-        "豐達科":  "5288.TW",
+        "豐達科":  "3004.TW",
         "羅昇":    "8374.TW",
-        "加百裕":  "3323.TW",
+        "加百裕":  "3323.TWO",
         "光寶":    "2301.TW",
         "智易":    "3596.TW",
         "中環":    "2323.TW",
         "廣宇":    "2328.TW",
-        "麥克":    "2158.TW",
+        "麥克":    "6831.TW",  # 邁科的誤寫
         # ── 台股：電子通路 / 其他科技 ──
         "伊雲谷":  "6689.TW",
         # ── 台股：傳統 / 材料 ──
@@ -404,11 +437,11 @@ def _rule_based_ticker(asset: str) -> Optional[str]:
         "美利達":  "9914.TW",
         "中鼎":    "9933.TW",
         "桂盟":    "5306.TW",
-        "台特化":  "4746.TW",
+        "台特化":  "4772.TWO",
         "可寧衛":  "8422.TW",
-        "崑鼎":    "6803.TW",
+        "崑鼎":    "6803.TWO",
         "康那香":  "9919.TW",
-        "聖暉":    "6051.TW",
+        "聖暉":    "5536.TWO",
         "上緯投控": "3708.TW",
         "宇隆":    "2233.TW",
         "台聯":    "1304.TW",
@@ -428,48 +461,57 @@ def _rule_based_ticker(asset: str) -> Optional[str]:
         "虎航":    "6757.TW",  "台灣虎航": "6757.TW",
         "星宇航空": "2646.TW",
         # ── 台股：生技 / 醫療 ──
-        "東洋":    "4105.TW",
+        "東洋":    "4105.TWO",
         "康霈":    "6919.TW",
         "神隆":    "1789.TW",
         "柏文":    "8462.TW",
         "雄獅":    "2731.TW",
         # ── 台股：顯示 / 光電 ──
-        "元太":    "8069.TW",
+        "元太":    "8069.TWO",
         "群創":    "3481.TW",
         "瑞儀":    "6176.TW",
         # ── 台股：高力（散熱）──
         "高力":    "8996.TW",
         # ── 台股：金融 / 其他 ──
         "統一超商": "2912.TW",
-        "貿聯":    "3441.TW",  "貿聯-KY": "3441.TW",  "貿聯KY": "3441.TW",
+        "貿聯":    "3665.TW",  "貿聯-KY": "3665.TW",  "貿聯KY": "3665.TW",
         "茂林-KY": "4935.TW",
         "華城":    "1519.TW",
         "新日興":  "3376.TW",
         # ── 其他可識別 ──
         "臺光電":  "2383.TW",
         "和大":    "1536.TW",
-        "鈺創":    "5351.TW",
+        "鈺創":    "5351.TWO",
         "森崴能源": "6806.TW",
         "櫻花":    "9911.TW",
-        "JPP-KY":  "6545.TW",
-        "升達科":  "8072.TW",
+        "JPP-KY":  "5284.TW",
+        "升達科":  "3491.TWO",  # 昇達科的同音誤寫
         "MPMaterial": "MP",
         "Confluent": "CFLT",
         "Lulu Lemon": "LULU",  "lululemon": "LULU",
         "Zebra":   "ZBRA",
         "NCSoft":  "036570.KS",
         "聯想":    "0992.HK",
-        "中鋼特":  "2002.TW",
+        "中鋼特":  "2002A.TW",
         "元大":    "2885.TW",  # 元大金控（最常見）
         "華通":    "2313.TW",
         "皇昌":    "2543.TW",
         "雷虎":    "8033.TW",
-        "精銳":    "6550.TW",
-        "波若威":  "3163.TW",
-        "志強":    "6819.TW",
+        "精銳":    "4583.TW",
+        "波若威":  "3163.TWO",
+        "志強":    "6768.TW",
         "台灣虎航": "6757.TW",
         "亞航":    "2630.TW",  # 亞洲航空
+        # ── 簡稱跟真正 ticker 不同的（原本會被原樣當 ticker 放行）──
+        "TI":      "TXN",   "Texas Instruments": "TXN", "德州儀器": "TXN",
+        "NIKE":    "NKE",   "耐吉":       "NKE",
+        "SOX":     "^SOX",
+        "VIX":     "^VIX",
+        "TSMC":    "2330.TW",
+        # 反向 ETF 不能被「石油」關鍵字吃成原油本身，方向會整個相反
+        "石油反一": "00673R.TW", "原油反一": "00673R.TW", "原油反1": "00673R.TW",
     }
+    # 整串完全相等的別名比子字串的指數/商品關鍵字更具體，所以先比對
     if a in ALIAS_MAP:
         return ALIAS_MAP[a]
     a_lower = a.lower()
@@ -477,15 +519,19 @@ def _rule_based_ticker(asset: str) -> Optional[str]:
         if k.lower() == a_lower:
             return v
 
-    # ── ETF 代號（含 B 結尾債券 ETF）────────────────────────────────────────
-    if re.match(r"^\d{5}[BbRr]$", a):
-        return f"{a}.TW"
+    for keys, ticker in INDEX_TICKER_MAP.items():
+        if any(k in a for k in keys):
+            return ticker
+
+    for keys, ticker in COMMODITY_TICKER_MAP.items():
+        if any(k in a for k in keys):
+            return ticker
 
     # 已是英文 ticker（純大寫字母，最多 6 碼）。
     # 放在別名對照表之後才判斷，避免像 NVIDIA 這種剛好全大寫又<=6碼的
     # 公司名被誤判成合法ticker而跳過別名/TickerMap查詢。
-    if re.match(r"^[A-Z]{1,6}$", a):
-        return a
+    if allow_raw_ticker:
+        return _raw_ticker(a)
 
     return None
 
@@ -495,8 +541,26 @@ def resolve_ticker(asset: str) -> str:
     股票名稱 → Yahoo Finance ticker。
     查不到回傳空字串（後續標記 skip）。
     """
-    # 第一層：規則
-    t = _rule_based_ticker(asset)
+    # 台股代號：上市 .TW／上櫃 .TWO 看大表 IndustryClassification 有哪一個，
+    # 大表沒收錄（多數 ETF）就照 _tw_code_ticker() 的預設
+    a = asset.strip()
+    if _TW_CODE_RE.match(a):
+        code = a.upper()
+        try:
+            from apps.summaries.models import IndustryClassification
+            found = set(
+                IndustryClassification.objects.using("summariesdb")
+                .filter(ticker__in=[f"{code}.TW", f"{code}.TWO"])
+                .values_list("ticker", flat=True)
+            )
+            if len(found) == 1:
+                return found.pop()
+        except Exception:
+            pass
+        return _tw_code_ticker(code)
+
+    # 第一層：規則（原樣放行英文 ticker 那條留到 TickerMap 之後）
+    t = _rule_based_ticker(asset, allow_raw_ticker=False)
     if t:
         return t
 
@@ -509,7 +573,8 @@ def resolve_ticker(asset: str) -> str:
     except Exception:
         pass
 
-    return ""  # 無法解析
+    # 第三層：本身就長得像英文 ticker
+    return _raw_ticker(asset) or ""  # 無法解析
 
 
 # ── 建立回測列 ────────────────────────────────────────────────────────────────
