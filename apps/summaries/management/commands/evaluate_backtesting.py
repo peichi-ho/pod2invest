@@ -11,11 +11,11 @@ from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Optional
 
-import yfinance as yf
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
 from apps.summaries.models import BacktestingRecord
+from apps.summaries.services.price_history import get_close_history
 
 
 # ── 方向正規化 ────────────────────────────────────────────────────────────────
@@ -48,19 +48,13 @@ def _get_close_price(ticker: str, target_date: date) -> Optional[float]:
     if key in _price_cache:
         return _price_cache[key]
 
-    tk = yf.Ticker(ticker)
-
     def _fetch(start: date, end: date, take_last: bool = False) -> Optional[float]:
+        # 一般標的走 yfinance；櫃買指數等 Yahoo 沒有的標的由 get_close_history 改走其他來源
         try:
-            hist = tk.history(
-                start=start.strftime("%Y-%m-%d"),
-                end=end.strftime("%Y-%m-%d"),
-                auto_adjust=True,
-            )
-            if hist.empty:
+            closes = get_close_history(ticker, start, end)
+            if closes.empty:
                 return None
-            price = float(hist["Close"].iloc[-1 if take_last else 0])
-            return price
+            return float(closes.iloc[-1 if take_last else 0])
         except Exception:
             return None
 
