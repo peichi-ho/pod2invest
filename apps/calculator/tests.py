@@ -3,7 +3,7 @@ from datetime import date, timedelta
 from django.test import SimpleTestCase
 
 from apps.calculator.services.thesis_valuation import (
-    apply_scenarios, build_baseline, default_levers, project, project_scenarios, ttm_series,
+    apply_scenarios, build_baseline, default_levers, project, project_scenarios, ttm_series, waterfall,
 )
 
 
@@ -164,3 +164,27 @@ class ProjectionTests(SimpleTestCase):
         p = project(b, levers)
         self.assertAlmostEqual(p.target_price, b.price)
         self.assertIsNone(p.eps)
+
+
+class WaterfallTests(SimpleTestCase):
+    def setUp(self):
+        self.b = build_baseline("TEST", quarter_rows(), price=40.0, as_of=AS_OF)
+
+    def test_steps_add_up_to_final_target(self):
+        chosen = [{"type": "DEMAND_UP"}, {"type": "PRICE_UP"}, {"type": "COST_UP"}]
+        steps = waterfall(self.b, chosen, ["需求", "漲價", "成本"])
+        final = project_scenarios(self.b, chosen).target_price
+        self.assertAlmostEqual(self.b.price + sum(s["delta"] for s in steps), final)
+        self.assertAlmostEqual(steps[-1]["value"], final)
+
+    def test_repeated_same_direction_scenario_contributes_zero(self):
+        steps = waterfall(self.b, [{"type": "DEMAND_UP"}, {"type": "NEW_BUSINESS"}], ["需求", "新產品"])
+        self.assertGreater(steps[1]["delta"], 0)
+        self.assertAlmostEqual(steps[2]["delta"], 0.0)
+
+    def test_manual_override_is_its_own_step(self):
+        steps = waterfall(self.b, [], [], overrides={"pe": 50.0})
+        self.assertEqual(steps[-1]["kind"], "manual")
+        levers = default_levers(self.b)
+        levers["pe"] = 50.0
+        self.assertAlmostEqual(steps[-1]["value"], project(self.b, levers).target_price)

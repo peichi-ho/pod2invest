@@ -22,7 +22,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.calculator.services.thesis_valuation import (
-    LEVERS, apply_scenarios, compute_baseline, project,
+    LEVERS, apply_scenarios, compute_baseline, project, waterfall,
 )
 
 PROMPT_VERSION = "v5"
@@ -93,6 +93,16 @@ def _bootstrap_percentile(ticker, as_of, start_price, implied_return):
     if not returns:
         return None
     return float(np.searchsorted(returns, implied_return) / len(returns) * 100)
+
+
+def _waterfall_label(s: dict) -> str:
+    """瀑布圖上的情境名稱：帶數字的情境把數字一起寫上，才分得出是哪一個 EPS/本益比。"""
+    f = s["figures"]
+    if f.get("eps"):
+        return f"{s['label']} {f['eps']:g}" + (f"（{f['year']}）" if f.get("year") else "")
+    if f.get("pe"):
+        return f"{s['label']} {f['pe']:g} 倍"
+    return s["label"]
 
 
 def _parse_float(raw):
@@ -170,21 +180,22 @@ class ThesisValuationAPIView(APIView):
 
         checked_raw = request.query_params.get("checked", "").strip()
         checked = sorted({int(x) for x in checked_raw.split(",") if x.strip().isdigit()}) if checked_raw else []
-        chosen = [current.scenarios[i] for i in checked
-                  if i < len(current.scenarios) and scenarios[i]["checkable"]]
+        chosen_idx = [i for i in checked if i < len(current.scenarios) and scenarios[i]["checkable"]]
+        chosen = [current.scenarios[i] for i in chosen_idx]
         levers_auto, notes = apply_scenarios(b, chosen)
 
         levers = dict(levers_auto)
-        overridden = []
+        overridden, override_values = [], {}
         for k in OVERRIDABLE:
             v = _parse_float(request.query_params.get(k))
             if v is not None:
-                levers[k] = v
+                override_values[k] = v
                 overridden.append(k)
         eps = _parse_float(request.query_params.get("eps"))
         if eps is not None and eps > 0:
-            levers["eps_override"] = eps
+            override_values["eps_override"] = eps
             overridden.append("eps")
+        levers.update(override_values)
         if overridden:
             notes.append("已手動調整：" + "、".join(overridden))
 
@@ -198,5 +209,6 @@ class ThesisValuationAPIView(APIView):
             },
             notes=p.notes,
             bootstrap_percentile=_bootstrap_percentile(score.ticker, as_of, b.price, p.implied_return),
+            waterfall=waterfall(b, chosen, [_waterfall_label(scenarios[i]) for i in chosen_idx], override_values),
         )
         return Response(payload)

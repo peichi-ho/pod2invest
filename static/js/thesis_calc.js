@@ -182,12 +182,16 @@ function _thesisRender(d) {
     document.getElementById('thesis-result').innerHTML =
       `<p class="text-sm text-outline">${_escHtml(d.reason || '資料不足')}。上方的情境仍可閱讀，股價走勢請參考上面的歷史股價模擬。</p>`;
     document.getElementById('thesis-levers').innerHTML = '';
+    document.getElementById('thesis-waterfall').classList.add('hidden');
     document.getElementById('thesis-reset').classList.add('hidden');
     document.getElementById('thesis-baseline').textContent = '';
     return;
   }
   _thesisSetStatus(d.no_driver_reason ? '這句論點沒有拆出具體情境：' + d.no_driver_reason + '（仍可直接調整下方參數）' : '');
   document.getElementById('thesis-result').innerHTML = _thesisResultHtml(d);
+  const wf = document.getElementById('thesis-waterfall');
+  wf.innerHTML = _thesisWaterfallHtml(d);
+  wf.classList.toggle('hidden', !wf.innerHTML);
   document.getElementById('thesis-levers').innerHTML = _thesisLeversHtml(d);
   document.getElementById('thesis-reset').classList.toggle('hidden', !(d.overridden && d.overridden.length));
   document.getElementById('thesis-baseline').innerHTML = _thesisBaselineHtml(d);
@@ -335,4 +339,71 @@ function _thesisBaselineHtml(d) {
   if (b.reason) text += ` ${_escHtml(b.reason)}。`;
   text += ' 情境的預設幅度取自這家公司自己過去 5 年的分布；標示「幅度暫定」的情境還沒有校準。';
   return text;
+}
+
+// 瀑布圖：發布日股價 → 公司一般趨勢 → 每個勾選的情境 → 手動調整 → 目標價。
+// 橫條都從 0 起算(不截斷座標軸，避免小變動看起來很大)；漲紅跌綠沿用台股慣例。
+function _thesisWaterfallHtml(d) {
+  const steps = d.waterfall;
+  const price = d.baseline.price;
+  if (!steps || !steps.length || !price) return '';
+  const values = [price, ...steps.map(s => s.value)];
+  const hi = Math.max(...values) * 1.05;
+  const pos = v => Math.max(0, Math.min(100, v / hi * 100));
+
+  // 情境貢獻是 0 時說明原因：EPS 已直接指定，或同方向已經調整過
+  const scenarios = d.scenarios || [];
+  const order = (d.checked || []).map(i => scenarios[i]);
+  let epsFixed = false;
+  const zeroReasons = [];
+  order.forEach(s => {
+    zeroReasons.push(epsFixed && s && s.type !== 'RERATING_UP' && s.type !== 'RERATING_DOWN' && !s.type.startsWith('MACRO')
+      ? 'EPS 已直接指定，營收與利潤率的變化不再影響結果'
+      : '同一個參數同一個方向已經調整過，不重複計算');
+    if (s && s.type === 'EPS_FORECAST' && s.figures.eps) epsFixed = true;
+  });
+
+  // 寬螢幕：名稱｜長條｜數字 三欄；手機：名稱與數字一行、長條另起一行佔滿寬度(不然長條會被擠到看不出比例)
+  const row = (label, sub, left, width, color, valueText, deltaText, deltaColor) => `
+    <div class="grid grid-cols-[minmax(0,1fr)_auto] sm:grid-cols-[minmax(0,9rem)_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 py-1">
+      <div class="min-w-0 order-1">
+        <div class="text-sm font-bold text-tertiary-container truncate" title="${_escHtml(label)}">${_escHtml(label)}</div>
+        ${sub ? `<div class="text-[11px] text-outline leading-tight">${_escHtml(sub)}</div>` : ''}
+      </div>
+      <div class="relative h-5 rounded bg-surface-container order-3 col-span-2 sm:order-2 sm:col-span-1">
+        <div class="absolute inset-y-0 rounded ${color}" style="left:${left}%;width:${Math.max(width, 0.6)}%"></div>
+      </div>
+      <div class="text-right text-sm font-['Epilogue'] font-bold tabular-nums whitespace-nowrap order-2 sm:order-3">
+        ${deltaText ? `<span class="${deltaColor}">${deltaText}</span>` : valueText}
+      </div>
+    </div>`;
+
+  const fmt = v => _tNum(v, 0);
+  let scenarioIdx = 0;
+  const rows = [row('發布日股價', d.as_of, 0, pos(price), 'bg-[#113236]/40', fmt(price))];
+  let prev = price;
+  steps.forEach(s => {
+    const up = s.delta >= 0;
+    const zero = Math.abs(s.delta) < 0.005 * price;
+    let sub = s.kind === 'trend' ? '都不勾時：歷史中位數的營收成長' : s.kind === 'manual' ? '滑桿或直接指定 EPS' : '';
+    if (s.kind === 'scenario') {
+      if (zero) sub = zeroReasons[scenarioIdx] || '';
+      scenarioIdx += 1;
+    }
+    const left = pos(Math.min(prev, s.value));
+    const width = pos(Math.max(prev, s.value)) - left;
+    const color = zero ? 'bg-outline/40' : up ? 'bg-[#ba1a1a]/70' : 'bg-[#1e8e3e]/70';
+    const delta = zero ? '0' : (up ? '+' : '−') + fmt(Math.abs(s.delta));
+    rows.push(row(s.label, sub, left, width, color, '', delta, zero ? 'text-outline' : up ? 'text-[#ba1a1a]' : 'text-[#1e8e3e]'));
+    prev = s.value;
+  });
+  rows.push(row('目標價', '12 個月後', 0, pos(prev), 'bg-[#113236]', fmt(prev)));
+
+  return `
+    <div class="flex items-baseline justify-between gap-2">
+      <h4 class="text-sm font-bold text-tertiary-container uppercase tracking-widest">目標價怎麼來的</h4>
+      <span class="text-xs text-outline">每一步相對前一步的變化</span>
+    </div>
+    <div class="space-y-1">${rows.join('')}</div>
+    <p class="text-xs text-outline">依勾選順序逐一加入情境計算，各步加總等於目標價與發布日股價的差距。</p>`;
 }

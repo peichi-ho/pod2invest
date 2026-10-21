@@ -477,3 +477,46 @@ def project_scenarios(b: Baseline, scenarios: list) -> Optional[Projection]:
     """一步到位：勾選的情境 → Projection。"""
     levers, notes = apply_scenarios(b, scenarios)
     return project(b, levers, notes)
+
+
+def waterfall(b: Baseline, scenarios: list, labels: list, overrides: Optional[dict] = None) -> Optional[list]:
+    """
+    瀑布圖：從發布日股價開始，一步一步加上去，看每個情境各把目標價推高或拉低多少。
+      1. 公司一般趨勢：什麼都不勾(Base)的目標價 − 發布日股價
+      2. 依勾選順序逐一加入情境：加入後的目標價 − 加入前的目標價
+         (同方向的情境不疊加，所以後面重複的情境會是 0，畫面會說明)
+      3. 手動調整：套用使用者拉過的滑桿/指定的 EPS 後的差額
+    每一步的金額加總 = 最終目標價 − 發布日股價。任何一步算不出目標價(例如 EPS 變負)就回傳 None。
+
+    scenarios：要加入的情境 dict(依勾選順序)；labels：每個情境在圖上的名稱，長度跟 scenarios 相同。
+    overrides：使用者手動覆寫的參數(key 同 levers，eps 另外用 "eps_override")。
+    """
+    if not b.supported or not b.price:
+        return None
+
+    def target_of(chosen, extra=None):
+        levers, notes = apply_scenarios(b, chosen)
+        if extra:
+            levers.update(extra)
+        p = project(b, levers, notes)
+        return p.target_price if p else None
+
+    steps = []
+    prev = b.price
+    base = target_of([])
+    if base is None:
+        return None
+    steps.append({"label": "公司一般趨勢", "kind": "trend", "delta": base - prev, "value": base})
+    prev = base
+    for k, label in enumerate(labels, start=1):
+        cur = target_of(scenarios[:k])
+        if cur is None:
+            return None
+        steps.append({"label": label, "kind": "scenario", "delta": cur - prev, "value": cur})
+        prev = cur
+    if overrides:
+        cur = target_of(scenarios, overrides)
+        if cur is None:
+            return None
+        steps.append({"label": "手動調整", "kind": "manual", "delta": cur - prev, "value": cur})
+    return steps
