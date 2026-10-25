@@ -4,7 +4,7 @@
 
 {% block extra_head %}
 <style>
-  .dot { width: 6px; height: 6px; border-radius: 9999px; }
+  .dot { width: 8px; height: 8px; border-radius: 9999px; }
   #detail-overlay { transition: opacity .25s ease; }
   #detail-panel { transition: transform .3s ease; }
   .purpose-card.active, .tier-card.active {
@@ -23,24 +23,24 @@
   <div class="flex items-start justify-between gap-4 mb-8">
     <div>
       <h1 id="page-title" class="font-headline font-extrabold text-3xl text-tertiary-container tracking-tight">探索投資機會</h1>
-      <p class="text-on-surface-variant text-sm mt-1">從 Podcast 討論與財務數據中，發掘值得關注的標的</p>
+      <p class="text-on-surface-variant text-base mt-1">從 Podcast 討論與財務數據中，發掘值得關注的標的</p>
     </div>
     <div class="flex-shrink-0 flex gap-1 bg-surface-container-high rounded-full p-1">
-      <button onclick="window.location.href='/#assets'" class="px-4 py-2 rounded-full font-label text-xs font-bold transition-all text-secondary hover:bg-surface-container-highest whitespace-nowrap">查看個股資訊</button>
-      <button class="px-4 py-2 rounded-full font-label text-xs font-bold transition-all bg-tertiary-container text-white whitespace-nowrap">探索相關標的</button>
+      <button onclick="window.location.href='/#assets'" class="px-4 py-2 rounded-full font-label text-sm font-bold transition-all text-secondary hover:bg-surface-container-highest whitespace-nowrap">查看個股資訊</button>
+      <button class="px-4 py-2 rounded-full font-label text-sm font-bold transition-all bg-tertiary-container text-white whitespace-nowrap">探索相關標的</button>
     </div>
   </div>
 
   <!-- 查詢表單 -->
   <div class="bg-surface-container-low border border-outline-variant/40 rounded-xl p-6 mb-8">
 
-    <label class="block text-sm font-semibold text-on-surface mb-2" for="seed-input">查詢標的</label>
+    <label class="block text-base font-semibold text-on-surface mb-2" for="seed-input">查詢標的</label>
     <div class="relative mb-6">
       <input id="seed-input" type="text" placeholder="例如：台積電、輝達" autocomplete="off"
         oninput="onSeedInput()" onkeydown="if (event.key === 'Escape') closeSeedDropdown()"
-        class="w-full bg-surface-container-lowest border border-outline-variant rounded-lg pl-4 pr-10 py-3 text-on-surface text-sm outline-none focus:border-tertiary-container transition-colors">
+        class="w-full bg-surface-container-lowest border border-outline-variant rounded-lg pl-4 pr-10 py-3 text-on-surface text-base outline-none focus:border-tertiary-container transition-colors">
       <button onclick="clearSeed()" class="absolute right-3 top-1/2 -translate-y-1/2 text-outline hover:text-on-surface">
-        <span class="material-symbols-outlined text-lg">close</span>
+        <span class="material-symbols-outlined text-xl">close</span>
       </button>
       <!-- 搜尋建議：輸入時從圖譜節點找名稱或代號符合、而且是投資標的的節點，
            做法與「查看個股資訊」的搜尋下拉相同（輸入後稍等再查、顯示在輸入框正下方的浮動清單） -->
@@ -48,21 +48,21 @@
     </div>
 
     <div class="flex items-center gap-1.5 mb-3">
-      <span class="text-sm font-semibold text-on-surface">選擇關係類型</span>
-      <span class="material-symbols-outlined text-outline text-base" title="決定要從哪個角度找相關標的">info</span>
+      <span class="text-base font-semibold text-on-surface">選擇關係類型</span>
+      <span class="material-symbols-outlined text-outline text-lg" title="決定要從哪個角度找相關標的">info</span>
     </div>
     <div id="purpose-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-6"></div>
 
     <div class="flex items-center gap-1.5 mb-3">
-      <span class="text-sm font-semibold text-on-surface">選擇投資類型</span>
-      <span class="material-symbols-outlined text-outline text-base" title="決定財務體質篩選的嚴格程度">info</span>
+      <span class="text-base font-semibold text-on-surface">選擇投資類型</span>
+      <span class="material-symbols-outlined text-outline text-lg" title="決定財務體質篩選的嚴格程度">info</span>
     </div>
     <div id="tier-grid" class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6"></div>
 
-    <div class="flex flex-wrap items-center gap-4 text-xs text-on-surface-variant mb-6 pt-2 border-t border-outline-variant/30">
+    <div class="flex flex-wrap items-center gap-4 text-sm text-on-surface-variant mb-6 pt-2 border-t border-outline-variant/30">
       <div class="flex items-center gap-2 pt-3">
         <span>時間窗口</span>
-        <select id="window-days" class="bg-surface-container-lowest border border-outline-variant rounded-md text-xs px-2 py-1 outline-none min-w-[65px]">
+        <select id="window-days" class="bg-surface-container-lowest border border-outline-variant rounded-md text-sm px-2 py-1 outline-none min-w-[75px]">
           <option value="14">14 天</option>
           <option value="30" selected>30 天</option>
           <option value="60">60 天</option>
@@ -70,12 +70,12 @@
       </div>
       <div class="flex items-center gap-2 pt-3">
         <span>截止日</span>
-        <input type="date" id="end-date" class="bg-surface-container-lowest border border-outline-variant rounded-md text-xs px-2 py-1 outline-none">
+        <input type="date" id="end-date" class="bg-surface-container-lowest border border-outline-variant rounded-md text-sm px-2 py-1 outline-none">
       </div>
     </div>
 
     <button id="run-btn" onclick="run()"
-      class="w-full py-3 rounded-lg bg-tertiary-container text-on-tertiary font-headline font-bold text-sm hover:opacity-90 active:scale-[.99] transition-all disabled:opacity-40">
+      class="w-full py-3 rounded-lg bg-tertiary-container text-on-tertiary font-headline font-bold text-base hover:opacity-90 active:scale-[.99] transition-all disabled:opacity-40">
       查詢相關標的
     </button>
 
@@ -83,37 +83,33 @@
       <div class="flex items-center gap-3 mb-3">
         <div class="relative w-9 h-9 flex-shrink-0">
           <div class="absolute inset-0 rounded-full border-[3px] border-outline-variant/40 border-t-tertiary-container animate-spin"></div>
-          <span id="progress-icon" class="material-symbols-outlined absolute inset-0 flex items-center justify-center text-base text-tertiary-container">travel_explore</span>
+          <span id="progress-icon" class="material-symbols-outlined absolute inset-0 flex items-center justify-center text-lg text-tertiary-container">travel_explore</span>
         </div>
         <div class="flex-1 min-w-0">
-          <div id="progress-label" class="text-sm font-semibold text-on-surface truncate">準備中…</div>
-          <div id="progress-sub" class="text-[11px] text-on-surface-variant"></div>
+          <div id="progress-label" class="text-base font-semibold text-on-surface truncate">準備中…</div>
+          <div id="progress-sub" class="text-[13px] text-on-surface-variant"></div>
         </div>
-        <div id="progress-percent" class="text-sm font-bold text-tertiary-container flex-shrink-0">0%</div>
+        <div id="progress-percent" class="text-base font-bold text-tertiary-container flex-shrink-0">0%</div>
       </div>
       <div class="w-full h-1.5 bg-outline-variant/40 rounded-full overflow-hidden">
         <div id="progress-bar" class="h-full bg-tertiary-container rounded-full transition-all duration-300 ease-out" style="width:0%"></div>
       </div>
     </div>
 
-    <div id="error" class="hidden text-xs text-error mt-3"></div>
+    <div id="error" class="hidden text-sm text-error mt-3"></div>
   </div>
 
   <!-- 結果 -->
   <div id="results" class="hidden">
     <div class="flex items-center justify-between mb-3">
-      <h2 id="result-title" class="font-headline font-bold text-lg text-on-surface"></h2>
-      <span class="text-xs text-on-surface-variant">排序方式：綜合相關度</span>
+      <h2 id="result-title" class="font-headline font-bold text-xl text-on-surface"></h2>
+      <span class="text-sm text-on-surface-variant">排序方式：綜合相關度</span>
     </div>
 
-    <div class="mb-4 overflow-x-auto">
-      <div id="funnel" class="flex items-center gap-0 w-max pb-1"></div>
-    </div>
-
-    <div class="flex flex-wrap gap-x-5 gap-y-1 text-[11px] text-on-surface-variant mb-5 bg-surface-container-low border border-outline-variant/30 rounded-lg px-4 py-2.5">
+    <div class="flex flex-wrap gap-x-5 gap-y-1 text-[13px] text-on-surface-variant mb-5 bg-surface-container-low border border-outline-variant/30 rounded-lg px-4 py-2.5">
       <span><b class="text-on-surface">提及次數</b>：在所選時間窗口內被提及的總次數</span>
       <span><b class="text-on-surface">Podcast 數</b>：提及該標的的不同 Podcast 數量</span>
-      <span><b class="text-on-surface">財務驗證</b>：F-score 檢查表通過的項目數</span>
+      <span><b class="text-on-surface">財務驗證</b>：財報檢查通過的項目數</span>
     </div>
 
     <div id="basket-grid" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
@@ -129,6 +125,16 @@
 
 {% block body_scripts %}
 <script>
+// 這頁是獨立頁面，沒有跑 SPA 的 showPage()，底部導覽列會停在預設的 Discover。
+// 「探索相關標的」是 Assets 分頁的延伸，所以手動把 Assets 標成目前頁面（做法同 app.js 的 _renderPage）。
+(function markAssetsNavActive() {
+  document.querySelectorAll(".nav-btn").forEach(b => { b.classList.remove("active"); b.classList.add("opacity-60"); });
+  const btn = document.getElementById("nav-assets");
+  if (btn) { btn.classList.add("active"); btn.classList.remove("opacity-60"); }
+  const discoverIcon = document.querySelector("#nav-discover .nav-icon");
+  if (discoverIcon) discoverIcon.removeAttribute("style");   // Discover 圖示預設寫死實心，要拿掉才不會看起來還在選取
+})();
+
 let selectedPurpose = null;
 let selectedTier = "均衡";
 let lastData = null;
@@ -155,9 +161,9 @@ const PURPOSE_ICONS = {
       el.className = "purpose-card cursor-pointer rounded-lg border-2 border-outline-variant/50 bg-surface-container-lowest p-4 hover:border-outline transition-colors";
       el.dataset.key = p.key;
       el.innerHTML = `
-        <span class="card-icon material-symbols-outlined text-2xl text-on-surface-variant">${PURPOSE_ICONS[p.key] || "category"}</span>
-        <div class="font-semibold text-sm text-on-surface mt-2">${esc(p.label)}</div>
-        <div class="text-[11px] text-on-surface-variant mt-0.5 leading-snug">${esc(p.description)}</div>
+        <span class="card-icon material-symbols-outlined text-3xl text-on-surface-variant">${PURPOSE_ICONS[p.key] || "category"}</span>
+        <div class="font-semibold text-base text-on-surface mt-2">${esc(p.label)}</div>
+        <div class="text-[13px] text-on-surface-variant mt-0.5 leading-snug">${esc(p.description)}</div>
       `;
       el.onclick = () => selectPurpose(p.key);
       grid.appendChild(el);
@@ -173,8 +179,8 @@ const PURPOSE_ICONS = {
     el.className = "tier-card cursor-pointer rounded-lg border-2 border-outline-variant/50 bg-surface-container-lowest p-4 text-center hover:border-outline transition-colors";
     el.dataset.key = t.key;
     el.innerHTML = `
-      <div class="font-semibold text-sm text-on-surface">${t.label}</div>
-      <div class="text-[11px] text-on-surface-variant mt-0.5">${t.desc}</div>
+      <div class="font-semibold text-base text-on-surface">${t.label}</div>
+      <div class="text-[13px] text-on-surface-variant mt-0.5">${t.desc}</div>
     `;
     el.onclick = () => selectTier(t.key);
     tierGrid.appendChild(el);
@@ -221,7 +227,7 @@ function closeSeedDropdown() {
 async function runSeedSuggest(q) {
   const dd = document.getElementById("seed-dropdown");
   const reqId = ++_seedReq;
-  dd.innerHTML = '<p class="text-outline text-sm p-4 text-center">搜尋中...</p>';
+  dd.innerHTML = '<p class="text-outline text-base p-4 text-center">搜尋中...</p>';
   dd.classList.remove("hidden");
   try {
     const res = await fetch("/api/knowledge-graph/seed-suggest/?q=" + encodeURIComponent(q));
@@ -233,14 +239,14 @@ async function runSeedSuggest(q) {
       <div data-name="${escAttr(s.name)}" onclick="pickSeedSuggestion(this.dataset.name)"
         class="flex items-center justify-between gap-3 px-4 py-4 hover:bg-surface-container-highest cursor-pointer border-b border-outline-variant/10 last:border-0 transition-colors">
         <div class="flex items-baseline gap-2 min-w-0">
-          <span class="text-[10px] font-bold text-outline uppercase tracking-wider flex-shrink-0 px-1.5 py-0.5 rounded bg-surface-container-highest">${esc(s.market)}</span>
-          <span class="text-base font-bold text-tertiary-container truncate">${esc(s.name)}</span>
-          ${s.code !== s.name ? `<span class="text-sm text-outline flex-shrink-0">${esc(s.code)}</span>` : ""}
+          <span class="text-xs font-bold text-outline uppercase tracking-wider flex-shrink-0 px-1.5 py-0.5 rounded bg-surface-container-highest">${esc(s.market)}</span>
+          <span class="text-lg font-bold text-tertiary-container truncate">${esc(s.name)}</span>
+          ${s.code !== s.name ? `<span class="text-base text-outline flex-shrink-0">${esc(s.code)}</span>` : ""}
         </div>
       </div>`).join("")
-      : '<p class="text-outline text-sm p-4 text-center">圖譜裡找不到相關的投資標的</p>';
+      : '<p class="text-outline text-base p-4 text-center">圖譜裡找不到相關的投資標的</p>';
   } catch (e) {
-    if (reqId === _seedReq) dd.innerHTML = '<p class="text-error text-sm p-4 text-center">搜尋失敗，請稍後再試</p>';
+    if (reqId === _seedReq) dd.innerHTML = '<p class="text-error text-base p-4 text-center">搜尋失敗，請稍後再試</p>';
   }
 }
 
@@ -331,19 +337,18 @@ function updateProgress(msg) {
 function render(data) {
   document.getElementById("page-title").textContent = `探索與 ${data.seed} 相關的投資機會`;
   document.getElementById("result-title").textContent = `找到 ${data.basket.length} 個相關標的`;
-  document.getElementById("funnel").innerHTML = funnelHtml(data.funnel || []);
 
   const grid = document.getElementById("basket-grid");
   if (!data.basket.length) {
     const suggestions = data.seed_suggestions || [];
     grid.className = "";
     grid.innerHTML = suggestions.length ? `
-      <div class="text-center py-14 text-on-surface-variant text-sm">
+      <div class="text-center py-14 text-on-surface-variant text-base">
         圖譜裡找不到「${esc(data.seed)}」，你是不是要找：
         <div class="flex gap-2 justify-center flex-wrap mt-4">
-          ${suggestions.map(s => `<span class="px-4 py-1.5 rounded-full border border-outline-variant text-sm cursor-pointer hover:border-tertiary-container hover:text-tertiary-container transition-colors" onclick="pickSuggestion('${esc(s).replace(/'/g, "\\'")}')">${esc(s)}</span>`).join("")}
+          ${suggestions.map(s => `<span class="px-4 py-1.5 rounded-full border border-outline-variant text-base cursor-pointer hover:border-tertiary-container hover:text-tertiary-container transition-colors" onclick="pickSuggestion('${esc(s).replace(/'/g, "\\'")}')">${esc(s)}</span>`).join("")}
         </div>
-      </div>` : `<div class="text-center py-14 text-on-surface-variant text-sm">沒有找到符合條件的標的，試試看調整窗口長度或換一個標的。</div>`;
+      </div>` : `<div class="text-center py-14 text-on-surface-variant text-base">沒有找到符合條件的標的，試試看調整窗口長度或換一個標的。</div>`;
   } else {
     grid.className = "grid grid-cols-1 md:grid-cols-2 gap-4";
     grid.innerHTML = data.basket.map((c, i) => cardHtml(c, i)).join("");
@@ -354,16 +359,6 @@ function render(data) {
 function pickSuggestion(name) {
   document.getElementById("seed-input").value = name;
   run();
-}
-
-function funnelHtml(steps) {
-  return steps.map((s, i) => `
-    ${i > 0 ? '<span class="text-outline-variant text-xs px-1.5 flex-shrink-0">→</span>' : ""}
-    <div class="flex flex-col items-center flex-shrink-0 min-w-[76px]">
-      <div class="text-sm font-bold text-on-surface">${s.count}</div>
-      <div class="text-[9px] text-on-surface-variant text-center leading-tight mt-0.5 max-w-[80px]">${esc(s.stage)}</div>
-    </div>
-  `).join("");
 }
 
 function relationLabel(strategy) {
@@ -382,7 +377,7 @@ function fVerifyDots(layer2) {
 
 function cardHtml(c, idx) {
   const layer2 = c.layer2;
-  const ticker = layer2 && layer2.ticker ? layer2.ticker : "-";
+  const ticker = layer2 && layer2.ticker ? layer2.ticker : "";
   const fLabel = (!layer2 || layer2.status === "unavailable" || !layer2.f_score_max)
     ? "無法評估" : `${layer2.f_score} / ${layer2.f_score_max} 通過`;
   const combinedLabel = layer2 && layer2.combined_label;
@@ -391,43 +386,43 @@ function cardHtml(c, idx) {
   const bulletReasons = rawReasons.slice(0, 2);
 
   return `
-  <div class="bg-surface-container-lowest border border-outline-variant/40 rounded-xl p-5 hover:border-tertiary-container/50 transition-colors cursor-pointer" onclick="openDetail(${idx})">
-    <div class="flex items-center justify-between mb-2">
-      <div class="flex items-center gap-2">
-        <span class="w-6 h-6 flex items-center justify-center rounded-full bg-tertiary-container text-on-tertiary text-xs font-bold flex-shrink-0">${idx + 1}</span>
-        <span class="text-xs text-on-surface-variant font-medium">${esc(ticker)}</span>
-      </div>
-      ${combinedLabel ? `<span class="text-[11px] px-2 py-0.5 rounded-full bg-[#fdf0dc] text-[#8d4f00] font-semibold whitespace-nowrap">${esc(combinedLabel)}</span>` : ""}
+  <div class="bg-surface-container-lowest border border-outline-variant/40 @container rounded-xl p-5 flex flex-col hover:border-tertiary-container/50 transition-colors cursor-pointer" onclick="openDetail(${idx})">
+    <div class="flex items-center gap-2.5 flex-wrap mb-3">
+      <span class="w-10 h-10 flex items-center justify-center rounded-full bg-tertiary-container text-on-tertiary text-lg font-bold flex-shrink-0">${idx + 1}</span>
+      ${ticker ? `<span class="text-lg text-on-surface-variant font-semibold">${esc(ticker)}</span>` : ""}
+      ${ticker && combinedLabel ? `<span class="hidden @[360px]:block w-px h-5 bg-outline-variant"></span>` : ""}
+      ${combinedLabel ? `<span class="text-sm px-3 py-1 rounded-full bg-[#fdf0dc] text-[#8d4f00] font-bold whitespace-nowrap">${esc(combinedLabel)}</span>` : ""}
     </div>
-    <div class="font-headline font-bold text-base text-on-surface mb-1.5">${esc(c.node)}</div>
-    <span class="inline-block text-[11px] px-2.5 py-0.5 rounded-full bg-secondary-container text-on-secondary-container font-medium mb-3">${relationLabel(lastData.strategy)}</span>
+    <div class="font-headline font-extrabold text-2xl text-on-surface mb-4">${esc(c.node)}</div>
 
-    <div class="grid grid-cols-3 gap-2 text-center border-t border-b border-outline-variant/30 py-3 mb-3">
-      <div>
-        <div class="text-[10px] text-on-surface-variant">提及次數</div>
-        <div class="text-sm font-bold text-on-surface mt-0.5">${c.mention_count ?? 0} 次</div>
+    <div class="grid grid-cols-3 text-center rounded-2xl bg-[#f0f5f5] py-4 px-1 mb-4">
+      <div class="px-0.5">
+        <div class="text-sm text-on-surface-variant">提及次數</div>
+        <div class="text-base sm:text-lg font-bold text-on-surface mt-1 whitespace-nowrap">${c.mention_count ?? 0} 次</div>
       </div>
-      <div>
-        <div class="text-[10px] text-on-surface-variant">Podcast 數</div>
-        <div class="text-sm font-bold text-on-surface mt-0.5">${c.source_diversity ?? 0} 個</div>
+      <div class="px-0.5 border-l border-outline-variant/50">
+        <div class="text-sm text-on-surface-variant">Podcast 數</div>
+        <div class="text-base sm:text-lg font-bold text-on-surface mt-1 whitespace-nowrap">${c.source_diversity ?? 0} 個</div>
       </div>
-      <div>
-        <div class="text-[10px] text-on-surface-variant">財務驗證</div>
-        <div class="text-sm font-bold text-on-surface mt-0.5">${esc(fLabel)}</div>
-        <div class="flex gap-1 justify-center mt-1">${fVerifyDots(layer2)}</div>
+      <div class="px-0.5 border-l border-outline-variant/50">
+        <div class="text-sm text-on-surface-variant">財務驗證</div>
+        <div class="text-base sm:text-lg font-bold text-on-surface mt-1 whitespace-nowrap">${esc(fLabel)}</div>
+        <div class="flex gap-1.5 justify-center mt-1.5">${fVerifyDots(layer2)}</div>
       </div>
     </div>
 
     ${bulletReasons.length ? `
-      <div class="text-[11px] text-on-surface-variant font-medium mb-1">被提及的主要理由</div>
-      <ul class="text-xs text-on-surface space-y-1 mb-3 list-disc list-inside">
-        ${bulletReasons.map(r => `<li class="leading-snug">${esc(r)}</li>`).join("")}
-      </ul>
+      <div class="mb-4">
+        <div class="text-sm text-on-surface-variant font-semibold mb-2">被提及的主要理由</div>
+        <ul class="text-base text-on-surface space-y-1.5 pl-4">
+          ${bulletReasons.map(r => `<li class="flex gap-2.5 leading-snug"><span class="w-1.5 h-1.5 mt-2 rounded-full bg-on-surface flex-shrink-0"></span><span>${esc(r)}</span></li>`).join("")}
+        </ul>
+      </div>
     ` : ""}
 
-    <div class="text-xs text-secondary font-semibold flex items-center gap-1">
-      查看財務驗證與更多理由（${layer2 && layer2.f_score_max ? layer2.f_score_max : 0} 項）
-      <span class="material-symbols-outlined text-sm">arrow_forward</span>
+    <div class="mt-auto flex items-center justify-between px-5 py-4 rounded-2xl bg-[#f0f5f5] text-secondary font-bold text-lg">
+      查看詳情
+      <span class="material-symbols-outlined text-2xl">chevron_right</span>
     </div>
   </div>`;
 }
@@ -449,8 +444,8 @@ function openDetail(idx) {
   const pathHtml = path.map((n, i) => {
     const cls = i === 0 ? "bg-secondary-container text-on-secondary-container"
       : (i === path.length - 1 ? "bg-primary-container/20 text-on-primary-container font-semibold" : "bg-surface-container text-on-surface-variant");
-    return (i > 0 ? '<span class="text-outline-variant text-xs">→</span>' : "") +
-      `<span class="text-[11px] px-2 py-0.5 rounded-md ${cls}">${esc(n)}</span>`;
+    return (i > 0 ? '<span class="text-outline-variant text-sm">→</span>' : "") +
+      `<span class="text-[13px] px-2 py-0.5 rounded-md ${cls}">${esc(n)}</span>`;
   }).join(" ");
 
   const segments = (c.path_reasons || []).filter(seg => (seg.reasons || []).length);
@@ -458,7 +453,7 @@ function openDetail(idx) {
 
   let financeSection = "";
   if (!layer2 || layer2.status === "unavailable") {
-    financeSection = `<div class="text-sm text-on-surface-variant bg-surface-container-low rounded-lg p-4">財務資料無法評估，可能是海外標的資料源未涵蓋，或找不到對應股票代號。</div>`;
+    financeSection = `<div class="text-base text-on-surface-variant bg-surface-container-low rounded-lg p-4">財務資料無法評估，可能是海外標的資料源未涵蓋，或找不到對應股票代號。</div>`;
   } else {
     const details = [...(layer2.f_score_details || [])].sort((a, b) => {
       if (a.pass !== b.pass) return a.pass ? -1 : 1;
@@ -468,13 +463,13 @@ function openDetail(idx) {
     });
     const checklistItems = details.map(row => `
       <div class="flex items-center gap-1.5 py-1.5">
-        <span class="material-symbols-outlined text-base flex-shrink-0 ${row.pass ? "text-[#2e7d32]" : "text-error"}">${row.pass ? "check_circle" : "cancel"}</span>
-        <span class="text-xs text-on-surface leading-snug">${esc(row.name)}</span>
+        <span class="material-symbols-outlined text-lg flex-shrink-0 ${row.pass ? "text-[#2e7d32]" : "text-error"}">${row.pass ? "check_circle" : "cancel"}</span>
+        <span class="text-sm text-on-surface leading-snug">${esc(row.name)}</span>
       </div>`).join("");
 
     const explanationRows = details.map(row => `
       <div class="flex items-start gap-1.5">
-        <span class="material-symbols-outlined text-sm flex-shrink-0 mt-0.5 ${row.pass ? "text-[#2e7d32]" : "text-error"}">${row.pass ? "check_circle" : "cancel"}</span>
+        <span class="material-symbols-outlined text-base flex-shrink-0 mt-0.5 ${row.pass ? "text-[#2e7d32]" : "text-error"}">${row.pass ? "check_circle" : "cancel"}</span>
         <div>
           <span class="font-semibold text-on-surface">${esc(row.name)}</span>
           <span class="text-on-surface-variant">（實際值 ${esc(row.actual ?? "-")}，判斷標準 ${esc(row.threshold)}）</span>
@@ -483,17 +478,17 @@ function openDetail(idx) {
       </div>`).join("");
 
     financeSection = `
-      <div class="font-headline font-bold text-sm text-on-surface mb-2">財務體質驗證（${layer2.f_score}/${layer2.f_score_max} 項通過）</div>
+      <div class="font-headline font-bold text-base text-on-surface mb-2">財務體質驗證（${layer2.f_score}/${layer2.f_score_max} 項通過）</div>
       <div class="grid grid-cols-2 gap-x-3 gap-y-1">
         ${checklistItems}
       </div>
-      <div class="flex items-center justify-end gap-1 mt-2 text-xs text-secondary font-semibold cursor-pointer" onclick="toggleCheckExplanations()">
-        查看指標解釋 <span id="check-explanations-icon" class="material-symbols-outlined text-sm">expand_more</span>
+      <div class="flex items-center justify-end gap-1 mt-2 text-sm text-secondary font-semibold cursor-pointer" onclick="toggleCheckExplanations()">
+        查看指標解釋 <span id="check-explanations-icon" class="material-symbols-outlined text-base">expand_more</span>
       </div>
-      <div id="check-explanations" class="hidden mt-2 text-[11px] text-on-surface-variant bg-surface-container-low rounded-lg p-3 space-y-2">
+      <div id="check-explanations" class="hidden mt-2 text-[13px] text-on-surface-variant bg-surface-container-low rounded-lg p-3 space-y-2">
         ${explanationRows}
       </div>
-      <div class="text-[10px] text-on-surface-variant mt-3 space-y-0.5">
+      <div class="text-xs text-on-surface-variant mt-3 space-y-0.5">
         <div>資料期間：${esc(layer2.fiscal_period_end || "-")}</div>
         <div>財務資料來源：${layer2.data_source === "yfinance" ? "Yahoo Finance" : (layer2.data_source === "finmind" ? "公司財報（FinMind）" : "-")}</div>
       </div>
@@ -506,41 +501,41 @@ function openDetail(idx) {
   body.innerHTML = `
     <div class="flex items-start justify-between mb-5">
       <div class="flex items-center gap-2">
-        <span class="w-7 h-7 flex items-center justify-center rounded-full bg-tertiary-container text-on-tertiary text-sm font-bold">${idx + 1}</span>
-        <span class="text-sm text-on-surface-variant font-medium">${esc(ticker)}</span>
+        <span class="w-7 h-7 flex items-center justify-center rounded-full bg-tertiary-container text-on-tertiary text-base font-bold">${idx + 1}</span>
+        <span class="text-base text-on-surface-variant font-medium">${esc(ticker)}</span>
       </div>
       <button onclick="closeDetail()" class="w-8 h-8 flex items-center justify-center rounded-full hover:bg-surface-container transition-colors">
         <span class="material-symbols-outlined text-outline">close</span>
       </button>
     </div>
 
-    <div class="font-headline font-extrabold text-xl text-on-surface mb-2">${esc(c.node)}</div>
-    <span class="inline-block text-[11px] px-2.5 py-0.5 rounded-full bg-secondary-container text-on-secondary-container font-medium mb-4">${relationLabel(lastData.strategy)}</span>
+    <div class="font-headline font-extrabold text-2xl text-on-surface mb-2">${esc(c.node)}</div>
+    <span class="inline-block text-[13px] px-2.5 py-0.5 rounded-full bg-secondary-container text-on-secondary-container font-medium mb-4">${relationLabel(lastData.strategy)}</span>
 
     <div class="grid grid-cols-3 gap-2 text-center border-y border-outline-variant/30 py-3 mb-4">
       <div>
-        <div class="text-[10px] text-on-surface-variant">提及次數</div>
-        <div class="text-base font-bold text-on-surface mt-0.5">${c.mention_count ?? 0} 次</div>
+        <div class="text-xs text-on-surface-variant">提及次數</div>
+        <div class="text-lg font-bold text-on-surface mt-0.5">${c.mention_count ?? 0} 次</div>
       </div>
       <div>
-        <div class="text-[10px] text-on-surface-variant">Podcast 數</div>
-        <div class="text-base font-bold text-on-surface mt-0.5">${c.source_diversity ?? 0} 個</div>
+        <div class="text-xs text-on-surface-variant">Podcast 數</div>
+        <div class="text-lg font-bold text-on-surface mt-0.5">${c.source_diversity ?? 0} 個</div>
       </div>
       <div>
-        <div class="text-[10px] text-on-surface-variant">財務驗證</div>
-        <div class="text-base font-bold text-on-surface mt-0.5">${layer2 && layer2.f_score_max ? `${layer2.f_score}/${layer2.f_score_max}` : "無法評估"}</div>
+        <div class="text-xs text-on-surface-variant">財務驗證</div>
+        <div class="text-lg font-bold text-on-surface mt-0.5">${layer2 && layer2.f_score_max ? `${layer2.f_score}/${layer2.f_score_max}` : "無法評估"}</div>
         <div class="flex gap-1 justify-center mt-1">${fVerifyDots(layer2)}</div>
       </div>
     </div>
 
-    <div class="text-xs font-semibold text-on-surface-variant mb-1.5">路徑</div>
+    <div class="text-sm font-semibold text-on-surface-variant mb-1.5">路徑</div>
     <div class="flex items-center flex-wrap gap-1 mb-4">${pathHtml}</div>
 
-    <div class="text-xs font-semibold text-on-surface-variant mb-1.5">被提及的主要理由</div>
-    <div class="text-sm text-on-surface leading-relaxed mb-2">${esc(c.synthesized_reason || "查無具體描述，僅圖譜路徑相連")}</div>
+    <div class="text-sm font-semibold text-on-surface-variant mb-1.5">被提及的主要理由</div>
+    <div class="text-base text-on-surface leading-relaxed mb-2">${esc(c.synthesized_reason || "查無具體描述，僅圖譜路徑相連")}</div>
     ${totalRaw ? `
-      <div class="text-xs text-secondary font-semibold cursor-pointer mb-4" onclick="toggleRawReasons()">查看更多理由（${totalRaw} 項） <span class="material-symbols-outlined text-sm align-middle">expand_more</span></div>
-      <div id="raw-reasons" class="hidden text-xs text-on-surface-variant leading-relaxed mb-4 bg-surface-container-low rounded-lg p-3 space-y-2">
+      <div class="text-sm text-secondary font-semibold cursor-pointer mb-4" onclick="toggleRawReasons()">查看更多理由（${totalRaw} 項） <span class="material-symbols-outlined text-base align-middle">expand_more</span></div>
+      <div id="raw-reasons" class="hidden text-sm text-on-surface-variant leading-relaxed mb-4 bg-surface-container-low rounded-lg p-3 space-y-2">
         ${segments.map(seg => `
           <div>
             <div class="font-medium text-on-surface-variant mb-0.5">${esc(seg.from)} → ${esc(seg.to)}</div>
@@ -554,8 +549,8 @@ function openDetail(idx) {
 
     ${rewardSection}
 
-    <button class="w-full mt-6 py-3 rounded-lg border border-outline-variant text-on-surface text-sm font-semibold flex items-center justify-center gap-2 hover:bg-surface-container transition-colors">
-      <span class="material-symbols-outlined text-lg">bookmark_border</span>加入觀察清單
+    <button class="w-full mt-6 py-3 rounded-lg border border-outline-variant text-on-surface text-base font-semibold flex items-center justify-center gap-2 hover:bg-surface-container transition-colors">
+      <span class="material-symbols-outlined text-xl">bookmark_border</span>加入觀察清單
     </button>
   `;
 
@@ -606,11 +601,11 @@ function growthRowHtml(m, value, isFirst) {
   return `
     <div class="flex items-center gap-2.5 md:gap-3 py-2.5 md:py-3 ${isFirst ? "" : "border-t border-outline-variant/30"}" title="${esc(m.note)}">
       <span class="w-9 h-9 md:w-11 md:h-11 flex-shrink-0 flex items-center justify-center rounded-full bg-[#e3f2e3]">
-        <span class="material-symbols-outlined text-lg md:text-xl text-[#2e7d32]">${m.icon}</span>
+        <span class="material-symbols-outlined text-xl md:text-2xl text-[#2e7d32]">${m.icon}</span>
       </span>
       <div class="flex-1 min-w-0">
-        <div class="text-[10px] md:text-xs text-on-surface-variant">${m.label}</div>
-        <div class="text-sm md:text-lg font-bold ${valueColor} whitespace-nowrap">${fmtPct(value)}</div>
+        <div class="text-xs md:text-sm text-on-surface-variant">${m.label}</div>
+        <div class="text-base md:text-xl font-bold ${valueColor} whitespace-nowrap">${fmtPct(value)}</div>
       </div>
       ${trendSparkSvg(direction)}
     </div>`;
@@ -633,9 +628,9 @@ function valuationGaugeSvg(layer2) {
       <line x1="100" y1="14" x2="100" y2="26" stroke="#1c1c16" stroke-width="2" />
       <polygon points="96,101 104,101 100,32" fill="#1c1c16" transform="rotate(${rotation} 100 100)" />
       <circle cx="100" cy="100" r="4.5" fill="#1c1c16" />
-      <text x="20" y="121" font-size="9" fill="#5c8f6e" text-anchor="middle">偏低</text>
-      <text x="100" y="10" font-size="9" fill="#414849" text-anchor="middle">合理（歷史平均P/S）</text>
-      <text x="180" y="121" font-size="9" fill="#b5793f" text-anchor="middle">偏高</text>
+      <text x="20" y="121" font-size="11" fill="#5c8f6e" text-anchor="middle">偏低</text>
+      <text x="100" y="10" font-size="11" fill="#414849" text-anchor="middle">合理（歷史平均P/S）</text>
+      <text x="180" y="121" font-size="11" fill="#b5793f" text-anchor="middle">偏高</text>
     </svg>`;
 }
 
@@ -645,8 +640,8 @@ function growthFeatureCardHtml(layer2) {
   return `
     <div class="h-full flex flex-col bg-surface-container-lowest border border-outline-variant/30 rounded-xl p-3 md:p-5">
       <div class="flex items-center justify-between mb-1 md:mb-2">
-        <div class="text-xs md:text-base font-bold text-on-surface">成長特徵</div>
-        ${layer2.growth_label ? `<span class="text-[10px] md:text-xs px-2 py-0.5 md:px-3 md:py-1 rounded-full font-semibold ${badgeCls}">${esc(layer2.growth_label)}</span>` : ""}
+        <div class="text-sm md:text-lg font-bold text-on-surface">成長特徵</div>
+        ${layer2.growth_label ? `<span class="text-xs md:text-sm px-2 py-0.5 md:px-3 md:py-1 rounded-full font-semibold ${badgeCls}">${esc(layer2.growth_label)}</span>` : ""}
       </div>
       <div class="flex-1 flex flex-col justify-evenly">
         ${rows}
@@ -659,25 +654,25 @@ function valuationFeatureCardHtml(layer2) {
   return `
     <div class="bg-surface-container-lowest border border-outline-variant/30 rounded-xl p-3 md:p-5">
       <div class="flex items-center justify-between mb-2 md:mb-4">
-        <div class="text-xs md:text-base font-bold text-on-surface">估值特徵</div>
-        ${layer2.valuation_label ? `<span class="text-[10px] md:text-xs px-2 py-0.5 md:px-3 md:py-1 rounded-full font-semibold ${badgeCls}">${esc(layer2.valuation_label)}</span>` : ""}
+        <div class="text-sm md:text-lg font-bold text-on-surface">估值特徵</div>
+        ${layer2.valuation_label ? `<span class="text-xs md:text-sm px-2 py-0.5 md:px-3 md:py-1 rounded-full font-semibold ${badgeCls}">${esc(layer2.valuation_label)}</span>` : ""}
       </div>
       ${valuationGaugeSvg(layer2)}
       <div class="grid grid-cols-3 gap-1.5 md:gap-2 mt-2 md:mt-4 text-center">
         <div class="bg-surface-container-low rounded-[14px] py-2 px-1 md:py-3 md:px-1.5">
-          <div class="text-[9px] md:text-[10px] text-on-surface-variant whitespace-nowrap">目前P/S</div>
-          <div class="text-xs md:text-lg font-bold text-on-surface mt-0.5 whitespace-nowrap">${layer2.current_ps != null ? layer2.current_ps + "x" : "-"}</div>
+          <div class="text-xs md:text-xs text-on-surface-variant whitespace-nowrap">目前P/S</div>
+          <div class="text-sm md:text-xl font-bold text-on-surface mt-0.5 whitespace-nowrap">${layer2.current_ps != null ? layer2.current_ps + "x" : "-"}</div>
         </div>
         <div class="bg-surface-container-low rounded-[14px] py-2 px-1 md:py-3 md:px-1.5">
-          <div class="text-[9px] md:text-[10px] text-on-surface-variant whitespace-nowrap">歷史平均P/S</div>
-          <div class="text-xs md:text-lg font-bold text-on-surface mt-0.5 whitespace-nowrap">${layer2.avg_ps != null ? layer2.avg_ps + "x" : "-"}</div>
+          <div class="text-xs md:text-xs text-on-surface-variant whitespace-nowrap">歷史平均P/S</div>
+          <div class="text-sm md:text-xl font-bold text-on-surface mt-0.5 whitespace-nowrap">${layer2.avg_ps != null ? layer2.avg_ps + "x" : "-"}</div>
         </div>
         <div class="bg-surface-container-low rounded-[14px] py-2 px-1 md:py-3 md:px-1.5">
-          <div class="text-[9px] md:text-[10px] text-on-surface-variant whitespace-nowrap">相對歷史平均</div>
-          <div class="text-xs md:text-lg font-bold text-on-surface mt-0.5 whitespace-nowrap">${fmtPct(layer2.valuation_change_pct)}</div>
+          <div class="text-xs md:text-xs text-on-surface-variant whitespace-nowrap">相對歷史平均</div>
+          <div class="text-sm md:text-xl font-bold text-on-surface mt-0.5 whitespace-nowrap">${fmtPct(layer2.valuation_change_pct)}</div>
         </div>
       </div>
-      ${layer2.valuation_note ? `<div class="text-[10px] md:text-xs text-on-surface-variant mt-2 md:mt-3 leading-snug">${esc(layer2.valuation_note)}</div>` : ""}
+      ${layer2.valuation_note ? `<div class="text-xs md:text-sm text-on-surface-variant mt-2 md:mt-3 leading-snug">${esc(layer2.valuation_note)}</div>` : ""}
     </div>`;
 }
 
@@ -685,15 +680,15 @@ function rewardSectionHtml(layer2) {
   if (!layer2 || layer2.status === "unavailable") {
     return `
       <div class="mt-5 pt-4 border-t border-outline-variant/30">
-        <div class="font-headline font-bold text-sm text-on-surface mb-2">成長與估值特徵</div>
-        <div class="text-xs text-on-surface-variant bg-surface-container-low rounded-lg p-3">目前無法評估（可能缺股價資料），不影響財務驗證結果。</div>
+        <div class="font-headline font-bold text-base text-on-surface mb-2">成長與估值特徵</div>
+        <div class="text-sm text-on-surface-variant bg-surface-container-low rounded-lg p-3">目前無法評估（可能缺股價資料），不影響財務驗證結果。</div>
       </div>`;
   }
 
   return `
     <div class="mt-5 pt-4 border-t border-outline-variant/30">
-      <div class="font-headline font-bold text-sm md:text-base text-on-surface mb-1">成長與估值特徵</div>
-      <div class="text-[10px] md:text-xs text-on-surface-variant mb-3">跟上面的財務驗證是同一組數字的不同呈現方式，不代表股價預期報酬或投資建議。</div>
+      <div class="font-headline font-bold text-base md:text-lg text-on-surface mb-1">成長與估值特徵</div>
+      <div class="text-xs md:text-sm text-on-surface-variant mb-3">跟上面的財務驗證是同一組數字的不同呈現方式，不代表股價預期報酬或投資建議。</div>
       <div class="grid grid-cols-2 gap-3 md:gap-5">
         ${growthFeatureCardHtml(layer2)}
         ${valuationFeatureCardHtml(layer2)}
