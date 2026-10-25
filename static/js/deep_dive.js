@@ -4,6 +4,29 @@ let ddCurrentMode = 'novice';
 let _ddAutoPlay   = false;
 let _ddTargetBacktestId = null;
 let _ddTargetArgTerms   = null;  // 從搜尋結果點進來時帶的命中字串，見 renderDdModeContent()
+let _ddActiveArgBtn     = null;  // 目前由哪顆「關鍵論點」播放鈕啟動的播放；只有它會顯示暫停 icon
+let _ddAudioSyncBound   = false;
+
+// 播放／暫停 icon 統一由 <audio> 的 play/pause/ended 事件驅動，這樣不管是關鍵論點的按鈕、
+// 上方主播放器、或是播到結尾，各處的 icon 都不會彼此對不上。
+function _ddSyncPlayIcons() {
+  const audio   = document.getElementById('dd-audio');
+  const playing = !!audio && !audio.paused && !audio.ended;
+  const mainIcon = document.getElementById('dd-play-icon');
+  if (mainIcon) mainIcon.textContent = playing ? 'pause' : 'play_arrow';
+  document.querySelectorAll('.dd-arg-play-btn').forEach(btn => {
+    const icon = btn.querySelector('.dd-arg-play-icon');
+    if (icon) icon.textContent = (playing && btn === _ddActiveArgBtn) ? 'pause' : 'play_arrow';
+  });
+}
+
+function _ddBindAudioIconSync() {
+  if (_ddAudioSyncBound) return;
+  const audio = document.getElementById('dd-audio');
+  if (!audio) return;
+  ['play', 'pause', 'ended'].forEach(evt => audio.addEventListener(evt, _ddSyncPlayIcons));
+  _ddAudioSyncBound = true;
+}
 
 function openDeepDive(summaryId, autoPlay = false, targetBacktestId = null, targetArgTerms = null) {
   // 訪客（未登入）可以自由瀏覽首頁/排行榜/搜尋，但打開單集深度摘要要先登入——
@@ -19,6 +42,8 @@ function openDeepDive(summaryId, autoPlay = false, targetBacktestId = null, targ
   _ddAutoPlay      = autoPlay;
   _ddTargetBacktestId = targetBacktestId;
   _ddTargetArgTerms   = targetArgTerms;
+  _ddActiveArgBtn     = null;
+  _ddBindAudioIconSync();
   showPage('deep-dive');
   loadDeepDive(summaryId);
   loadMindmap(summaryId);
@@ -51,13 +76,29 @@ function annotateGlossaryText(text, glossaryIndex) {
   if (!text) return '';
   const { surfaces, surfaceToId } = glossaryIndex;
   if (!surfaces.length) return escapeHtml(text);
-  const pattern = new RegExp('(' + surfaces.map(_escapeRegex).join('|') + ')', 'g');
-  return text.split(pattern).map((part, i) => {
-    if (i % 2 === 1 && surfaceToId.hasOwnProperty(part)) {
-      return `<span class="glossary-term border-b border-dotted border-secondary text-secondary cursor-pointer" onclick="showGlossaryTerm(event, ${surfaceToId[part]})">${escapeHtml(part)}</span>`;
+  const pattern = new RegExp(surfaces.map(_escapeRegex).join('|'), 'g');
+  // 英文／數字詞前後不可緊接英數字（避免 TER 標到 podcaster 裡的 ter）；中文詞不受影響
+  const isAlnum = ch => !!ch && /[A-Za-z0-9]/.test(ch);
+  let out = '';
+  let last = 0;
+  let m;
+  while ((m = pattern.exec(text)) !== null) {
+    const part = m[0];
+    const s = m.index;
+    const e = s + part.length;
+    if (!part) { pattern.lastIndex++; continue; }
+    const badLeft  = isAlnum(part[0])               && isAlnum(text[s - 1]);
+    const badRight = isAlnum(part[part.length - 1]) && isAlnum(text[e]);
+    if (badLeft || badRight || !surfaceToId.hasOwnProperty(part)) {
+      // 不算命中：只吃掉第一個字，從下一個位置再找（避免漏掉重疊的合法詞）
+      pattern.lastIndex = s + 1;
+      continue;
     }
-    return escapeHtml(part);
-  }).join('');
+    out += escapeHtml(text.slice(last, s));
+    out += `<span class="glossary-term border-b border-dotted border-secondary text-secondary cursor-pointer" onclick="showGlossaryTerm(event, ${surfaceToId[part]})">${escapeHtml(part)}</span>`;
+    last = e;
+  }
+  return out + escapeHtml(text.slice(last));
 }
 
 let _glossaryPopoverEl = null;
@@ -87,7 +128,48 @@ function _dismissGlossaryPopover(e) {
   if (_glossaryPopoverEl && !_glossaryPopoverEl.contains(e.target)) hideGlossaryTerm();
 }
 
-// ── Mode rendering ────────────────────────────────────────────
+// ── 投資要點（固定顯示新手版本）──────────────────────────────────
+// 新手／資深切換已經搬到「關鍵論點」那一段，只控制關鍵論點的內容；投資要點不跟著切換，
+// 一律用新手版本。新手版本還沒載入完時先不畫（保留「載入中...」），避免先閃一下資深版本
+// 再換成新手版本；確定沒有新手版本（例如這集只有資深版）才退回用現有的那一份。
+function renderDdTakeaways(summaryId) {
+  if (summaryId != null && summaryId !== currentSummaryId) return; // 使用者已經切到別集，這次回應過期了
+  const s = ddSummaryData.novice || ddSummaryData.pro;
+  if (!s) return;
+
+  const tw = s.investment_takeaways || {};
+  let twHtml = '';
+  if ((tw.bullish || []).length) {
+    twHtml += `<div class="p-6 rounded-lg bg-on-primary-container/5 border-l-4 border-on-primary-container">
+      <div class="flex items-center gap-2 mb-3 text-on-primary-container">
+        <span class="material-symbols-outlined font-bold">trending_up</span>
+        <span class="font-label font-bold uppercase tracking-wider text-xs">看多論點</span>
+      </div>
+      <ul class="space-y-2">${(tw.bullish).map(item => `<li class="flex gap-2 text-on-surface font-body font-medium"><span class="text-on-primary-container shrink-0">•</span><span>${item}</span></li>`).join('')}</ul>
+    </div>`;
+  }
+  if ((tw.bearish || []).length) {
+    twHtml += `<div class="p-6 rounded-lg bg-tertiary-container/10 border-l-4 border-tertiary-container">
+      <div class="flex items-center gap-2 mb-3 text-tertiary-container">
+        <span class="material-symbols-outlined font-bold">trending_down</span>
+        <span class="font-label font-bold uppercase tracking-wider text-xs">看空論點</span>
+      </div>
+      <ul class="space-y-2">${(tw.bearish).map(item => `<li class="flex gap-2 text-on-surface font-body font-medium"><span class="text-tertiary-container shrink-0">•</span><span>${item}</span></li>`).join('')}</ul>
+    </div>`;
+  }
+  if ((tw.watchlist || []).length) {
+    twHtml += `<div class="p-6 rounded-lg bg-secondary/5 border-l-4 border-secondary">
+      <div class="flex items-center gap-2 mb-3 text-secondary">
+        <span class="material-symbols-outlined font-bold">visibility</span>
+        <span class="font-label font-bold uppercase tracking-wider text-xs">觀察清單</span>
+      </div>
+      <ul class="space-y-2">${(tw.watchlist).map(item => `<li class="flex gap-2 text-on-surface font-body font-medium"><span class="text-secondary shrink-0">•</span><span>${item}</span></li>`).join('')}</ul>
+    </div>`;
+  }
+  document.getElementById('dd-takeaways').innerHTML = twHtml || '<p class="text-outline text-sm">無資料</p>';
+}
+
+// ── 關鍵論點（跟著新手／資深切換）─────────────────────────────────
 function renderDdModeContent(mode) {
   const s = ddSummaryData[mode];
   if (!s) return;
@@ -98,39 +180,9 @@ function renderDdModeContent(mode) {
     : { defs: {}, surfaceToId: {}, surfaces: [] };
   window._glossaryDefs = glossaryIndex.defs;
 
-  const tw = s.investment_takeaways || {};
-  let twHtml = '';
-  if ((tw.bullish || []).length) {
-    twHtml += `<div class="p-6 rounded-lg bg-on-primary-container/5 border-l-4 border-on-primary-container">
-      <div class="flex items-center gap-2 mb-3 text-on-primary-container">
-        <span class="material-symbols-outlined font-bold">trending_up</span>
-        <span class="font-label font-bold uppercase tracking-wider text-xs">Bullish Thesis</span>
-      </div>
-      <ul class="space-y-2">${(tw.bullish).map(item => `<li class="flex gap-2 text-on-surface font-body font-medium"><span class="text-on-primary-container shrink-0">•</span><span>${item}</span></li>`).join('')}</ul>
-    </div>`;
-  }
-  if ((tw.bearish || []).length) {
-    twHtml += `<div class="p-6 rounded-lg bg-tertiary-container/10 border-l-4 border-tertiary-container">
-      <div class="flex items-center gap-2 mb-3 text-tertiary-container">
-        <span class="material-symbols-outlined font-bold">trending_down</span>
-        <span class="font-label font-bold uppercase tracking-wider text-xs">Bearish Thesis</span>
-      </div>
-      <ul class="space-y-2">${(tw.bearish).map(item => `<li class="flex gap-2 text-on-surface font-body font-medium"><span class="text-tertiary-container shrink-0">•</span><span>${item}</span></li>`).join('')}</ul>
-    </div>`;
-  }
-  if ((tw.watchlist || []).length) {
-    twHtml += `<div class="p-6 rounded-lg bg-secondary/5 border-l-4 border-secondary">
-      <div class="flex items-center gap-2 mb-3 text-secondary">
-        <span class="material-symbols-outlined font-bold">visibility</span>
-        <span class="font-label font-bold uppercase tracking-wider text-xs">Watchlist</span>
-      </div>
-      <ul class="space-y-2">${(tw.watchlist).map(item => `<li class="flex gap-2 text-on-surface font-body font-medium"><span class="text-secondary shrink-0">•</span><span>${item}</span></li>`).join('')}</ul>
-    </div>`;
-  }
-  document.getElementById('dd-takeaways').innerHTML = twHtml || '<p class="text-outline text-sm">無資料</p>';
-
   const args = s.arguments || [];
   window._ddArgs = args;
+  _ddActiveArgBtn = null; // 下面會整段 innerHTML 重畫，舊的按鈕參照會失效
   let argHtml = '';
   args.forEach((arg, i) => {
     const isLast      = i === args.length - 1;
@@ -157,8 +209,8 @@ function renderDdModeContent(mode) {
       <div class="${isLast ? '' : 'border-b border-outline-variant/30'} py-8 px-2 rounded-lg" data-arg-index="${i}">
         <div class="flex flex-col md:flex-row gap-5">
           <div class="md:w-28 flex-shrink-0">
-            <button onclick="playAtTimestamp('${timestamp}')" class="bg-secondary-container text-tertiary-container font-bold px-4 py-2 rounded-full text-sm hover:scale-95 transition-transform flex items-center gap-2">
-              <span class="material-symbols-outlined text-sm" style="font-variation-settings: 'FILL' 1;">play_arrow</span>
+            <button onclick="toggleArgAudio(this, '${timestamp}')" class="dd-arg-play-btn bg-secondary-container text-tertiary-container font-bold px-4 py-2 rounded-full text-sm hover:scale-95 transition-transform flex items-center gap-2">
+              <span class="dd-arg-play-icon material-symbols-outlined text-sm" style="font-variation-settings: 'FILL' 1;">play_arrow</span>
               ${timestamp}
             </button>
           </div>
@@ -173,7 +225,7 @@ function renderDdModeContent(mode) {
             <div class="flex items-center gap-4 flex-wrap mt-1">
               ${hasMore ? `
               <button onclick="toggleThesis(this)" class="flex items-center gap-1 text-secondary font-label font-bold text-xs uppercase tracking-wider hover:text-on-primary-container transition-colors">
-                <span class="btn-label">Read More</span>
+                <span class="btn-label">展開閱讀</span>
                 <span class="material-symbols-outlined text-sm btn-icon">expand_more</span>
               </button>` : ''}
               <button onclick="toggleArgAiChat(this, ${i})" class="arg-ai-btn flex items-center gap-1 font-label font-bold text-xs uppercase tracking-wider transition-colors text-secondary hover:text-on-primary-container">
@@ -240,13 +292,14 @@ function switchDdMode(mode) {
   if (ddSummaryData[mode]) {
     renderDdModeContent(mode);
   } else {
-    document.getElementById('dd-takeaways').innerHTML = '<p class="text-outline text-sm">此模式無資料</p>';
     document.getElementById('dd-arguments').innerHTML = '<p class="text-outline text-sm">此模式無資料</p>';
   }
 }
 
 // ── Load deep dive data ───────────────────────────────────────
 async function loadDeepDive(summaryId) {
+  // 投資要點可能要等新手版本另外載入（見 renderDdTakeaways），先清掉上一集的內容，不要在等待期間顯示舊資料
+  document.getElementById('dd-takeaways').innerHTML = '<p class="text-outline text-sm">載入中...</p>';
   try {
     const res = await fetch(`/api/summaries/${summaryId}/`);
     const s   = await res.json();
@@ -254,13 +307,14 @@ async function loadDeepDive(summaryId) {
     const episodeTitle = s.source_filename?.replace(/\.srt$/i, '') || s.one_sentence_summary?.slice(0, 40) + '...';
     const showName     = s.podcaster || '未知節目';
 
-    document.getElementById('dd-title').textContent = episodeTitle;
+    const titleEl = document.getElementById('dd-title');
+    titleEl.textContent = episodeTitle;
     const podcasterEl = document.getElementById('dd-podcaster');
     const podBtn = document.createElement('button');
     podBtn.className = 'font-semibold underline underline-offset-2 hover:text-secondary transition-colors';
     podBtn.textContent = showName;
     podBtn.addEventListener('click', () => openRankedPodcasterByName(showName));
-    podcasterEl.textContent = 'Extracted from ';
+    podcasterEl.textContent = '來自 ';
     podcasterEl.appendChild(podBtn);
     if (s.published_at) {
       const dateSpan = document.createElement('span');
@@ -268,9 +322,15 @@ async function loadDeepDive(summaryId) {
       dateSpan.textContent = ' · ' + s.published_at.slice(0, 10);
       podcasterEl.appendChild(dateSpan);
     }
-    // 節目日期右邊的書籤收藏按鈕——await 快取才畫，不然已收藏的集數會先閃一下未收藏的樣式。
+    // 集數標題右邊的書籤收藏按鈕（接在標題文字最後面，標題換行時會跟著最後一行）——await 快取才畫，
+    // 不然已收藏的集數會先閃一下未收藏的樣式。await 期間如果使用者已經切到別集，標題已經被
+    // 換掉了，這裡就不要把上一集的按鈕塞進新標題。
     await _ensureEpisodeFavoritesCache();
-    podcasterEl.insertAdjacentHTML('beforeend', renderEpisodeBookmarkButton(s.id, 'w-6 h-6 -mt-1 ml-1.5 align-middle'));
+    if (summaryId === currentSummaryId) {
+      // -translate-y-0.5：中文標題字體度量跟 align-middle 的算法對不上，書籤會比文字視覺中心偏低
+      // 約 2px（跟 app.js renderAssetNameStar() 的星號同一個問題），實測往上補 2px 最接近置中。
+      titleEl.insertAdjacentHTML('beforeend', renderEpisodeBookmarkButton(s.id, 'w-9 h-9 ml-1 align-middle -translate-y-0.5', 'text-2xl'));
+    }
     document.getElementById('dd-one-sentence').textContent = '"' + s.one_sentence_summary + '"';
 
     // 打開單集頁面自動記一筆觀看紀錄（同一集重複打開後端會 upsert，不會累加重複項目）。
@@ -357,28 +417,6 @@ async function loadDeepDive(summaryId) {
           }
           _ddTargetBacktestId = null;
         }
-
-        // 本集提及的標的（去重），可以直接點名字/星星跳轉、收藏——不含 Critical Thesis
-        // Points 那段自由文字裡的公司名（那邊沒有 ticker 可以解析）。
-        const tickerSection = document.getElementById('dd-ticker-section');
-        const tickerList = document.getElementById('dd-ticker-list');
-        const seenTickers = new Set();
-        const chipHtml = records.filter(r => {
-          if (!resolveAssetCategory(r.ticker)) return false;
-          const dedupeKey = r.ticker.toUpperCase();
-          if (seenTickers.has(dedupeKey)) return false;
-          seenTickers.add(dedupeKey);
-          return true;
-        }).map(r => `
-          <div class="p-4 rounded-lg bg-surface-container-lowest border border-outline-variant/20 font-['Epilogue'] font-bold text-base text-tertiary-container">
-            ${renderAssetNameStar(r.ticker, r.asset || r.ticker)}
-          </div>`).join('');
-        if (chipHtml) {
-          tickerList.innerHTML = chipHtml;
-          tickerSection.classList.remove('hidden');
-        } else {
-          tickerSection.classList.add('hidden');
-        }
       })
       .catch(() => { document.getElementById('dd-viewpoints').innerHTML = '<p class="text-outline text-sm">載入失敗</p>'; });
 
@@ -395,13 +433,24 @@ async function loadDeepDive(summaryId) {
         fetch(`/api/summaries/?source_filename=${encodeURIComponent(s.source_filename)}&mode=${otherMode}`)
           .then(r => r.json())
           .then(list => { if (list.length) return fetch(`/api/summaries/${list[0].id}/`).then(r => r.json()); })
-          .then(other => { if (other) { ddSummaryData[other.mode] = other; updateDdModeButtons(); } })
-          .catch(() => {});
+          .then(other => {
+            if (!other || summaryId !== currentSummaryId) return;
+            ddSummaryData[other.mode] = other;
+            updateDdModeButtons();
+            // 目前選的版本剛好就是這份晚到的資料（例如打開的是資深版紀錄、使用者預設是新手）：
+            // 前面 switchDdMode() 因為還沒有資料顯示了「此模式無資料」，這裡要補畫關鍵論點。
+            if (other.mode === ddCurrentMode) renderDdModeContent(ddCurrentMode);
+          })
+          .catch(() => {})
+          // 打開的是資深版時，新手版本要等這支請求回來才拿得到；不管成功與否都在這裡補畫一次投資要點
+          // （沒有新手版本就會退回用資深版），見 renderDdTakeaways()。
+          .finally(() => renderDdTakeaways(summaryId));
       }
     }
     switchDdMode(ddCurrentMode);
-
-    document.getElementById('dd-ticker-section').classList.add('hidden');
+    // 已經有新手版本（打開的就是新手版、或這集兩種版本在同一筆資料裡）就直接畫；
+    // 打開的是資深版的話，等上面那支請求回來再畫，避免先閃一下資深版內容。
+    if (ddSummaryData.novice || !s.source_filename) renderDdTakeaways(summaryId);
 
     if (_discoverCache.length) renderRelated(_discoverCache, summaryId, s.tags);
     else fetch('/api/summaries/?limit=30').then(r => r.json())
@@ -467,7 +516,9 @@ function seekAudio(event) {
   audio.currentTime = ratio * audio.duration;
 }
 
-function playAtTimestamp(ts) {
+// argBtn：從「關鍵論點」按鈕啟動時帶入，讓該顆按鈕顯示暫停 icon；其他入口（例如觀點驗證）不帶，
+// 會把先前記的關鍵論點按鈕清掉，避免兩邊同時顯示「播放中」。
+function playAtTimestamp(ts, argBtn = null) {
   const audioEl = document.getElementById('dd-audio');
   if (!audioEl || !audioEl.src) { alert('此集無音檔連結'); return; }
   const parts   = ts.split(':').map(Number);
@@ -475,9 +526,22 @@ function playAtTimestamp(ts) {
   if (parts.length === 2) seconds = parts[0] * 60 + parts[1];
   else if (parts.length === 3) seconds = parts[0] * 3600 + parts[1] * 60 + parts[2];
   audioEl.currentTime = seconds;
-  audioEl.play();
-  document.getElementById('dd-play-icon').textContent = 'pause';
-  document.getElementById('dd-audio-player').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  audioEl.play().catch(() => _ddSyncPlayIcons()); // 被瀏覽器擋掉時 icon 要退回播放狀態
+  _ddActiveArgBtn = argBtn;
+  // 已經在播放中時再呼叫 play() 不會觸發 play 事件，所以這裡要主動同步一次 icon
+  _ddSyncPlayIcons();
+}
+
+// 關鍵論點的播放鈕：同一顆再按一次＝暫停（暫停後再按＝從目前位置繼續）；
+// 按另一顆＝跳到那一段播放。播完（ended）後再按會從該段時間點重新播。
+function toggleArgAudio(btn, ts) {
+  const audioEl = document.getElementById('dd-audio');
+  if (audioEl && audioEl.src && _ddActiveArgBtn === btn && !audioEl.ended) {
+    if (audioEl.paused) audioEl.play().catch(() => {});
+    else audioEl.pause();
+    return; // icon 由 play/pause 事件觸發 _ddSyncPlayIcons() 更新
+  }
+  playAtTimestamp(ts, btn);
 }
 
 // ── Mind map ──────────────────────────────────────────────────
@@ -510,7 +574,7 @@ function renderMindmap(data, container) {
   const totalH = treeHeight + marginTop + marginBottom;
 
   const treeData = {
-    name: data.title || 'Mindmap',
+    name: data.title || '心智圖',
     children: (data.arguments || []).map(arg => ({
       name: arg.topic,
       children: (Array.isArray(arg.summary) ? arg.summary : [arg.summary]).slice(0, 3).map(s => ({ name: s }))
@@ -584,14 +648,14 @@ function toggleThesis(btn) {
   if (isOpen) {
     full.classList.add('hidden');
     preview.classList.remove('hidden');
-    label.textContent = 'Read More';
+    label.textContent = '展開閱讀';
     icon.textContent  = 'expand_more';
     btn.classList.remove('text-on-primary-container');
     btn.classList.add('text-secondary');
   } else {
     preview.classList.add('hidden');
     full.classList.remove('hidden');
-    label.textContent = 'Show Less';
+    label.textContent = '收合';
     icon.textContent  = 'expand_less';
     btn.classList.remove('text-secondary');
     btn.classList.add('text-on-primary-container');
@@ -681,6 +745,12 @@ async function _ddArgSubmit(chatEl, query, displayQuery) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
+    if (res.status === 401) {  // 登入過期（單集頁本身要登入才進得來）
+      loadEl.remove();
+      _ddArgAddAI(msgBox, '登入狀態已失效，請重新登入後再提問。', [], chatEl);
+      showLoginPrompt();
+      return;
+    }
     const data = await res.json();
     loadEl.remove();
     if (data.ok) {

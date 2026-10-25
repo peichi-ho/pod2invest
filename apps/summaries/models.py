@@ -21,6 +21,14 @@ class SummaryRecord(models.Model):
     one_sentence_summary = models.TextField(blank=True)
     investment_takeaways = models.JSONField(default=dict, blank=True)
     tags = models.JSONField(default=list, blank=True)
+    # 推薦用：tags 是「整集提到過的分類」（長集數切段後聯集，每集平均十幾個），
+    # primary_tags 是從 tags 裡挑出最能代表這集的 3～5 個；analysis_style /
+    # investor_strategy 對應註冊問卷，選項見 services/tag_taxonomy.py。
+    # 由 services/preference_tags.py 在摘要完成後另外產生。null=True：資料庫是組員共用的，
+    # 還沒更新程式的人寫入時不會帶這三欄，允許空值才不會讓他們的摘要流程出錯。
+    primary_tags = models.JSONField(default=list, blank=True, null=True)
+    analysis_style = models.JSONField(default=list, blank=True, null=True)
+    investor_strategy = models.JSONField(default=list, blank=True, null=True)
     entities = models.JSONField(default=dict, blank=True)
     arguments = models.JSONField(default=list, blank=True)
 
@@ -174,6 +182,16 @@ class TickerMap(models.Model):
     verified   = models.BooleanField(default=False)              # 人工確認過
     created_at = models.DateTimeField(auto_now_add=True)
     zh_name    = models.CharField(max_length=50, blank=True)
+    # 這個別名對到大表(IndustryClassification)的哪一檔標的；前端顯示名稱以大表為準。
+    # ticker 欄位暫時保留(resolve_ticker 等還在讀)。對不到大表的留 null，不猜。
+    # SET_NULL：大表是全專案共用的，刪掉大表一列不該連帶刪掉別名。
+    classification = models.ForeignKey(
+        "IndustryClassification",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="aliases",
+    )
 
     class Meta:
         db_table  = "ticker_map"
@@ -182,4 +200,155 @@ class TickerMap(models.Model):
     def __str__(self):
         return f"{self.asset_name} → {self.ticker}"
 
+    def save(self, *args, **kwargs):
+        # 新增或改了 ticker 的別名，自動連到大表同一個 ticker 那一列；大表沒有就維持 null(不猜)，
+        # 可以之後用 manage.py link_tickermap_classification 檢查哪些還沒連上。
+        if self.ticker and (self.classification_id is None or self.classification.ticker != self.ticker):
+            db = kwargs.get("using") or self._state.db or "summariesdb"
+            self.classification = IndustryClassification.objects.using(db).filter(ticker=self.ticker).first()
+        super().save(*args, **kwargs)
 
+
+class IndustryClassification(models.Model):
+    """
+    股票/ETF/指數的產業分類對照表——刻意跟 TickerMap 分開存成獨立一張乾淨的表，
+    是給全專案共用查詢的對照表，不是只有summaries這個app自己在用(2026-09-30，
+    團隊決定統一分類方法)。TickerMap 要查某檔標的的產業，用ticker來這張表對照，
+    不用自己另外存一份分類邏輯或重複判斷。
+
+    分類方法比照 apps/assets 頁面既有的做法(個股詳情頁同一套邏輯)：
+      台股：TWSE官方產業別代碼(t187ap03_L開放API)，34種官方分類，權威資料來源
+      美股(TWSE查不到才用)：yfinance .info 的 sector/industry(Yahoo自家分類法)，
+        翻譯成中文——見 apps/summaries/services/industry_classification.py
+    """
+    ticker        = models.CharField(max_length=20, unique=True)  # 2330.TW / NVDA
+    market        = models.CharField(max_length=10, blank=True)   # TW / US
+    industry_code = models.CharField(max_length=10, blank=True)   # TWSE官方代碼，只有台股才有
+    industry_name = models.CharField(max_length=50, blank=True)   # 中文產業名稱
+    sector_name   = models.CharField(max_length=50, blank=True)   # 中文sector，主要美股才有
+    # 這筆分類實際用哪套方法查到的："twse" / "yfinance" / ""(兩邊都查無資料)
+    source        = models.CharField(max_length=20, blank=True)
+    # 標的名稱——全平台顯示名稱以這兩欄為準(見 display_name)。由
+    # manage.py backfill_industry_names 填入：台股用TWSE/TPEx官方簡稱，
+    # 美股英文名用yfinance，中文名只從TickerMap既有的zh_name補，不自己翻譯。
+    zh_name       = models.CharField(max_length=100, blank=True)  # 台積電 / 輝達
+    en_name       = models.CharField(max_length=200, blank=True)  # TSMC / NVIDIA
+    # 名稱實際從哪裡來的："twse" / "tpex" / "twse_quote" / "tpex_quote" / "yfinance" / "tickermap"
+    # 中英文來源不同時用 "+" 串起來，例如 "tickermap+yfinance"
+    name_source   = models.CharField(max_length=40, blank=True)
+    updated_at    = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table  = "industry_classification"
+        app_label = "summaries"
+
+    def __str__(self):
+        return f"{self.ticker} ({self.market}) → {self.industry_name or '(未分類)'}"
+
+    @property
+    def display_name(self) -> str:
+        """前端顯示用：中文名優先，沒有就英文名，都沒有才顯示ticker。
+        KY、期貨、ETF 等顯示規則見 apps/summaries/services/display_names.py 的 format_display_name。"""
+        from apps.summaries.services.display_names import format_display_name
+        return format_display_name(self.ticker, self.zh_name, self.en_name, self.market, self.industry_name)
+
+
+class FinancialReportCache(models.Model):
+    """
+    財報資料快取（試算計算機 Earnings Simulator / Monte Carlo 用，見
+    apps/calculator/services/earnings_simulator.py）。
+
+    跟 apps/knowledge_graph 裡的 FinancialMetricsCache 存的是同一種東西
+    (營收/毛利/EPS等原始金額)，故意分開成獨立一張表放在 summariesdb，
+    不依賴 knowledge_graphdb 那個常常連線不穩的 Supabase 專案——這裡不是
+    要取代那張表，是給 earnings_simulator 一個不受它連線狀況影響的資料源。
+    """
+    ticker             = models.CharField(max_length=20)
+    fiscal_period_end  = models.DateField()
+    data_source        = models.CharField(max_length=20)  # "yfinance" | "finmind"
+    # 這一期財報「實際公開的日期」，不是期末日——回測時要用這個欄位過濾
+    # (disclosure_date <= as_of_date)，避免用到模擬當下其實還沒公告的資料。
+    # 抓法跟 apps/knowledge_graph/services/financial_data.py 一致：優先用
+    # yfinance t.earnings_dates 的真實公告日，抓不到才退回估計值(季報+45天/
+    # 年報+90天)。
+    disclosure_date    = models.DateField(null=True, blank=True)
+
+    revenue            = models.FloatField(null=True, blank=True)
+    gross_profit       = models.FloatField(null=True, blank=True)
+    operating_income   = models.FloatField(null=True, blank=True)
+    ebit               = models.FloatField(null=True, blank=True)
+    net_income         = models.FloatField(null=True, blank=True)
+    shares_outstanding = models.FloatField(null=True, blank=True)
+    eps                = models.FloatField(null=True, blank=True)
+
+    fetched_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table  = "financial_report_cache"
+        app_label = "summaries"
+        unique_together = ("ticker", "fiscal_period_end")
+
+    def __str__(self):
+        return f"{self.ticker} @ {self.fiscal_period_end}"
+
+
+
+class ThesisScenarioExtraction(models.Model):
+    """
+    一筆驗證句(BacktestingRecord)被拆解成的「論點情境」（論點情境試算用，見
+    apps/summaries/services/thesis_scenario.py）。
+
+    每筆驗證句 × prompt 版本一列，情境本身存成 JSON 陣列(scenarios)——試算頁面一次只讀
+    一筆驗證句的全部情境，不需要拆成子表。每個情境的形狀：
+      {"type": "DEMAND_UP", "effect": "up", "stance": "support",
+       "chain": ["AI需求增加", "出貨增加", "營收成長"], "quote": "<原文片段>",
+       "fixes": [], "extra_quotes": []}
+    情境影響哪個財務參數由 thesis_scenario.SCENARIO_TYPES 決定，不存在這裡，
+    之後調整對照表不用回頭改資料。
+
+    結果是批次算好存起來的，不在使用者打開頁面時即時呼叫 Gemini——temperature=0 也
+    不完全穩定，即時呼叫會讓同一集不同時間打開看到不同情境。
+    """
+    STATUS_OK        = "ok"         # 至少拆出一個情境
+    STATUS_NO_DRIVER = "no_driver"  # 論點太空泛，沒有可對應的驅動因素
+    STATUS_FAILED    = "failed"     # 呼叫 Gemini 或解析失敗，下次批次會重試
+    STATUS_CHOICES = [
+        (STATUS_OK,        "OK"),
+        (STATUS_NO_DRIVER, "No driver"),
+        (STATUS_FAILED,    "Failed"),
+    ]
+
+    backtest_record = models.ForeignKey(
+        BacktestingRecord,
+        on_delete=models.CASCADE,
+        related_name="thesis_scenario_extractions",
+    )
+    summary = models.ForeignKey(
+        SummaryRecord,
+        on_delete=models.CASCADE,
+        related_name="thesis_scenario_extractions",
+    )
+    ticker     = models.CharField(max_length=20)
+    asset_name = models.CharField(max_length=100)
+
+    prompt_version = models.CharField(max_length=20)
+    model_name     = models.CharField(max_length=100)
+    status         = models.CharField(max_length=20, choices=STATUS_CHOICES)
+
+    scenarios        = models.JSONField(default=list, blank=True)  # 檢查、去重後，試算頁面用這個
+    ai_scenarios     = models.JSONField(default=list, blank=True)  # AI 原始輸出，改檢查規則可離線重算
+    dropped          = models.JSONField(default=list, blank=True)  # 被檢查丟掉的情境跟原因
+    no_driver_reason = models.TextField(blank=True, default="")
+    error            = models.TextField(blank=True, default="")
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table  = "thesis_scenario_extraction"
+        app_label = "summaries"
+        unique_together = ("backtest_record", "prompt_version")
+        indexes = [models.Index(fields=["ticker"])]
+
+    def __str__(self):
+        return f"{self.asset_name}({self.ticker}) {self.prompt_version} {self.status} {len(self.scenarios)}個情境"

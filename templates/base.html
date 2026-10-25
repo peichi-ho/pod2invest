@@ -47,6 +47,8 @@
   .material-symbols-outlined {
     font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
   }
+  input[type=range] { accent-color: #113236; }
+  .mode-btn.active { background: #113236; color: white; }
   body { min-height: 100dvh; font-family: 'Manrope', sans-serif; background: #fcf9f0; }
   .page { display: none; animation: fadeIn 0.25s ease; }
   .page.active { display: block; }
@@ -56,6 +58,27 @@
   .animate-slide-up { animation: slideUp 0.25s ease; }
   .no-scrollbar::-webkit-scrollbar { display: none; }
   .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+  /* 橫向捲動列（首頁「今日市場」「為你推薦」）：滑鼠沒有橫向滾輪、又藏了捲軸，所以靠邊緣漸層
+     提示「這邊還有內容」，再配一顆箭頭按鈕讓滑鼠使用者點擊捲動。哪一側顯示由 discover.js 的
+     initScrollRows() 依捲動位置設在 .scroll-row 的 data-can-left／data-can-right。 */
+  .scroll-row { position: relative; }
+  .scroll-row-fade { position: absolute; top: 0; bottom: 0; width: 72px; pointer-events: none; opacity: 0; transition: opacity .2s ease; z-index: 5; }
+  .scroll-row-fade--left  { left: 0;  background: linear-gradient(to right, #fcf9f0 12%, rgba(252,249,240,0)); }
+  .scroll-row-fade--right { right: 0; background: linear-gradient(to left,  #fcf9f0 12%, rgba(252,249,240,0)); }
+  .scroll-row-arrow { position: absolute; top: 50%; z-index: 6; width: 36px; height: 36px; margin-top: -18px; border-radius: 9999px; background: #fff; color: #113236; box-shadow: 0 2px 10px rgba(28,28,22,.2); display: flex; align-items: center; justify-content: center; opacity: 0; pointer-events: none; transition: opacity .2s ease, transform .15s ease; }
+  .scroll-row-arrow--left  { left: 6px; }
+  .scroll-row-arrow--right { right: 6px; }
+  .scroll-row-arrow:hover { transform: scale(1.1); }
+  .scroll-row[data-can-left="1"]  .scroll-row-fade--left,  .scroll-row[data-can-right="1"] .scroll-row-fade--right { opacity: 1; }
+  .scroll-row[data-can-left="1"]  .scroll-row-arrow--left, .scroll-row[data-can-right="1"] .scroll-row-arrow--right { opacity: 1; pointer-events: auto; }
+  /* 觸控裝置本來就能滑，箭頭只給有滑鼠的環境；漸層在觸控裝置上仍保留當作「還有更多」的提示 */
+  @media (hover: none) { .scroll-row-arrow { display: none; } }
+  /* 搜尋框右側的清除（✕）按鈕，由 app.js 的 initClearableInputs() 對有 data-clearable 的輸入框插入。
+     用 :placeholder-shown 判斷有沒有內容——有內容（沒在顯示 placeholder）才出現，程式碼直接設定
+     輸入框的值（例如計算機預設的 2330.TW、選到下拉選項）時也會即時反應，不用另外同步狀態。 */
+  .input-clear-btn { position: absolute; right: .875rem; top: 50%; transform: translateY(-50%); z-index: 2; width: 28px; height: 28px; border-radius: 9999px; display: flex; align-items: center; justify-content: center; color: #717879; background: transparent; transition: background-color .15s ease, color .15s ease; }
+  .input-clear-btn:hover { background: #e5e3d9; color: #113236; }
+  input:placeholder-shown + .input-clear-btn { display: none; }
   .asymmetric-grid { display: grid; grid-template-columns: 1.2fr 0.8fr; gap: 2rem; }
   @media (max-width: 768px) { .asymmetric-grid { grid-template-columns: 1fr; } }
   .nav-btn { color: #286671; }
@@ -69,10 +92,18 @@
 
 <!-- Top Navigation -->
 <header class="fixed top-0 w-full flex justify-between items-center px-6 h-16 bg-[#fcf9f0]/80 backdrop-blur-xl z-50 shadow-[0px_10px_30px_rgba(28,28,22,0.06)]">
-  <div class="w-10"></div>
+  <!-- 全站共用的返回鍵：各頁不再自己放返回按鈕，是否顯示／按下去做什麼由
+       static/js/app.js 的 _updateHeaderBack()／onHeaderBack() 統一決定。
+       容器寬度固定，按鈕隱藏時右邊的頭像位置不會跑掉。 -->
+  <div class="w-20 flex items-center">
+    <button id="header-back-btn" onclick="onHeaderBack()" aria-label="返回"
+      class="hidden flex items-center gap-0.5 text-secondary font-label text-sm font-semibold hover:opacity-70 transition-opacity">
+      <span class="material-symbols-outlined text-base">arrow_back_ios</span>返回
+    </button>
+  </div>
   <h1 class="font-['Epilogue'] font-bold tracking-[-0.02em] text-2xl text-[#113236] absolute left-1/2 -translate-x-1/2">Pod2Invest</h1>
   <button onclick="openProfilePage()" class="w-10 h-10 rounded-full overflow-hidden bg-surface-container-highest hover:opacity-80 transition-opacity">
-    <div id="header-avatar-inner" class="w-full h-full flex items-center justify-center" style="background:#e5e3d9"><span class="material-symbols-outlined text-white/70 text-2xl" style="font-variation-settings:'FILL' 1">person</span></div>
+    <div id="header-avatar-inner" class="w-full h-full flex items-center justify-center" style="background:#113236"><span class="material-symbols-outlined text-white text-2xl" style="font-variation-settings:'FILL' 1">person</span></div>
   </button>
 </header>
 
@@ -147,7 +178,7 @@
 <div id="ai-input-bar" class="hidden fixed bottom-[72px] w-full z-40 bg-[#fcf9f0]/90 backdrop-blur-xl pt-3 pb-3 px-4">
   <div class="max-w-4xl mx-auto flex items-center gap-4 bg-surface-container-high rounded-full p-2 pl-6 shadow-lg">
     <button class="text-secondary hover:text-on-primary-container transition-colors"><span class="material-symbols-outlined">attach_file</span></button>
-    <input id="chat-input" class="w-full bg-transparent border-none focus:ring-0 text-on-surface font-body text-sm placeholder:text-outline/60" placeholder="Ask about investment strategies..." type="text" onkeydown="if(event.key==='Enter') sendChat()"/>
+    <input id="chat-input" class="w-full bg-transparent border-none focus:ring-0 text-on-surface font-body text-sm placeholder:text-outline/60" placeholder="詢問投資策略、個股或節目重點..." type="text" onkeydown="if(event.key==='Enter') sendChat()"/>
     <button onclick="sendChat()" class="bg-[#d97f12] text-white w-12 h-12 rounded-full flex items-center justify-center hover:opacity-90 active:scale-95 transition-all">
       <span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">send</span>
     </button>
@@ -180,18 +211,26 @@
 
 {% block body_scripts %}
 <!-- JS modules -->
-<script src="{% static 'js/app.js' %}?v=18"></script>
-<script src="{% static 'js/discover.js' %}?v=19"></script>
-<script src="{% static 'js/rankings.js' %}?v=16"></script>
-<script src="{% static 'js/deep_dive.js' %}?v=19"></script>
-<script src="{% static 'js/calculator.js' %}?v=29"></script>
-<script src="{% static 'js/ai.js' %}?v=10"></script>
-<script src="{% static 'js/assets.js' %}?v=21"></script>
-<script src="{% static 'js/profile.js' %}?v=11"></script>
+<script src="{% static 'js/app.js' %}?v=29"></script>
+<script src="{% static 'js/discover.js' %}?v=52"></script>
+<script src="{% static 'js/rankings.js' %}?v=21"></script>
+<script src="{% static 'js/deep_dive.js' %}?v=28"></script>
+<script src="{% static 'js/calculator.js' %}?v=49"></script>
+<script src="{% static 'js/ai.js' %}?v=12"></script>
+<script src="{% static 'js/assets.js' %}?v=23"></script>
+<script src="{% static 'js/profile.js' %}?v=15"></script>
 <script>
-  calcWealth();
   {# 從 basket.html 等獨立頁面連回來時可帶 #assets 之類的 hash，指定要打開哪個分頁 #}
   (function () {
+    // 從 /preview/ 底下的獨立測試頁面(例如試算模擬器)點「跳轉到原文」連過來時，
+    // 帶 ?open_summary=<summary_id>，直接打開該集的深度摘要頁，不用先手動找到那一集。
+    // 沒有帶這個參數時，行為跟原本完全一樣，不影響其他入口。
+    const params = new URLSearchParams(location.search);
+    const openSummary = params.get('open_summary');
+    if (openSummary && document.getElementById('page-deep-dive') && typeof openDeepDive === 'function') {
+      openDeepDive(parseInt(openSummary, 10));
+      return;
+    }
     const wanted = location.hash.replace('#', '');
     const initial = wanted && document.getElementById('page-' + wanted) ? wanted : 'discover';
     showPage(initial);

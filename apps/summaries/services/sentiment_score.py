@@ -17,9 +17,9 @@ import math
 from datetime import timedelta
 from typing import Optional
 
-import yfinance as yf
 
 from .backtesting import resolve_ticker
+from .price_history import get_close_history
 from .gemini import gemini_generate_with_retry, sanitize_json_text
 
 MULTI_NAME_SEPARATORS = ["、", "/", "與", "和", ",", "，"]
@@ -45,13 +45,12 @@ def extract_explicit_stance(position_text: str) -> Optional[str]:
 def get_base_vol_asof(ticker: str, asof_date, lookback_days: int = 252) -> Optional[tuple]:
     """算某支股票在 asof_date 當時的『過去一年』base(報酬率)與annual_vol(波動率)。"""
     try:
-        t = yf.Ticker(ticker)
         start = asof_date - timedelta(days=lookback_days * 1.5)
         end = asof_date + timedelta(days=1)
-        hist = t.history(start=start.date().isoformat(), end=end.date().isoformat(), auto_adjust=True)
-        if hist.empty or len(hist) < 100:
+        # 一般標的走 yfinance；櫃買指數等 Yahoo 沒有的標的由 get_close_history 改走其他來源
+        closes = get_close_history(ticker, start.date(), end.date())
+        if closes.empty or len(closes) < 100:
             return None
-        closes = hist["Close"]
         daily_ret = closes.pct_change().dropna()
         base = (closes.iloc[-1] / closes.iloc[0]) - 1.0
         annual_vol = daily_ret.std() * math.sqrt(252)
@@ -64,7 +63,7 @@ def get_base_vol_asof(ticker: str, asof_date, lookback_days: int = 252) -> Optio
 
 def find_grounded_stock_topics(record) -> list[dict]:
     """
-    從 record.arguments 找出所有「個股：[名稱]」段落，過濾掉多股票合併的、
+    從 record.arguments 找出所有「個股：[名稱]」或「ETF：[名稱]」段落，過濾掉多股票合併的、
     以及 resolve_ticker 找不到真實代號的，回傳 [{"asset_name":..., "ticker":..., "topic":{...}}, ...]
     """
     results = []
@@ -72,9 +71,12 @@ def find_grounded_stock_topics(record) -> list[dict]:
         if not isinstance(a, dict):
             continue
         topic = a.get("topic", "")
-        if not topic.startswith("個股："):
+        if topic.startswith("個股："):
+            asset_name = topic[len("個股："):]
+        elif topic.startswith("ETF："):
+            asset_name = topic[len("ETF："):]
+        else:
             continue
-        asset_name = topic[len("個股："):]
         if is_multi_name_topic(asset_name):
             continue
         ticker = resolve_ticker(asset_name)
@@ -270,6 +272,27 @@ def ensure_stock_sentiment_score(record, ticker: str, client=None, model: Option
     if not result:
         return None
 
+    # macro_score(立場分數)如果這一集這支股票已經有backtesting驗證句(BacktestingRecord)，
+    # 改用驗證句的direction為準，不用AI這次重新分類出來的macro_score——驗證句存的是
+    # podcaster原話萃取出來的方向，是比較原始、權威的依據；AI獨立重新分類時可能因為
+    # 讀到的段落組合、當下判斷跟原始萃取有落差，兩邊各自跑一次容易兜不起來。risk_score
+    # 跟rationale驗證句沒有對應的東西，還是用AI這次分類的結果。
+    from apps.summaries.models import BacktestingRecord
+
+    bt = (
+        BacktestingRecord.objects.using("summariesdb")
+        .filter(summary=record, ticker=ticker)
+        .exclude(result="skip")
+        .first()
+    )
+    macro_score = result["macro_score"]
+    rationale = result["rationale"]
+    if bt and bt.direction in ("bullish", "bearish"):
+        bt_macro = 1.0 if bt.direction == "bullish" else -1.0
+        if bt_macro != macro_score:
+            rationale = f"[依驗證句方向校正] {rationale}"
+        macro_score = bt_macro
+
     return StockSentimentScore.objects.using("summariesdb").create(
         summary=record,
         episode_id=record.episode_id,
@@ -277,7 +300,7 @@ def ensure_stock_sentiment_score(record, ticker: str, client=None, model: Option
         ticker=ticker,
         base=base,
         annual_vol=annual_vol,
-        macro_score=result["macro_score"],
+        macro_score=macro_score,
         risk_score=result["risk_score"],
-        rationale=result["rationale"],
+        rationale=rationale,
     )

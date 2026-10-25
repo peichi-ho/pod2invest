@@ -22,6 +22,7 @@
 import math
 import random
 from dataclasses import dataclass, field
+from apps.summaries.services.display_names import display_name_for
 
 # ── 已校準參數（Task #4，測試集覆蓋率65.5%，見專案說明文件）───────────────────
 K = 1.2
@@ -166,7 +167,7 @@ def compute_time_weighted_scores(ticker: str, selected_date, latest_date=None, h
         weighted_risk += w * r.risk_score
         weighted_items.append({
             "summary_id": r.summary_id,
-            "asset_name": r.asset_name,
+            "asset_name": display_name_for(r.ticker) or r.asset_name,
             "podcaster": r.summary.podcaster,
             "published_at": pub_date.isoformat(),
             "weight": w,

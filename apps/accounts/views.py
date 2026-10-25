@@ -2,6 +2,8 @@ from django.shortcuts import render, redirect
 from django.contrib.auth import update_session_auth_hash
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.models import User
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -66,11 +68,15 @@ class PreferencesAPIView(APIView):
         profile = UserProfile.objects.using('accountsdb').filter(user_id=request.user.id).first()
         if not profile or not profile.onboarding_done:
             return Response({})
+        # 問卷改版前的舊值：「穩定領股息」已併進「長期存股、穩穩領息」(Passive)；
+        # 「加密貨幣」(Crypto) 已換成「能源與原物料」，舊的直接拿掉
+        goal = 'Passive' if profile.goal == 'Dividend' else profile.goal
+        markets = [m for m in (profile.markets or []) if m != 'Crypto'] or ['General']
         return Response({
             'level': profile.level,
-            'markets': profile.markets,
+            'markets': markets,
             'style': profile.style,
-            'goal': profile.goal,
+            'goal': goal,
             'capital': profile.capital,
         })
 
@@ -339,8 +345,10 @@ class ChangePasswordAPIView(APIView):
 
         if not user.check_password(old_password):
             return Response({'error': '原密碼不正確'}, status=status.HTTP_400_BAD_REQUEST)
-        if len(new_password) < 8:
-            return Response({'error': '新密碼至少需要 8 個字元'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            validate_password(new_password, user)  # 跟註冊頁同一套規則（settings.AUTH_PASSWORD_VALIDATORS）
+        except ValidationError as e:
+            return Response({'error': e.messages[0]}, status=status.HTTP_400_BAD_REQUEST)
 
         user.set_password(new_password)
         user.save()

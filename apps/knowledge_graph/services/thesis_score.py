@@ -636,6 +636,7 @@ class SpeakerHistory:
                     SELECT ticker, MAX(sector) AS sector FROM ticker_map GROUP BY ticker
                 ) tm ON tm.ticker = b.ticker
                 WHERE b.result IN ('pass', 'fail')
+                  AND sr.mode = 'pro'
                   AND sr.podcaster != '' AND b.thesis != ''
                   AND b.end_time IS NOT NULL
                 ORDER BY sr.podcaster, b.thesis, b.id
@@ -1192,9 +1193,11 @@ def process_backtesting_records(limit: Optional[int] = None, skip_existing: bool
     _ensure_fresh_connections()
     frontier = _kg_progress_frontier()
 
+    # 只算 pro 摘要的回測列：novice 的回測列是 pro 的複本（同集同內容），兩份都算只是重複呼叫、多花配額
     records_qs = (
         BacktestingRecord.objects
         .using("summariesdb")
+        .filter(summary__mode="pro")
         .exclude(asset="")
         .exclude(start_time__isnull=True)
         .select_related("summary")

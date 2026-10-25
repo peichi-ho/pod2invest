@@ -36,11 +36,15 @@
 
     <label class="block text-sm font-semibold text-on-surface mb-2" for="seed-input">查詢標的</label>
     <div class="relative mb-6">
-      <input id="seed-input" type="text" placeholder="例如：台積電、NVIDIA"
+      <input id="seed-input" type="text" placeholder="例如：台積電、輝達" autocomplete="off"
+        oninput="onSeedInput()" onkeydown="if (event.key === 'Escape') closeSeedDropdown()"
         class="w-full bg-surface-container-lowest border border-outline-variant rounded-lg pl-4 pr-10 py-3 text-on-surface text-sm outline-none focus:border-tertiary-container transition-colors">
       <button onclick="clearSeed()" class="absolute right-3 top-1/2 -translate-y-1/2 text-outline hover:text-on-surface">
         <span class="material-symbols-outlined text-lg">close</span>
       </button>
+      <!-- 搜尋建議：輸入時從圖譜節點找名稱或代號符合、而且是投資標的的節點，
+           做法與「查看個股資訊」的搜尋下拉相同（輸入後稍等再查、顯示在輸入框正下方的浮動清單） -->
+      <div id="seed-dropdown" class="hidden absolute left-0 right-0 top-full mt-2 bg-surface-container-lowest rounded-2xl shadow-xl z-50 border border-outline-variant/20 max-h-96 overflow-y-auto"></div>
     </div>
 
     <div class="flex items-center gap-1.5 mb-3">
@@ -192,7 +196,65 @@ function selectTier(key) {
 
 function clearSeed() {
   document.getElementById("seed-input").value = "";
+  closeSeedDropdown();
 }
+
+// ── 查詢標的搜尋建議 ──────────────────────────────────────────
+let _seedTimer = null;
+let _seedReq = 0;
+
+function onSeedInput() {
+  const q = document.getElementById("seed-input").value.trim();
+  clearTimeout(_seedTimer);
+  if (!q) { closeSeedDropdown(); return; }
+  _seedTimer = setTimeout(() => runSeedSuggest(q), 300);
+}
+
+function closeSeedDropdown() {
+  _seedReq++;                      // 還在路上的舊回應不要再蓋回來
+  clearTimeout(_seedTimer);
+  const dd = document.getElementById("seed-dropdown");
+  dd.classList.add("hidden");
+  dd.innerHTML = "";
+}
+
+async function runSeedSuggest(q) {
+  const dd = document.getElementById("seed-dropdown");
+  const reqId = ++_seedReq;
+  dd.innerHTML = '<p class="text-outline text-sm p-4 text-center">搜尋中...</p>';
+  dd.classList.remove("hidden");
+  try {
+    const res = await fetch("/api/knowledge-graph/seed-suggest/?q=" + encodeURIComponent(q));
+    const data = await res.json();
+    if (reqId !== _seedReq) return;     // 使用者已經輸入了更新的內容
+    if (!res.ok) throw new Error(data.error || res.status);
+    const list = data.suggestions || [];
+    dd.innerHTML = list.length ? list.map(s => `
+      <div data-name="${escAttr(s.name)}" onclick="pickSeedSuggestion(this.dataset.name)"
+        class="flex items-center justify-between gap-3 px-4 py-4 hover:bg-surface-container-highest cursor-pointer border-b border-outline-variant/10 last:border-0 transition-colors">
+        <div class="flex items-baseline gap-2 min-w-0">
+          <span class="text-[10px] font-bold text-outline uppercase tracking-wider flex-shrink-0 px-1.5 py-0.5 rounded bg-surface-container-highest">${esc(s.market)}</span>
+          <span class="text-base font-bold text-tertiary-container truncate">${esc(s.name)}</span>
+          ${s.code !== s.name ? `<span class="text-sm text-outline flex-shrink-0">${esc(s.code)}</span>` : ""}
+        </div>
+      </div>`).join("")
+      : '<p class="text-outline text-sm p-4 text-center">圖譜裡找不到相關的投資標的</p>';
+  } catch (e) {
+    if (reqId === _seedReq) dd.innerHTML = '<p class="text-error text-sm p-4 text-center">搜尋失敗，請稍後再試</p>';
+  }
+}
+
+// 點建議只把名稱填進輸入框（還要選關係類型再按查詢），名稱就是圖譜節點名，查詢時才對得到
+function pickSeedSuggestion(name) {
+  document.getElementById("seed-input").value = name;
+  closeSeedDropdown();
+}
+
+document.addEventListener("click", (e) => {
+  const dd = document.getElementById("seed-dropdown");
+  const inp = document.getElementById("seed-input");
+  if (dd && inp && !dd.contains(e.target) && e.target !== inp) closeSeedDropdown();
+});
 
 let currentSearch = null;
 
@@ -206,6 +268,7 @@ const STEP_ICONS = {
 
 function run() {
   const seed = document.getElementById("seed-input").value.trim();
+  closeSeedDropdown();
   hideError();
   if (!seed) { showError("請輸入標的名稱"); return; }
   if (!selectedPurpose) { showError("請選擇關係類型"); return; }
@@ -663,5 +726,6 @@ function hideError() {
   document.getElementById("error").classList.add("hidden");
 }
 function esc(s) { return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;"); }
+function escAttr(s) { return esc(s).replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;"); }
 </script>
 {% endblock %}

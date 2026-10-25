@@ -1,0 +1,909 @@
+<!DOCTYPE html>
+{% comment %}
+  templates/preview/bootstrap_path.html — 試算模擬器(B方案：歷史拔靴逐步模擬)獨立測試頁面。
+
+  完全獨立於 base.html/index.html 那套SPA架構，不共用任何既有頁面/JS，
+  只是給你自己在瀏覽器上直接看 bootstrap_path_simulator.py 跑出來的結果。
+
+  版面/配色刻意比照 templates/pages/calculator.html + static/js/calculator.js 的正式試算頁面
+  （同一套 Material 3 色票、Epilogue/Manrope 字體、上方選標的+左參數欄+右圖表結果的排版），
+  純粹視覺對齊，這裡的功能/邏輯跟正式頁面完全獨立、互不影響。
+{% endcomment %}
+<html lang="zh-TW">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>投資情境模擬</title>
+<link href="https://fonts.googleapis.com/css2?family=Epilogue:wght@400;500;700;800&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          "on-error-container": "#93000a","on-error": "#ffffff","surface-tint": "#8d4f00",
+          "tertiary-fixed-dim": "#abccd1","on-primary-fixed": "#2d1600","on-tertiary-fixed-variant": "#2c4c50",
+          "on-primary-fixed-variant": "#6b3b00","on-secondary": "#ffffff","secondary": "#286671",
+          "on-tertiary-container": "#7a9b9f","on-primary-container": "#d97f12","error": "#ba1a1a",
+          "surface-dim": "#dcdad1","surface-container-highest": "#e5e3d9","surface-container-high": "#eae8df",
+          "inverse-surface": "#31312b","on-tertiary-fixed": "#001f23","on-surface-variant": "#414849",
+          "surface-container": "#f0eee5","inverse-primary": "#ffb875","tertiary-fixed": "#c7e9ed",
+          "secondary-fixed": "#b0ecf9","on-surface": "#1c1c16","surface-variant": "#e5e3d9",
+          "outline": "#717879","tertiary-container": "#113236","inverse-on-surface": "#f3f1e7",
+          "surface-container-lowest": "#ffffff","on-secondary-container": "#2f6d78","on-primary": "#ffffff",
+          "secondary-container": "#b0ecf9","error-container": "#ffdad6","on-secondary-fixed": "#001f25",
+          "on-secondary-fixed-variant": "#024e59","background": "#fcf9f0","on-tertiary": "#ffffff",
+          "primary": "#291300","primary-fixed": "#ffdcc0","surface-container-low": "#f6f4ea",
+          "surface-bright": "#fcf9f0","primary-fixed-dim": "#ffb875","surface": "#fcf9f0",
+          "tertiary": "#001d20","on-background": "#1c1c16","primary-container": "#472500",
+          "outline-variant": "#c1c8c9","secondary-fixed-dim": "#95d0dc"
+        },
+        fontFamily: { "headline": ["Epilogue"], "body": ["Manrope"], "label": ["Manrope"] },
+        borderRadius: {"DEFAULT": "1rem", "lg": "2rem", "xl": "3rem", "full": "9999px"},
+      },
+    },
+  }
+</script>
+<style>
+  .material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+  body { font-family: 'Manrope', system-ui, sans-serif; background: #fcf9f0; }
+  input[type=range] { accent-color: #113236; }
+  .mode-btn.active { background: #113236; color: white; }
+</style>
+</head>
+<body class="min-h-screen">
+<div class="pt-10 px-6 max-w-7xl mx-auto pb-12">
+  <a href="/preview/" class="text-xs text-outline hover:text-on-surface">← 所有預覽頁面</a>
+  <div class="mt-2 mb-6">
+    <h2 class="font-headline font-extrabold text-3xl text-tertiary-container tracking-tight">投資情境模擬</h2>
+    <p class="text-on-surface-variant text-sm mt-1">用過去的股價走勢加上你的假設，推演這檔股票可能走到哪裡</p>
+  </div>
+
+  <div class="space-y-6">
+    <!-- 資料來源：手動輸入 / 從節目挑選（比照「選擇投資標的」卡片） -->
+    <div class="bg-surface-container-low p-8 rounded-lg space-y-5">
+      <div class="flex items-center justify-between border-b border-outline-variant/20 pb-4">
+        <h3 class="font-['Epilogue'] text-xl font-bold text-tertiary-container">選擇資料來源</h3>
+        <div class="flex gap-1 shrink-0">
+          <button id="mode-btn-manual" onclick="setMode('manual')" class="mode-btn px-4 py-1.5 rounded-full text-sm font-bold border border-outline-variant/40 transition-colors">手動輸入</button>
+          <button id="mode-btn-episode" onclick="setMode('episode')" class="mode-btn px-4 py-1.5 rounded-full text-sm font-bold border border-outline-variant/40 transition-colors">從節目挑選</button>
+        </div>
+      </div>
+
+      <div id="panel-manual">
+        <label class="font-label text-sm font-bold uppercase tracking-widest text-outline">股票代號或名稱</label>
+        <div class="relative mt-2 max-w-md">
+          <input id="in-ticker" type="text" value="2330.TW" autocomplete="off" spellcheck="false"
+            placeholder="輸入代號或名稱，如 2330 / 台積電 / NVDA"
+            oninput="onTickerSearchInput()" onkeydown="onTickerSearchKeydown(event)"
+            class="w-full px-4 py-3 bg-surface-container-lowest border-none rounded-full focus:ring-2 focus:ring-secondary font-body text-on-surface-variant"/>
+          <div id="ticker-search-dropdown" class="hidden absolute left-0 right-0 top-full mt-2 bg-surface-container-lowest rounded-2xl shadow-xl z-50 border border-outline-variant/20 max-h-80 overflow-y-auto"></div>
+        </div>
+        <p id="ticker-picked" class="hidden mt-2 px-4 text-sm font-bold text-tertiary-container"></p>
+      </div>
+
+      <div id="panel-episode" class="hidden space-y-3">
+        <div>
+          <label class="font-label text-sm font-bold uppercase tracking-widest text-outline">選集數(依發布日新到舊)</label>
+          <select id="in-episode" onchange="onEpisodeChange()"
+            class="mt-2 w-full max-w-md text-sm px-3 py-2 bg-surface-container border border-outline-variant/50 rounded-DEFAULT text-on-surface-variant focus:ring-2 focus:ring-secondary"></select>
+        </div>
+        <div class="bg-surface-container-lowest rounded-lg px-6 py-5 space-y-3">
+          <div id="episode-info" class="text-sm text-on-surface leading-relaxed"></div>
+          <a id="episode-source-link" href="#" class="hidden text-[13px] font-bold text-secondary hover:underline inline-block">跳轉到原文 →</a>
+          <details class="pt-2 border-t border-outline-variant/10">
+            <summary class="text-sm font-bold text-tertiary-container uppercase tracking-widest cursor-pointer select-none">評分理由(點開查看)</summary>
+            <div class="mt-4 space-y-5">
+              <div class="max-w-3xl">
+                <div class="text-sm font-bold text-outline uppercase tracking-widest mb-2">AI 判斷理由</div>
+                <p id="episode-rationale" class="border-l-4 border-secondary bg-surface-container rounded-r-lg px-4 py-3 text-[15px] leading-7 text-on-surface"></p>
+              </div>
+              <div>
+                <div class="text-sm font-bold text-outline uppercase tracking-widest">AI 實際讀到的完整輸入</div>
+                <div class="text-[13px] text-outline mt-1 mb-3">個股段落＋總經背景＋操作建議／風險提示</div>
+                <div id="episode-source-text" class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm text-on-surface-variant">載入中...</div>
+              </div>
+            </div>
+          </details>
+        </div>
+      </div>
+    </div>
+
+    <!-- 試算條件 + 試算結果：左右兩欄 -->
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+      <!-- Left: 試算條件 -->
+      <div class="lg:col-span-4 space-y-6">
+        <div class="bg-surface-container-low p-8 rounded-lg space-y-6">
+          <div class="flex items-center justify-between border-b border-outline-variant/20 pb-4">
+            <h3 class="font-['Epilogue'] text-xl font-bold text-tertiary-container">試算條件</h3>
+          </div>
+
+          <div class="space-y-2">
+            <div class="flex justify-between items-baseline">
+              <label class="font-label text-sm font-bold uppercase tracking-widest text-outline">投資期間(月)</label>
+              <span id="lbl-months" class="hidden font-['Epilogue'] font-bold text-tertiary-container">12</span>
+            </div>
+            <div class="flex items-center gap-3">
+              <input id="slider-months" type="range" min="1" max="36" step="1" value="12" oninput="syncFromSlider('months')" class="flex-1 h-1.5 cursor-pointer"/>
+              <input id="in-months" type="number" value="12" min="1" max="60" oninput="syncFromInput('months')"
+                class="w-20 px-3 py-2 bg-surface-container-lowest border-none rounded-DEFAULT focus:ring-2 focus:ring-secondary text-tertiary-container font-['Epilogue'] font-semibold text-sm"/>
+            </div>
+          </div>
+
+          <div class="space-y-2">
+            <label class="font-label text-sm font-bold uppercase tracking-widest text-outline">風險程度</label>
+            <input id="in-risk" type="hidden" value="0"/>
+            <div id="btns-risk" class="flex gap-2">
+              <button type="button" class="mode-btn flex-1 py-2 rounded-full text-sm font-bold border border-outline-variant/40 transition-colors active" data-value="0" onclick="setScoreButton('risk', 0)">低</button>
+              <button type="button" class="mode-btn flex-1 py-2 rounded-full text-sm font-bold border border-outline-variant/40 transition-colors" data-value="0.5" onclick="setScoreButton('risk', 0.5)">中</button>
+              <button type="button" class="mode-btn flex-1 py-2 rounded-full text-sm font-bold border border-outline-variant/40 transition-colors" data-value="1" onclick="setScoreButton('risk', 1)">高</button>
+            </div>
+          </div>
+
+          <div class="space-y-2">
+            <label class="font-label text-sm font-bold uppercase tracking-widest text-outline">市場立場</label>
+            <input id="in-macro" type="hidden" value="0"/>
+            <div id="btns-macro" class="flex gap-2">
+              <button type="button" class="mode-btn flex-1 py-2 rounded-full text-sm font-bold border border-outline-variant/40 transition-colors" data-value="-1" onclick="setScoreButton('macro', -1)">看空</button>
+              <button type="button" class="mode-btn flex-1 py-2 rounded-full text-sm font-bold border border-outline-variant/40 transition-colors active" data-value="0" onclick="setScoreButton('macro', 0)">中立</button>
+              <button type="button" class="mode-btn flex-1 py-2 rounded-full text-sm font-bold border border-outline-variant/40 transition-colors" data-value="1" onclick="setScoreButton('macro', 1)">看多</button>
+            </div>
+          </div>
+
+          <div class="space-y-2">
+            <label class="font-label text-sm font-bold uppercase tracking-widest text-outline">模擬次數</label>
+            <input id="in-nsim" type="number" value="1000" step="100" min="100" max="3000"
+              class="w-full px-4 py-3 bg-surface-container-lowest border-none rounded-DEFAULT focus:ring-2 focus:ring-secondary text-tertiary-container font-['Epilogue'] font-semibold"/>
+          </div>
+        </div>
+
+        <button id="btn-run" class="w-full py-3 bg-tertiary-container hover:opacity-90 active:scale-95 text-white font-label font-bold text-sm uppercase tracking-widest rounded-full transition-all">
+          開始模擬
+        </button>
+        <p id="status-text" class="text-xs text-outline text-center -mt-3"></p>
+
+        
+      </div>
+
+      <!-- Right: 結果 -->
+      <div class="lg:col-span-8 space-y-6">
+        <p id="calc-placeholder" class="bg-surface-container-lowest rounded-lg p-8 text-outline text-sm flex items-center justify-center" style="min-height:420px;">
+          填好左側條件後按「開始模擬」查看結果
+        </p>
+
+        <div id="result-panel" class="hidden space-y-6">
+          <!-- 統計摘要 -->
+          <div class="bg-surface-container-low rounded-xl p-6">
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-4 text-center">
+              <div>
+                <div class="text-sm text-outline font-bold uppercase tracking-widest mb-1">起始股價</div>
+                <span id="stat-start" class="font-['Epilogue'] text-lg font-bold text-tertiary-container">—</span>
+              </div>
+              <div>
+                <div class="text-sm text-outline font-bold uppercase tracking-widest mb-1">保守情境終點報酬</div>
+                <span id="stat-p10" class="font-['Epilogue'] text-lg font-bold text-[#ba1a1a]">—</span>
+              </div>
+              <div>
+                <div class="text-sm text-outline font-bold uppercase tracking-widest mb-1">基準終點報酬</div>
+                <span id="stat-median" class="font-['Epilogue'] text-lg font-bold text-tertiary-container">—</span>
+              </div>
+              <div>
+                <div class="text-sm text-outline font-bold uppercase tracking-widest mb-1">積極情境終點報酬</div>
+                <span id="stat-p90" class="font-['Epilogue'] text-lg font-bold text-[#286671]">—</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- 模擬路徑圖 -->
+          <div class="bg-surface-container-lowest rounded-xl p-6 flex flex-col" style="min-height:420px;">
+            <div class="flex items-start justify-between gap-3 mb-4">
+              <h3 class="font-['Epilogue'] text-lg font-bold text-tertiary-container">股價情境模擬</h3>
+              <div id="chart-legend" class="flex flex-col gap-2 items-end shrink-0 text-xs"></div>
+            </div>
+            <svg id="chart-svg" viewBox="0 0 700 320" class="w-full flex-grow" preserveAspectRatio="xMidYMid meet"></svg>
+          </div>
+
+          
+        </div>
+      </div>
+    </div>
+
+    <!-- 金額試算(輸入)與金額試算結果：放在同一排，頂端對齊、高度一致 -->
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch mt-6">
+      <div class="lg:col-span-4 flex">
+        <div class="bg-surface-container-low p-6 rounded-xl space-y-3 w-full">
+          <h3 class="font-['Epilogue'] text-lg font-bold text-tertiary-container">金額試算</h3>
+          <p class="text-xs text-outline leading-relaxed">這裡只是把已經算好的報酬率，換算成你實際投入金額的市值，不會重新跑模擬，留空不影響報酬率結果。</p>
+          <div class="relative">
+            <span class="absolute left-4 top-1/2 -translate-y-1/2 text-tertiary-container font-bold">$</span>
+            <input id="in-invested" type="number" value="" placeholder="0" oninput="syncInvestedFromInput(); renderMoneyStats()"
+              class="w-full pl-8 pr-4 py-4 bg-surface-container-lowest border-none rounded-DEFAULT focus:ring-2 focus:ring-secondary text-tertiary-container font-['Epilogue'] font-semibold"/>
+          </div>
+          <input id="slider-invested" type="range" min="0" max="500000" step="1000" value="0" oninput="syncInvestedFromSlider(); renderMoneyStats()" class="w-full h-1.5 cursor-pointer">
+          <p id="money-shares-note" class="hidden text-xs text-outline"></p>
+        </div>
+      </div>
+      <div class="lg:col-span-8 flex">
+        <div id="money-stats" class="hidden bg-surface-container-low rounded-xl p-6 w-full flex flex-col">
+            <h3 class="font-['Epilogue'] text-lg font-bold text-tertiary-container mb-4">金額試算結果</h3>
+            <div class="flex-1 content-center grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-4 text-center">
+              <div>
+                <div class="text-sm text-outline font-bold uppercase tracking-widest mb-1">起始市值</div>
+                <span id="money-start" class="font-['Epilogue'] text-lg font-bold text-tertiary-container">—</span>
+              </div>
+              <div>
+                <div class="text-sm text-outline font-bold uppercase tracking-widest mb-1">保守情境終點市值</div>
+                <span id="money-p10" class="font-['Epilogue'] text-lg font-bold text-[#ba1a1a]">—</span>
+              </div>
+              <div>
+                <div class="text-sm text-outline font-bold uppercase tracking-widest mb-1">基準終點市值</div>
+                <span id="money-median" class="font-['Epilogue'] text-lg font-bold text-tertiary-container">—</span>
+              </div>
+              <div>
+                <div class="text-sm text-outline font-bold uppercase tracking-widest mb-1">積極情境終點市值</div>
+                <span id="money-p90" class="font-['Epilogue'] text-lg font-bold text-[#286671]">—</span>
+              </div>
+            </div>
+          </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const API_URL = '/api/calculator/bootstrap-path-preview/';
+const EPISODES_URL = '/api/calculator/bootstrap-path-preview/episodes/';
+const SOURCE_TEXT_URL = '/api/calculator/bootstrap-path-preview/source-text/';
+
+let mode = 'manual';
+let episodes = [];
+let lastResult = null;
+let sourceTextRequestSeq = 0;  // 避免快速切換節目時，舊的source-text回應蓋掉新選的那一集
+
+document.getElementById('btn-run').addEventListener('click', runSimulation);
+
+function setMode(m) {
+  mode = m;
+  document.getElementById('mode-btn-manual').classList.toggle('active', m === 'manual');
+  document.getElementById('mode-btn-episode').classList.toggle('active', m === 'episode');
+  document.getElementById('panel-manual').classList.toggle('hidden', m !== 'manual');
+  document.getElementById('panel-episode').classList.toggle('hidden', m !== 'episode');
+}
+setMode('manual');
+
+// ── slider/數字輸入雙向同步 ──────────────────────────────────
+function syncFromSlider(key) {
+  document.getElementById('in-' + key).value = document.getElementById('slider-' + key).value;
+  document.getElementById('lbl-' + key).textContent = document.getElementById('slider-' + key).value;
+}
+function syncFromInput(key) {
+  const v = document.getElementById('in-' + key).value;
+  document.getElementById('slider-' + key).value = v;
+  document.getElementById('lbl-' + key).textContent = v;
+}
+// 風險程度(低/中/高)、市場立場(看空/中立/看多)這兩組用三顆按鈕取代滑桿+數字框，
+// 底層數值(0/0.5/1、-1/0/1)還是寫進同一個in-risk/in-macro(改成hidden input)，
+// runSimulation()讀值的地方完全不用改。
+function setScoreButton(key, value) {
+  document.getElementById('in-' + key).value = value;
+  document.querySelectorAll('#btns-' + key + ' button').forEach(btn => {
+    btn.classList.toggle('active', parseFloat(btn.dataset.value) === value);
+  });
+}
+function _riskWordLabel(v) {
+  if (v >= 1) return '高';
+  if (v >= 0.5) return '中';
+  return '低';
+}
+function _macroWordLabel(v) {
+  if (v > 0) return '看多';
+  if (v < 0) return '看空';
+  return '中立';
+}
+// ── 手動輸入：代號或中文名稱的搜尋建議(做法比照資產頁搜尋欄) ──────────────
+// 輸入時 debounce 查 /search/，結果顯示在輸入框下方；點選後把代號帶進輸入框。
+// 直接按「開始模擬」時，輸入若是中文名稱或純數字，會先自動解析成代號(唯一時才自動帶入，不猜)。
+let _tickerSearchTimer = null;
+let _tickerSearchSeq = 0;
+let _tickerSearchItems = [];
+let _tickerSearchActive = -1;
+function _tickerSearchBase() {
+  return (typeof B_API_URL !== 'undefined' ? B_API_URL : API_URL) + 'search/';
+}
+function _looksLikeFullTicker(v) {
+  // 已經是代號：含 . 的完整代號(2330.TW)，或英文字母開頭的美股代號(NVDA、BRK-B、^GSPC)
+  return /\./.test(v) || /^[A-Za-z^][A-Za-z0-9\-=^]*$/.test(v);
+}
+function _closeTickerSearch() {
+  const dd = document.getElementById('ticker-search-dropdown');
+  if (dd) { dd.classList.add('hidden'); dd.innerHTML = ''; }
+  _tickerSearchItems = []; _tickerSearchActive = -1;
+}
+function onTickerSearchInput() {
+  const q = document.getElementById('in-ticker').value.trim();
+  clearTimeout(_tickerSearchTimer);
+  document.getElementById('ticker-picked').classList.add('hidden');
+  if (!q) { _closeTickerSearch(); return; }
+  _tickerSearchTimer = setTimeout(() => runTickerSearch(q), 250);
+}
+async function _fetchTickerSearch(q) {
+  const res = await fetch(_tickerSearchBase() + '?q=' + encodeURIComponent(q));
+  if (!res.ok) throw new Error('search failed');
+  return (await res.json()).results || [];
+}
+async function runTickerSearch(q) {
+  const seq = ++_tickerSearchSeq;
+  const dd = document.getElementById('ticker-search-dropdown');
+  try {
+    const rows = await _fetchTickerSearch(q);
+    if (seq !== _tickerSearchSeq) return;          // 已經又打了別的字，這筆作廢
+    _tickerSearchItems = rows;
+    _tickerSearchActive = rows.length ? 0 : -1;
+    if (!rows.length) {
+      dd.innerHTML = '<p class="text-outline text-sm p-4 text-center">找不到相關標的，可直接輸入代號（例如 2330.TW、NVDA）</p>';
+    } else {
+      dd.innerHTML = rows.map((r, i) => `
+        <div data-i="${i}" onmousedown="event.preventDefault()" onclick="selectTickerCandidate(${i})"
+          class="ticker-search-row flex items-center gap-3 px-4 py-3 hover:bg-surface-container-highest cursor-pointer border-b border-outline-variant/10 last:border-0 transition-colors">
+          <span class="text-[11px] font-bold text-outline flex-shrink-0 px-1.5 py-0.5 rounded bg-surface-container-highest">${_escHtml(r.market)}</span>
+          <span class="text-base font-bold text-tertiary-container truncate">${_escHtml(r.name)}</span>
+          <span class="text-sm text-outline flex-shrink-0">${_escHtml(r.ticker)}</span>
+        </div>`).join('');
+      _paintTickerActive();
+    }
+    dd.classList.remove('hidden');
+  } catch (e) {
+    if (seq !== _tickerSearchSeq) return;
+    dd.innerHTML = '<p class="text-error text-sm p-4 text-center">搜尋失敗，請稍後再試，或直接輸入代號</p>';
+    dd.classList.remove('hidden');
+  }
+}
+function _paintTickerActive() {
+  document.querySelectorAll('#ticker-search-dropdown .ticker-search-row').forEach((el, i) => {
+    el.classList.toggle('bg-surface-container-highest', i === _tickerSearchActive);
+  });
+}
+function onTickerSearchKeydown(e) {
+  const dd = document.getElementById('ticker-search-dropdown');
+  const open = dd && !dd.classList.contains('hidden') && _tickerSearchItems.length;
+  if (e.key === 'Escape') { _closeTickerSearch(); return; }
+  if (!open) return;
+  if (e.key === 'ArrowDown') { e.preventDefault(); _tickerSearchActive = (_tickerSearchActive + 1) % _tickerSearchItems.length; _paintTickerActive(); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); _tickerSearchActive = (_tickerSearchActive - 1 + _tickerSearchItems.length) % _tickerSearchItems.length; _paintTickerActive(); }
+  else if (e.key === 'Enter') { e.preventDefault(); selectTickerCandidate(_tickerSearchActive); }
+}
+function selectTickerCandidate(i) {
+  const r = _tickerSearchItems[i];
+  if (!r) return;
+  const input = document.getElementById('in-ticker');
+  input.value = r.ticker;
+  _closeTickerSearch();
+  _showPickedTicker(r);
+}
+function _showPickedTicker(r) {
+  const el = document.getElementById('ticker-picked');
+  if (!el) return;
+  if (r && r.name && r.name !== r.ticker) {
+    el.textContent = `${r.name}（${r.ticker}）`;
+    el.classList.remove('hidden');
+  } else {
+    el.classList.add('hidden');
+  }
+}
+// 回傳可以直接送後端的代號；中文名稱或純數字會先解析。有多個可能、無法確定時回傳 ''，
+// 並把選單打開讓使用者自己選(不亂猜)。
+async function resolveTickerInput() {
+  const input = document.getElementById('in-ticker');
+  const v = input.value.trim();
+  if (!v) return '';
+  if (_looksLikeFullTicker(v)) return v;
+  try {
+    const rows = await _fetchTickerSearch(v);
+    const exact = rows.filter(r => r.exact);
+    const pick = rows.length === 1 ? rows[0] : (exact.length === 1 ? exact[0] : null);
+    if (pick) {
+      input.value = pick.ticker;
+      _showPickedTicker(pick);
+      return pick.ticker;
+    }
+    if (rows.length) await runTickerSearch(v);       // 讓使用者從選單選
+  } catch (e) { /* 搜尋服務失敗：當作使用者輸入的就是代號 */ return v; }
+  return '';
+}
+document.addEventListener('click', (e) => {
+  const dd = document.getElementById('ticker-search-dropdown');
+  const inp = document.getElementById('in-ticker');
+  if (dd && inp && !dd.contains(e.target) && e.target !== inp) _closeTickerSearch();
+});
+// 輸入框離開(change)時先把名稱解析成代號；已經是代號就不多打一次搜尋
+document.getElementById('in-ticker').addEventListener('change', () => { resolveTickerInput(); });
+
+function syncInvestedFromSlider() {
+  document.getElementById('in-invested').value = document.getElementById('slider-invested').value;
+}
+function syncInvestedFromInput() {
+  const v = document.getElementById('in-invested').value;
+  if (v !== '') document.getElementById('slider-invested').value = v;
+}
+
+// ── 載入節目清單 ──────────────────────────────────────────────
+async function loadEpisodes() {
+  try {
+    const resp = await fetch(EPISODES_URL);
+    const data = await resp.json();
+    episodes = data.episodes || [];
+    const sel = document.getElementById('in-episode');
+    sel.innerHTML = episodes.map(e =>
+      `<option value="${e.score_id}">${e.published_at || '未知日期'}　${e.asset_name}(${e.ticker})　${e.podcaster || ''}</option>`
+    ).join('');
+    const params = new URLSearchParams(window.location.search);
+    const preselect = params.get('score_id');
+    if (preselect) {
+      sel.value = preselect;
+      setMode('episode');
+      onEpisodeChange();
+    } else if (episodes.length) {
+      onEpisodeChange();
+    }
+  } catch (e) {
+    document.getElementById('episode-info').textContent = '載入節目清單失敗: ' + e;
+  }
+}
+loadEpisodes();
+
+// 選到一集之後，上方那塊資訊：名稱＋代號放大，日期／風險／立場／回測期間做成小標籤。
+// 立場顏色沿用台股慣例（看多紅、看空綠），風險用三顆點表示程度，不另外用顏色，避免跟立場的紅綠混在一起。
+function _escHtml(x) {
+  return String(x == null ? '' : x).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function renderEpisodeInfo(ep) {
+  const el = document.getElementById('episode-info');
+  if (!el) return;
+  const riskLevel = ep.risk_score >= 1 ? 3 : (ep.risk_score >= 0.5 ? 2 : 1);
+  const dots = '●'.repeat(riskLevel) + '○'.repeat(3 - riskLevel);
+  const m = ep.macro_score;
+  const stance = m > 0
+    ? { text: '看多', icon: 'trending_up', cls: 'text-[#ba1a1a] bg-[#ba1a1a]/10' }
+    : (m < 0
+      ? { text: '看空', icon: 'trending_down', cls: 'text-[#1e8e3e] bg-[#1e8e3e]/10' }
+      : { text: '中立', icon: 'trending_flat', cls: 'text-on-surface-variant bg-surface-container' });
+  const icon = n => `<span class="material-symbols-outlined text-sm leading-none">${n}</span>`;
+  const chip = (inner, cls, title) =>
+    `<span class="inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-bold ${cls}"${title ? ` title="${_escHtml(title)}"` : ''}>${inner}</span>`;
+  const neutral = 'text-on-surface-variant bg-surface-container';
+  // 風險顏色刻意避開紅／綠(那是立場的台股慣例：看多紅、看空綠)，用 藍→金黃→橘 表示 低→中→高，
+  // 免得「風險高(紅)」跟「看多(紅)」同時出現時讓人搞混。
+  const riskCls = ['text-[#286671] bg-[#286671]/10', 'text-[#a16207] bg-[#eab308]/20', 'text-[#c2410c] bg-[#c2410c]/10'][riskLevel - 1];
+  // 名稱、代號、日期、風險、立場、回測期間全部放在同一排(放不下才自動換行)
+  el.innerHTML = `
+    <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
+      <span class="font-['Epilogue'] text-lg font-bold text-tertiary-container">${_escHtml(ep.asset_name)}</span>
+      <span class="text-sm font-bold tracking-widest text-outline bg-surface-container rounded px-2 py-0.5">${_escHtml(ep.ticker)}</span>
+      ${chip(icon('event') + _escHtml(ep.published_at) + ' 發布', neutral, '這一集節目的發布日期，也是模擬的基準日')}
+      ${chip('風險 <span class="tracking-widest">' + dots + '</span> ' + _riskWordLabel(ep.risk_score), riskCls, 'Podcast 對這檔股票的風險評估')}
+      ${chip(icon(stance.icon) + '立場 ' + stance.text, stance.cls, 'Podcast 對這檔股票的看法')}
+      ${ep.default_months ? chip(icon('history') + '回測約 ' + _escHtml(ep.default_months) + ' 個月', neutral, '該集 backtesting 的時間範圍，也是投資期間的預設值') : ''}
+    </div>`;
+}
+
+function onEpisodeChange() {
+  const scoreId = document.getElementById('in-episode').value;
+  const ep = episodes.find(e => String(e.score_id) === String(scoreId));
+  if (!ep) return;
+  renderEpisodeInfo(ep);
+
+  const sourceLink = document.getElementById('episode-source-link');
+  if (ep.summary_id) {
+    sourceLink.href = '/?open_summary=' + ep.summary_id;
+    sourceLink.classList.remove('hidden');
+  } else {
+    sourceLink.classList.add('hidden');
+  }
+
+  // 把該集真實的risk/macro分數帶入試算參數(使用者仍可以自己再調整/覆蓋)
+  setScoreButton('risk', ep.risk_score);
+  setScoreButton('macro', ep.macro_score);
+
+  // 投資期間預設改成這集backtesting的約略月數(不精算到日)，沒有對應紀錄就維持原本的值不動。
+  if (ep.default_months) {
+    const m = Math.min(60, ep.default_months);
+    document.getElementById('in-months').value = m;
+    document.getElementById('slider-months').value = Math.min(36, m);
+    document.getElementById('lbl-months').textContent = m;
+  }
+
+  // rationale(AI一句話判斷理由)已經在episodes清單裡，不用另外打API，直接顯示。
+  document.getElementById('episode-rationale').textContent = ep.rationale || '(無)';
+
+  // 原始段落文字比較貴(要解析arguments JSON)，只在真的選中這一集時才另外打API抓，
+  // 不會跟著episodes清單一次全部撈回來。
+  loadSourceText(scoreId);
+}
+
+// 「AI實際讀到的完整輸入」原本是一整坨純文字，改成：每個【標題】一張卡片，
+// 「看多：」「看空：」這類開頭做成小標籤，段落放寬行距、限制一行的長度。
+function renderSourceText(el, text) {
+  const raw = String(text || '').trim();
+  if (!raw) { el.textContent = '(這集沒有找到對應的原始段落)'; return; }
+  const chipCls = {
+    '看多': 'text-[#ba1a1a] bg-[#ba1a1a]/10',
+    '看空': 'text-[#1e8e3e] bg-[#1e8e3e]/10',
+  };
+  const para = line => {
+    const k = line.match(/^(看多|看空|中立|操作建議|風險提示|建議|風險)[：:]\s*([\s\S]*)$/);
+    if (!k) return `<p class="leading-7">${_escHtml(line)}</p>`;
+    const cls = chipCls[k[1]] || 'text-on-surface-variant bg-surface-container-lowest';
+    return `<p class="leading-7"><span class="inline-block mr-2 px-2 py-0.5 rounded-full text-xs font-bold ${cls}">${_escHtml(k[1])}</span>${_escHtml(k[2])}</p>`;
+  };
+  el.innerHTML = raw.split(/(?=【[^】\n]+】)/).map(s => s.trim()).filter(Boolean).map(part => {
+    const m = part.match(/^【([^】\n]+)】\s*([\s\S]*)$/);
+    const title = m ? m[1] : '';
+    const lines = (m ? m[2] : part).split(/\n+/).map(l => l.trim()).filter(Boolean);
+    return `<div class="bg-surface-container rounded-lg px-4 py-3">` +
+      (title ? `<div class="text-sm font-bold text-tertiary-container mb-1">${_escHtml(title)}</div>` : '') +
+      `<div class="space-y-1">${lines.map(para).join('')}</div></div>`;
+  }).join('');
+}
+
+async function loadSourceText(scoreId) {
+  const mySeq = ++sourceTextRequestSeq;
+  const el = document.getElementById('episode-source-text');
+  el.textContent = '載入中...';
+  try {
+    const resp = await fetch(SOURCE_TEXT_URL + '?score_id=' + encodeURIComponent(scoreId));
+    const data = await resp.json();
+    if (mySeq !== sourceTextRequestSeq) return;  // 使用者已經切到別集，這個回應過期了
+    if (!resp.ok) { el.textContent = '載入失敗: ' + data.error; return; }
+    renderSourceText(el, data.full_context || data.topic_summary || '');
+  } catch (e) {
+    if (mySeq !== sourceTextRequestSeq) return;
+    el.textContent = '載入失敗: ' + e;
+  }
+}
+
+// ── 跑模擬 ────────────────────────────────────────────────────
+async function runSimulation() {
+  const months = document.getElementById('in-months').value;
+  const risk = document.getElementById('in-risk').value;
+  const macro = document.getElementById('in-macro').value;
+  const nsim = document.getElementById('in-nsim').value;
+
+  const statusEl = document.getElementById('status-text');
+  const panel = document.getElementById('result-panel');
+  const placeholder = document.getElementById('calc-placeholder');
+  statusEl.textContent = '跑模擬中...(要抓歷史股價+跑模擬，可能要幾秒)';
+  panel.classList.add('hidden');
+  { const ms = document.getElementById('money-stats'); if (ms) { ms.classList.add('hidden'); ms.hidden = true; } }
+
+  const params = new URLSearchParams({ months, risk_score: risk, macro_score: macro, n_simulations: nsim });
+  if (mode === 'episode') {
+    const scoreId = document.getElementById('in-episode').value;
+    if (!scoreId) { statusEl.textContent = '請先選一集'; return; }
+    params.set('score_id', scoreId);
+  } else {
+    const ticker = await resolveTickerInput();
+    if (!ticker) { statusEl.textContent = '請輸入股票代號或名稱，或從搜尋選單選一檔'; return; }
+    params.set('ticker', ticker);
+  }
+
+  try {
+    const resp = await fetch(API_URL + '?' + params.toString());
+    const data = await resp.json();
+    if (!resp.ok) {
+      statusEl.textContent = '錯誤: ' + (data.error || resp.statusText);
+      return;
+    }
+    statusEl.textContent = '';
+    lastResult = data;
+    renderResult(data);
+    placeholder.classList.add('hidden');
+    placeholder.hidden = true; // space-y-6只認原生hidden屬性，不認class="hidden"，
+    // 只加class的話space-y-6還是會把它當成「存在」的前一個手足元素，在它跟
+    // result-panel之間插入多的上邊距，造成兩欄卡片頂端對不齊
+    panel.classList.remove('hidden');
+  } catch (e) {
+    statusEl.textContent = '請求失敗: ' + e;
+  }
+}
+
+function fmtPct(x) {
+  return (x * 100 >= 0 ? '+' : '') + (x * 100).toFixed(1) + '%';
+}
+function fmtMoney(x) {
+  return 'NT$' + Math.round(x).toLocaleString();
+}
+
+function renderResult(data) {
+  document.getElementById('stat-start').textContent = data.start_price.toFixed(2);
+  // 「保守情境/積極情境」用conservative_return/aggressive_return(P25/P75)，不是
+  // p10_return/p90_return——灰色區間帶維持P10~P90，兩者刻意脫鉤。
+  document.getElementById('stat-p10').textContent = fmtPct(data.conservative_return);
+  document.getElementById('stat-median').textContent = fmtPct(data.median_return);
+  document.getElementById('stat-p90').textContent = fmtPct(data.aggressive_return);
+
+  renderChart(data);
+  renderMoneyStats();
+}
+
+function renderChart(data) {
+  const svg = document.getElementById('chart-svg');
+  svg.innerHTML = '';
+  const ns = 'http://www.w3.org/2000/svg';
+
+  const W = 700, H = 320, padL = 60, padR = 20, padT = 16, padB = 30;
+  const steps = data.time_steps;
+  const n = steps.length;
+
+  const actualVals = (data.actual_line || []).filter(v => v != null);
+  const allVals = [...data.band_low, ...data.band_high, ...data.conservative_path, ...data.aggressive_path, ...actualVals];
+  const vMin = Math.min(...allVals);
+  const vMax = Math.max(...allVals);
+  const pad = (vMax - vMin) * 0.05 || vMax * 0.1;
+  const lo = vMin - pad, hi = vMax + pad;
+
+  const toX = i => padL + (i / (n - 1)) * (W - padL - padR);
+  // actual_line是「每個月一筆」，跟模擬路徑「每天一筆」的索引不是同一種刻度，
+  // 不能直接把actual_line的陣列索引丟給toX(i)，要先換算成「佔投資期間的比例」
+  // 再乘上圖表寬度，兩種資料的X座標才會對齊到同一個時間軸上。
+  const toXByMonth = m => padL + (m / data.months) * (W - padL - padR);
+  const toY = v => padT + (1 - (v - lo) / (hi - lo)) * (H - padT - padB);
+
+  function pathFor(arr) {
+    return arr.map((v, i) => `${i === 0 ? 'M' : 'L'}${toX(i).toFixed(1)},${toY(v).toFixed(1)}`).join(' ');
+  }
+
+  // Grid lines（比照正式頁面的淺灰網格線）
+  for (let k = 0; k <= 4; k++) {
+    const v = lo + (hi - lo) * k / 4;
+    const y = toY(v);
+    const line = document.createElementNS(ns, 'line');
+    line.setAttribute('x1', padL); line.setAttribute('x2', W - padR);
+    line.setAttribute('y1', y); line.setAttribute('y2', y);
+    line.setAttribute('stroke', '#e5e3d9'); line.setAttribute('stroke-width', '1');
+    svg.appendChild(line);
+    const text = document.createElementNS(ns, 'text');
+    text.setAttribute('x', padL - 8); text.setAttribute('y', y + 3);
+    text.setAttribute('text-anchor', 'end'); text.setAttribute('font-family', 'Manrope');
+    text.setAttribute('font-size', '11'); text.setAttribute('font-weight', '600'); text.setAttribute('fill', '#717879');
+    text.textContent = v.toFixed(0);
+    svg.appendChild(text);
+  }
+
+  // P10~P90 統計區間帶
+  const bandD = pathFor(data.band_high) + ' L' + toX(n - 1).toFixed(1) + ',' + toY(data.band_low[n - 1]).toFixed(1) + ' '
+    + data.band_low.slice().reverse().map((v, i) => `L${toX(n - 1 - i).toFixed(1)},${toY(v).toFixed(1)}`).join(' ') + ' Z';
+  const bandPath = document.createElementNS(ns, 'path');
+  bandPath.setAttribute('d', bandD);
+  bandPath.setAttribute('fill', '#113236');
+  bandPath.setAttribute('fill-opacity', '0.10');
+  bandPath.setAttribute('stroke', 'none');
+  svg.appendChild(bandPath);
+
+  function drawLine(pathArr, color, dash, width) {
+    const path = document.createElementNS(ns, 'path');
+    path.setAttribute('d', pathFor(pathArr));
+    path.setAttribute('fill', 'none');
+    path.setAttribute('stroke', color);
+    path.setAttribute('stroke-width', width || '2.5');
+    path.setAttribute('stroke-linecap', 'round');
+    if (dash) path.setAttribute('stroke-dasharray', dash);
+    svg.appendChild(path);
+  }
+
+  // 保守/積極這兩條線用跟統計卡片(stat-p10/stat-p90)一樣的顏色(#ba1a1a紅/#286671青)。
+  drawLine(data.conservative_path, '#ba1a1a', '5,3', '2');
+  drawLine(data.aggressive_path, '#286671', '5,3', '2');
+  drawLine(data.median_path, '#113236');
+
+  const legend = document.getElementById('chart-legend');
+  legend.innerHTML = `
+    <span class="flex items-center gap-2"><svg width="22" height="4"><line x1="0" y1="2" x2="22" y2="2" stroke="#113236" stroke-width="2.5"/></svg><span class="font-bold text-tertiary-container">模擬基準</span></span>
+    <span class="flex items-center gap-2"><svg width="22" height="4"><line x1="0" y1="2" x2="22" y2="2" stroke="#286671" stroke-width="2" stroke-dasharray="5,3"/></svg><span class="text-outline">積極情境(P75)</span></span>
+    <span class="flex items-center gap-2"><svg width="22" height="4"><line x1="0" y1="2" x2="22" y2="2" stroke="#ba1a1a" stroke-width="2" stroke-dasharray="5,3"/></svg><span class="text-outline">保守情境(P25)</span></span>
+    <span class="flex items-center gap-2"><span class="inline-block w-3 h-2 rounded-sm" style="background:#113236;opacity:0.10;border:1px solid #113236"></span><span class="text-outline">P10~P90統計區間帶</span></span>
+  `;
+
+  // 真實股價疊圖(只有當集模式才有)：從發布日到現在，還沒到的月份是null會自動斷開
+  if (data.actual_line && data.actual_line.some(v => v != null)) {
+    let segStart = null;
+    let d = '';
+    data.actual_line.forEach((v, i) => {
+      if (v == null) { segStart = null; return; }
+      d += (segStart === null ? 'M' : 'L') + toXByMonth(i).toFixed(1) + ',' + toY(v).toFixed(1) + ' ';
+      segStart = i;
+    });
+    const actualPath = document.createElementNS(ns, 'path');
+    actualPath.setAttribute('d', d.trim());
+    actualPath.setAttribute('fill', 'none');
+    actualPath.setAttribute('stroke', '#d97f12');
+    actualPath.setAttribute('stroke-width', '2.5');
+    actualPath.setAttribute('stroke-linecap', 'round');
+    svg.appendChild(actualPath);
+    legend.innerHTML += `<span class="flex items-center gap-2"><svg width="22" height="4"><line x1="0" y1="2" x2="22" y2="2" stroke="#d97f12" stroke-width="2.5"/></svg><span class="font-bold" style="color:#d97f12">真實股價</span></span>`;
+  }
+
+  const totalMonths = data.months;
+  const xLabelCount = Math.min(6, totalMonths);
+  for (let k = 0; k <= xLabelCount; k++) {
+    const monthVal = Math.round(totalMonths * k / xLabelCount);
+    const idx = Math.round((n - 1) * k / xLabelCount);
+    const text = document.createElementNS(ns, 'text');
+    text.setAttribute('x', toX(idx)); text.setAttribute('y', H - padB + 16);
+    text.setAttribute('text-anchor', 'middle'); text.setAttribute('font-family', 'Manrope');
+    text.setAttribute('font-size', '11'); text.setAttribute('font-weight', '600'); text.setAttribute('fill', '#717879');
+    text.textContent = `第${monthVal}月`;
+    svg.appendChild(text);
+  }
+
+  // 游標懸浮的判斷點是「每個月」，跟上面畫時間軸文字標籤(疏一點，例如每2個月一個)
+  // 是兩件獨立的事——標籤維持原本疏密，但滑鼠移到任何一個月份都要有反應。
+  const hoverPoints = [];
+  for (let m = 0; m <= totalMonths; m++) {
+    const idx = Math.round((n - 1) * m / totalMonths);
+    hoverPoints.push({ monthVal: m, idx });
+  }
+
+  attachChartHover(svg, ns, data, hoverPoints, toX, toY, { W, H, padL, padR, padT, padB });
+}
+
+// 滑鼠移到圖表上時，每個月份都會顯示那個時間點的保守/基準/積極情境數值；
+// 如果那個月剛好有真實股價資料(當集模式、已經走到/過了那個月)，多顯示一行
+// 真實股價，沒有資料的月份就不顯示這行，不是每個月都一定有真實股價可比較。
+function attachChartHover(svg, ns, data, hoverPoints, toX, toY, dims) {
+  const { W, H, padT, padB, padL, padR } = dims;
+
+  const guide = document.createElementNS(ns, 'line');
+  guide.setAttribute('y1', padT); guide.setAttribute('y2', H - padB);
+  guide.setAttribute('stroke', '#717879'); guide.setAttribute('stroke-width', '1');
+  guide.setAttribute('stroke-dasharray', '3,3');
+  guide.setAttribute('opacity', '0');
+  svg.appendChild(guide);
+
+  function makeDot(color) {
+    const dot = document.createElementNS(ns, 'circle');
+    dot.setAttribute('r', '4');
+    dot.setAttribute('fill', color);
+    dot.setAttribute('stroke', '#fff');
+    dot.setAttribute('stroke-width', '1.5');
+    dot.setAttribute('opacity', '0');
+    svg.appendChild(dot);
+    return dot;
+  }
+  // P10/P90是區間帶的邊緣，本身不是重點數字，用中性灰色；保守(P25)/積極(P75)
+  // 才是真正有語意的兩個點，顏色跟統計卡片(stat-p10/stat-p90)、圖表線條保持一致。
+  const dotP10band = makeDot('#a8a49a');
+  const dotMedian = makeDot('#113236');
+  const dotP90band = makeDot('#a8a49a');
+  const dotConservative = makeDot('#ba1a1a');
+  const dotAggressive = makeDot('#286671');
+  const dotActual = makeDot('#d97f12');
+
+  const tooltip = document.createElementNS(ns, 'g');
+  tooltip.setAttribute('opacity', '0');
+  tooltip.style.pointerEvents = 'none';
+  const tooltipBg = document.createElementNS(ns, 'rect');
+  tooltipBg.setAttribute('rx', '6');
+  tooltipBg.setAttribute('fill', '#182422');
+  tooltipBg.setAttribute('fill-opacity', '0.92');
+  tooltip.appendChild(tooltipBg);
+
+  const lineColors = ['#c8d0ce', '#c8d0ce', '#8fd4cb', '#ffffff', '#ff9b9b', '#c8d0ce'];
+  const textEls = lineColors.map(color => {
+    const t = document.createElementNS(ns, 'text');
+    t.setAttribute('font-family', 'Manrope'); t.setAttribute('font-size', '11'); t.setAttribute('font-weight', '600');
+    t.setAttribute('fill', color);
+    tooltip.appendChild(t);
+    return t;
+  });
+  const actualText = document.createElementNS(ns, 'text');
+  actualText.setAttribute('font-family', 'Manrope'); actualText.setAttribute('font-size', '11'); actualText.setAttribute('font-weight', '600');
+  actualText.setAttribute('fill', '#ffb545');
+  tooltip.appendChild(actualText);
+  svg.appendChild(tooltip);
+
+  const fmt = v => Math.round(v).toString();
+  const boxW = 148;
+
+  function show(point) {
+    const x = toX(point.idx);
+    guide.setAttribute('x1', x); guide.setAttribute('x2', x); guide.setAttribute('opacity', '0.6');
+
+    const yP10 = toY(data.band_low[point.idx]);
+    const yP90 = toY(data.band_high[point.idx]);
+    const yMed = toY(data.median_path[point.idx]);
+    const yCons = toY(data.conservative_path[point.idx]);
+    const yAggr = toY(data.aggressive_path[point.idx]);
+    dotP10band.setAttribute('cx', x); dotP10band.setAttribute('cy', yP10); dotP10band.setAttribute('opacity', '1');
+    dotP90band.setAttribute('cx', x); dotP90band.setAttribute('cy', yP90); dotP90band.setAttribute('opacity', '1');
+    dotMedian.setAttribute('cx', x); dotMedian.setAttribute('cy', yMed); dotMedian.setAttribute('opacity', '1');
+    dotConservative.setAttribute('cx', x); dotConservative.setAttribute('cy', yCons); dotConservative.setAttribute('opacity', '1');
+    dotAggressive.setAttribute('cx', x); dotAggressive.setAttribute('cy', yAggr); dotAggressive.setAttribute('opacity', '1');
+
+    // P10/P90路徑是灰色區間帶的邊緣，跟「保守情境/積極情境」(P25/P75)是兩組
+    // 不同的數字，分開列出來，不要互相混用。
+    textEls[0].textContent = `第${point.monthVal}月`;
+    textEls[1].textContent = `P90路徑　　${fmt(data.band_high[point.idx])}`;
+    textEls[2].textContent = `積極情境　${fmt(data.aggressive_path[point.idx])}`;
+    textEls[3].textContent = `基準　　　　${fmt(data.median_path[point.idx])}`;
+    textEls[4].textContent = `保守情境　${fmt(data.conservative_path[point.idx])}`;
+    textEls[5].textContent = `P10路徑　　${fmt(data.band_low[point.idx])}`;
+
+    const actualVal = data.actual_line ? data.actual_line[point.monthVal] : null;
+    const hasActual = actualVal != null;
+    if (hasActual) {
+      actualText.textContent = `真實股價　${fmt(actualVal)}`;
+      dotActual.setAttribute('cx', x); dotActual.setAttribute('cy', toY(actualVal)); dotActual.setAttribute('opacity', '1');
+    } else {
+      actualText.textContent = '';
+      dotActual.setAttribute('opacity', '0');
+    }
+
+    const lineCount = 6 + (hasActual ? 1 : 0);
+    const boxH = 16 + lineCount * 20;
+
+    let boxX = x + 14;
+    if (boxX + boxW > W - padR) boxX = x - 14 - boxW;
+    const boxY = padT + 4;
+    tooltipBg.setAttribute('x', boxX); tooltipBg.setAttribute('y', boxY);
+    tooltipBg.setAttribute('width', boxW); tooltipBg.setAttribute('height', boxH);
+    [...textEls, actualText].forEach((t, i) => {
+      t.setAttribute('x', boxX + 10);
+      t.setAttribute('y', boxY + 19 + i * 20);
+    });
+    tooltip.setAttribute('opacity', '1');
+  }
+
+  function hide() {
+    guide.setAttribute('opacity', '0');
+    [dotP10band, dotP90band, dotMedian, dotConservative, dotAggressive, dotActual].forEach(d => d.setAttribute('opacity', '0'));
+    tooltip.setAttribute('opacity', '0');
+  }
+
+  hoverPoints.forEach((point, k) => {
+    const x = toX(point.idx);
+    const prevX = k === 0 ? padL : (toX(hoverPoints[k - 1].idx) + x) / 2;
+    const nextX = k === hoverPoints.length - 1 ? (W - padR) : (toX(hoverPoints[k + 1].idx) + x) / 2;
+    const hit = document.createElementNS(ns, 'rect');
+    hit.setAttribute('x', prevX); hit.setAttribute('y', padT);
+    hit.setAttribute('width', Math.max(0, nextX - prevX)); hit.setAttribute('height', H - padT - padB);
+    hit.setAttribute('fill', 'transparent');
+    hit.style.cursor = 'pointer';
+    hit.addEventListener('mouseenter', () => show(point));
+    hit.addEventListener('mouseleave', hide);
+    svg.appendChild(hit);
+  });
+}
+
+// ── 金額試算：純前端換算，不重新呼叫API ──────────────────────────
+function renderMoneyStats() {
+  const investedStr = document.getElementById('in-invested').value;
+  const wrap = document.getElementById('money-stats');
+  const sharesNote = document.getElementById('money-shares-note');
+  if (!lastResult) {
+    wrap.classList.add('hidden'); wrap.hidden = true;
+    sharesNote.classList.add('hidden'); sharesNote.hidden = true;
+    return;
+  }
+  const invested = Math.max(0, Number(investedStr) || 0);
+  document.getElementById('money-start').textContent = fmtMoney(invested);
+  document.getElementById('money-p10').textContent = fmtMoney(invested * (1 + lastResult.conservative_return));
+  document.getElementById('money-median').textContent = fmtMoney(invested * (1 + lastResult.median_return));
+  document.getElementById('money-p90').textContent = fmtMoney(invested * (1 + lastResult.aggressive_return));
+  wrap.classList.remove('hidden'); wrap.hidden = false;
+
+  // 只能買整股，投入金額除以起始股價無條件捨去，剩下的零頭顯示出來，
+  // 不然使用者會誤以為市值是用「買得到零股」的連續金額去算的。
+  const startPrice = lastResult.start_price;
+  if (startPrice > 0) {
+    const shares = Math.floor(invested / startPrice);
+    const leftover = invested - shares * startPrice;
+    sharesNote.textContent = `以起始股價試算，約可買 ${shares} 股（找零 ${fmtMoney(leftover)}，實際下單以券商規則為準）`;
+    sharesNote.classList.remove('hidden'); sharesNote.hidden = false;
+  } else {
+    sharesNote.classList.add('hidden'); sharesNote.hidden = true;
+  }
+}
+</script>
+</body>
+</html>

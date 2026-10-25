@@ -132,17 +132,17 @@
               </label>
             </div>
             <div class="option-card">
-              <input type="checkbox" name="markets" id="mk-crypto" value="Crypto"/>
-              <label for="mk-crypto">
-                <span class="text-2xl">₿</span>
-                <div><p class="font-bold">加密貨幣</p><p class="text-xs text-on-surface-variant mt-0.5">比特幣、Web3</p></div>
+              <input type="checkbox" name="markets" id="mk-commodity" value="Commodity"/>
+              <label for="mk-commodity">
+                <span class="text-2xl">🛢️</span>
+                <div><p class="font-bold">能源與原物料</p><p class="text-xs text-on-surface-variant mt-0.5">石油、黃金、原物料</p></div>
               </label>
             </div>
             <div class="option-card">
               <input type="checkbox" name="markets" id="mk-general" value="General"/>
               <label for="mk-general">
                 <span class="text-2xl">🌍</span>
-                <div><p class="font-bold">還不確定</p><p class="text-xs text-on-surface-variant mt-0.5">想先聽聽看</p></div>
+                <div><p class="font-bold">還不確定</p><p class="text-xs text-on-surface-variant mt-0.5">想先隨意逛逛</p></div>
               </label>
             </div>
           </div>
@@ -200,18 +200,12 @@
                 <div><p class="font-bold">低買高賣賺價差</p><p class="text-xs text-on-surface-variant mt-0.5">主動交易，追求資產快速增長</p></div>
               </label>
             </div>
-            <div class="option-card">
-              <input type="radio" name="goal" id="gl-div" value="Dividend"/>
-              <label for="gl-div">
-                <span class="text-2xl">💰</span>
-                <div><p class="font-bold">穩定領股息</p><p class="text-xs text-on-surface-variant mt-0.5">存股，追求現金流</p></div>
-              </label>
-            </div>
+            {# 原本「穩定領股息(Dividend)」和「長期持有大盤(Passive)」合併成一項，舊資料的 Dividend 在 PreferencesAPIView 會轉成 Passive #}
             <div class="option-card">
               <input type="radio" name="goal" id="gl-passive" value="Passive"/>
               <label for="gl-passive">
                 <span class="text-2xl">🏔️</span>
-                <div><p class="font-bold">長期持有大盤</p><p class="text-xs text-on-surface-variant mt-0.5">定期定額，複利效應</p></div>
+                <div><p class="font-bold">長期存股、穩穩領息</p><p class="text-xs text-on-surface-variant mt-0.5">定期定額、領股息，追求現金流與複利</p></div>
               </label>
             </div>
           </div>

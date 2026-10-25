@@ -119,6 +119,7 @@ class Command(BaseCommand):
                     .values(
                         "arguments", "investment_takeaways",
                         "one_sentence_summary", "tags", "entities", "outlook_calls",
+                        "primary_tags", "analysis_style", "investor_strategy",
                     )
                     .first()
                 )
@@ -130,6 +131,9 @@ class Command(BaseCommand):
                         "tags": existing_pro["tags"],
                         "entities": existing_pro["entities"],
                         "outlook_calls": existing_pro["outlook_calls"],
+                        "primary_tags": existing_pro["primary_tags"],
+                        "analysis_style": existing_pro["analysis_style"],
+                        "investor_strategy": existing_pro["investor_strategy"],
                     }
                 success += 1
             else:

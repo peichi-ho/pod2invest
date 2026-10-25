@@ -10,7 +10,6 @@ import time
 
 import yfinance as yf
 from django.core.management.base import BaseCommand
-from django.db import connections
 
 from apps.summaries.models import BacktestingRecord, TickerMap
 
@@ -75,22 +74,17 @@ class Command(BaseCommand):
             if i % 10 == 0:
                 time.sleep(1)
 
-        # 寫入 TickerMap
+        # 寫入 TickerMap：用 ORM 建立，save() 會自動連到大表同 ticker 那一列
+        # （原本的 raw SQL 把 boolean 欄位 verified 寫成空字串，PostgreSQL 會直接報錯）
         if resolved and not dry_run:
             self.stdout.write(f"\n寫入 TickerMap：{len(resolved)} 筆")
-            with connections["summariesdb"].cursor() as c:
-                for asset, ticker, exchange in resolved:
-                    c.execute(
-                        "SELECT id FROM ticker_map WHERE asset_name=%s", [asset]
-                    )
-                    if not c.fetchone():
-                        c.execute(
-                            "INSERT INTO ticker_map "
-                            "(asset_name, ticker, exchange, sector, verified, zh_name, created_at) "
-                            "VALUES (%s,%s,%s,'','',''  ,NOW())",
-                            [asset, ticker, exchange]
-                        )
-                        self.stdout.write(f"  新增 {ticker:<12} {asset}")
+            for asset, ticker, exchange in resolved:
+                if TickerMap.objects.using("summariesdb").filter(asset_name=asset).exists():
+                    continue
+                tm = TickerMap(asset_name=asset, ticker=ticker, exchange=exchange, verified=False)
+                tm.save(using="summariesdb")
+                note = "" if tm.classification_id else "（大表沒有這個 ticker，還沒連上）"
+                self.stdout.write(f"  新增 {ticker:<12} {asset}{note}")
 
         self.stdout.write("\n" + "=" * 60)
         mode = "[DRY RUN] " if dry_run else ""
