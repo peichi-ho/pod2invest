@@ -34,6 +34,7 @@ function setMode(m) {
   document.getElementById('mode-btn-episode').classList.toggle('active', m === 'episode');
   document.getElementById('panel-manual').classList.toggle('hidden', m !== 'manual');
   document.getElementById('panel-episode').classList.toggle('hidden', m !== 'episode');
+  if (typeof onCalcModeChanged === 'function') onCalcModeChanged(m);   // 論點情境試算只在從節目挑選時可用
 }
 
 function syncFromSlider(key) {
@@ -315,6 +316,7 @@ function onEpisodeChange() {
 
   document.getElementById('episode-rationale').textContent = ep.rationale || '(無)';
   loadSourceText(scoreId);
+  if (typeof onCalcEpisodeChanged === 'function') onCalcEpisodeChanged(scoreId);
 }
 
 // 「AI實際讀到的完整輸入」原本是一整坨純文字，改成：每個【標題】一張卡片，
@@ -2034,7 +2036,7 @@ let _pendingCalcTarget = null;
 function goToCalculatorWithStock(stockName, endDate, originEpisodeId) {
   _pendingCalcTarget = { ticker: stockName, episodeId: originEpisodeId != null ? originEpisodeId : null };
   showPage('calculator');
-  if (typeof showCalcTab === 'function') showCalcTab('sim');
+  if (typeof showCalcModule === 'function') showCalcModule('sim');
   setMode('episode');
   _applyPendingCalcTarget();
 }

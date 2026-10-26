@@ -2,19 +2,10 @@
 <div id="page-calculator" class="page pt-24 px-6 max-w-7xl mx-auto pb-8">
   <section class="mb-6">
     <h2 id="calc-title" class="font-headline font-extrabold text-3xl text-tertiary-container tracking-tight">投資情境模擬</h2>
-    <p id="calc-subtitle" class="text-on-surface-variant text-sm mt-1">用過去的股價走勢加上你的假設，推演這檔股票可能走到哪裡</p>
+    <p id="calc-subtitle" class="text-on-surface-variant text-sm mt-1">選一個標的，用歷史股價走勢或節目的投資論點，推演它可能走到哪裡</p>
   </section>
 
-  <!-- 兩個分頁：計算方式完全不同(歷史股價重新抽樣 vs. 財報推 EPS × 本益比)，刻意分開、各自選股選集，
-       結果不互相比較。分頁切換見 static/js/thesis_calc.js 的 showCalcTab() -->
-  <div class="flex gap-6 mb-6 border-b border-outline-variant/30" role="tablist">
-    <button type="button" id="calc-tab-btn-sim" role="tab" aria-selected="true" onclick="showCalcTab('sim')"
-      class="calc-tab pb-3 -mb-px text-sm font-bold border-b-2 border-tertiary-container text-tertiary-container">投資情境模擬</button>
-    <button type="button" id="calc-tab-btn-thesis" role="tab" aria-selected="false" onclick="showCalcTab('thesis')"
-      class="calc-tab pb-3 -mb-px text-sm font-bold border-b-2 border-transparent text-outline hover:text-tertiary-container">論點情境試算</button>
-  </div>
-
-  <div id="calc-tab-sim" class="space-y-6">
+  <div class="space-y-6">
     <!-- 試算模擬器：歷史拔靴逐步模擬(B方案)，每一步都從真實歷史日報酬率隨機抽樣，真的跑N次路徑 -->
     <div class="bg-surface-container-low p-8 rounded-lg space-y-5">
       <div class="flex items-center justify-between border-b border-outline-variant/20 pb-4">
@@ -50,7 +41,7 @@
             <summary class="text-sm font-bold text-tertiary-container uppercase tracking-widest cursor-pointer select-none">評分理由(點開查看)</summary>
             <div class="mt-4 space-y-5">
               <div class="max-w-3xl">
-                <div class="text-sm font-bold text-outline uppercase tracking-widest mb-2">AI 判斷理由</div>
+                <div class="text-sm font-bold text-outline uppercase tracking-widest mb-2">AI 判斷理由（股價模擬用的風險、立場分數）</div>
                 <p id="episode-rationale" class="border-l-4 border-secondary bg-surface-container rounded-r-lg px-4 py-3 text-[15px] leading-7 text-on-surface"></p>
               </div>
               <div>
@@ -60,11 +51,24 @@
               </div>
             </div>
           </details>
-          <p class="text-xs text-outline/60 pt-2 border-t border-outline-variant/10">風險/立場分數的調整幅度已用真實資料校準過（保守~積極情境對應統計上的P25~P75，實際涵蓋率約50.9%；圖上灰色區間帶則是較寬的P10~P90，呈現真實世界更完整的可能範圍），報酬率已還原股息（視為股息再投入，非單純價差報酬）。抽樣母體是該標的過去5年的每日報酬，是否包含空頭行情取決於那5年的實際走勢</p>
         </div>
       </div>
     </div>
 
+    <!-- 上面的「選擇投資標的」兩個模擬器共用；下面一次只顯示一個模擬器，結果不放在一起比較
+         (歷史股價重新抽樣 vs. 財報推 EPS × 本益比，計算方式完全不同)。切換見 static/js/thesis_calc.js -->
+    <div class="flex flex-wrap items-center gap-3">
+      <div class="inline-flex rounded-full bg-surface-container-low p-1" role="tablist" aria-label="選擇模擬器">
+        <button type="button" id="calc-mod-btn-sim" role="tab" aria-selected="true" onclick="showCalcModule('sim')"
+          class="px-5 py-2 rounded-full text-sm font-bold transition-colors bg-tertiary-container text-white">股價模擬</button>
+        <button type="button" id="calc-mod-btn-thesis" role="tab" aria-selected="false" onclick="showCalcModule('thesis')"
+          class="px-5 py-2 rounded-full text-sm font-bold transition-colors text-on-surface-variant disabled:opacity-40 disabled:cursor-not-allowed">論點情境試算</button>
+      </div>
+      <span id="calc-mod-hint" class="text-xs text-outline"></span>
+    </div>
+
+    <div id="calc-mod-sim" class="space-y-6">
+    <p class="text-xs text-outline leading-relaxed">股價模擬：從該標的過去 5 年的每日報酬重新抽樣，跑出未來股價可能的範圍。風險/立場分數的調整幅度已用真實資料校準過（保守~積極情境對應統計上的P25~P75，實際涵蓋率約50.9%；圖上灰色區間帶則是較寬的P10~P90，呈現真實世界更完整的可能範圍），報酬率已還原股息（視為股息再投入，非單純價差報酬）。抽樣母體是該標的過去5年的每日報酬，是否包含空頭行情取決於那5年的實際走勢</p>
     <!-- 試算條件 + 試算結果：左右兩欄 -->
     <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
       <!-- Left: 試算條件 -->
@@ -207,25 +211,9 @@
     </div>
 
 
-  </div>
-
-  <div id="calc-tab-thesis" class="hidden space-y-6">
-    <div class="bg-surface-container-low p-6 lg:p-8 rounded-lg space-y-4">
-      <h3 class="font-['Epilogue'] text-xl font-bold text-tertiary-container border-b border-outline-variant/20 pb-4">選擇論點</h3>
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div class="min-w-0">
-          <label for="thesis-pick-ticker" class="font-label text-sm font-bold uppercase tracking-widest text-outline">股票</label>
-          <select id="thesis-pick-ticker" onchange="onThesisTickerChange()"
-            class="mt-2 w-full text-sm px-3 py-2 bg-surface-container border border-outline-variant/50 rounded-DEFAULT text-on-surface-variant focus:ring-2 focus:ring-secondary"></select>
-        </div>
-        <div class="min-w-0">
-          <label for="thesis-pick-episode" class="font-label text-sm font-bold uppercase tracking-widest text-outline">集數（依發布日新到舊）</label>
-          <select id="thesis-pick-episode" onchange="onThesisEpisodeChange()"
-            class="mt-2 w-full text-sm px-3 py-2 bg-surface-container border border-outline-variant/50 rounded-DEFAULT text-on-surface-variant focus:ring-2 focus:ring-secondary"></select>
-        </div>
-      </div>
-      <p class="text-xs text-outline leading-relaxed">只列出有拆好情境的節目。試算以節目發布日的股價與當時已公告的財報為基準，跟「投資情境模擬」的歷史股價模擬是兩種不同的計算方式，結果不互相比較。</p>
     </div>
+
+    <div id="calc-mod-thesis" class="hidden">
     <!-- 論點情境試算，見 static/js/thesis_calc.js、apps/calculator/thesis_views.py -->
     <section id="thesis-panel" class="bg-surface-container-low rounded-xl p-6 lg:p-8 space-y-5">
       <div class="flex flex-wrap items-baseline justify-between gap-2 border-b border-outline-variant/20 pb-4">
@@ -235,7 +223,7 @@
         </div>
         <select id="thesis-select" class="hidden text-sm px-3 py-2 bg-surface-container border border-outline-variant/50 rounded-DEFAULT text-on-surface-variant max-w-full" onchange="onThesisSelect(this.value)"></select>
       </div>
-      <p id="thesis-status" class="text-sm text-outline">選一檔股票和一集節目後，這裡會列出它的論點與情境。</p>
+      <p id="thesis-status" class="text-sm text-outline">在上方「從節目挑選」選一集後，這裡會列出它的論點與情境。</p>
       <div id="thesis-body" class="hidden space-y-5">
         <p id="thesis-text" class="border-l-4 border-secondary bg-surface-container rounded-r-lg px-4 py-3 text-[15px] leading-7 text-on-surface"></p>
         <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
@@ -265,6 +253,7 @@
         </div>
       </div>
     </section>
+    </div>
   </div>
 
     <!-- Disclaimer -->

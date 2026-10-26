@@ -1,9 +1,9 @@
-// ── 論點情境試算(計算機頁面的第二個分頁) ─────────────────────────────────
-// 選股、選集 → 列出節目論點拆出的情境 → 使用者勾選、調整參數 → 後端推算 12 個月後的 EPS 與目標價。
-// 跟第一個分頁「投資情境模擬」(歷史股價拔靴模擬)完全分開：各自選股選集，結果不互相比較——
+// ── 論點情境試算(計算機頁面的第二個模擬器) ─────────────────────────────────
+// 上方選集 → 切到「論點情境試算」→ 列出節目論點拆出的情境 → 使用者勾選、調整參數 → 後端推算 12 個月後的 EPS 與目標價。
+// 跟「股價模擬」(歷史股價拔靴模擬)共用上方的選標的、選集，但結果分開顯示、不互相比較——
 // 兩者計算方式完全不同，拔靴模擬也不是有公信力的基準(2026-10-26 起拿掉「落在第幾百分位」)。
-// 計算都在後端(apps/calculator/thesis_views.py)，這裡只負責分頁、選單、勾選狀態、參數覆寫與畫面。
-// 依賴 calculator.js 的 _escHtml() 與 B_EPISODES_URL。
+// 計算都在後端(apps/calculator/thesis_views.py)，這裡只負責模擬器切換、勾選狀態、參數覆寫與畫面。
+// 選集共用上方「選擇投資標的」(calculator.js)；依賴 calculator.js 的 _escHtml()、mode。
 
 const THESIS_API_URL = '/api/calculator/thesis-valuation/';
 
@@ -24,64 +24,44 @@ function _thesisExclusiveGroup(s) {
   return null;
 }
 
-// ── 分頁與選單 ──
-const CALC_TAB_TEXT = {
-  sim: ['投資情境模擬', '用過去的股價走勢加上你的假設，推演這檔股票可能走到哪裡'],
-  thesis: ['論點情境試算', '把節目的投資論點拆成財務情境，推算 12 個月後的 EPS 與目標價'],
-};
-let _thesisEpisodes = null;   // 選集清單(跟投資情境模擬同一支 API，但只留有拆好情境的)
+// ── 模擬器切換 ──
+// 上方「選擇投資標的」兩個模擬器共用；下面一次只顯示一個，結果不放在一起比較。
+// 論點情境試算一定要有節目論點，所以只在「從節目挑選」模式可以切過來。
+let _calcModule = 'sim';
+let _thesisPendingScore = null;   // 上方目前選的那一集；切到論點情境試算時才載入，避免沒在看也去抓資料
 
-function showCalcTab(tab) {
-  ['sim', 'thesis'].forEach(t => {
-    const on = t === tab;
-    document.getElementById('calc-tab-' + t).classList.toggle('hidden', !on);
-    const btn = document.getElementById('calc-tab-btn-' + t);
+function showCalcModule(m) {
+  if (m === 'thesis' && typeof mode !== 'undefined' && mode !== 'episode') return;
+  _calcModule = m;
+  ['sim', 'thesis'].forEach(k => {
+    const on = k === m;
+    document.getElementById('calc-mod-' + k).classList.toggle('hidden', !on);
+    const btn = document.getElementById('calc-mod-btn-' + k);
     btn.setAttribute('aria-selected', on ? 'true' : 'false');
-    btn.classList.toggle('border-tertiary-container', on);
-    btn.classList.toggle('text-tertiary-container', on);
-    btn.classList.toggle('border-transparent', !on);
-    btn.classList.toggle('text-outline', !on);
+    btn.classList.toggle('bg-tertiary-container', on);
+    btn.classList.toggle('text-white', on);
+    btn.classList.toggle('text-on-surface-variant', !on);
   });
-  document.getElementById('calc-title').textContent = CALC_TAB_TEXT[tab][0];
-  document.getElementById('calc-subtitle').textContent = CALC_TAB_TEXT[tab][1];
-  if (tab === 'thesis' && !_thesisEpisodes) _thesisInitPickers();
-}
-
-async function _thesisInitPickers() {
-  _thesisEpisodes = [];
-  _thesisSetStatus('載入節目清單中…');
-  try {
-    const resp = await fetch(B_EPISODES_URL);
-    const data = await resp.json();
-    _thesisEpisodes = (data.episodes || []).filter(e => e.has_thesis);
-  } catch (e) {
-    _thesisSetStatus('載入節目清單失敗：' + e);
-    return;
+  if (m === 'thesis' && _thesisPendingScore && String(_thesis.scoreId) !== String(_thesisPendingScore)) {
+    loadThesisValuation(_thesisPendingScore);
   }
-  // 股票依「被討論的集數」多到少排，同一檔只出現一次
-  const byTicker = new Map();
-  _thesisEpisodes.forEach(e => {
-    const cur = byTicker.get(e.ticker) || { ticker: e.ticker, name: e.asset_name, n: 0 };
-    cur.n += 1;
-    byTicker.set(e.ticker, cur);
-  });
-  const tickers = [...byTicker.values()].sort((a, b) => b.n - a.n);
-  document.getElementById('thesis-pick-ticker').innerHTML = tickers.map(t =>
-    `<option value="${_escHtml(t.ticker)}">${_escHtml(t.name)}（${_escHtml(t.ticker)}）・${t.n} 集</option>`).join('');
-  onThesisTickerChange();
 }
 
-function onThesisTickerChange() {
-  const ticker = document.getElementById('thesis-pick-ticker').value;
-  const list = (_thesisEpisodes || []).filter(e => e.ticker === ticker);
-  document.getElementById('thesis-pick-episode').innerHTML = list.map(e =>
-    `<option value="${e.score_id}">${_escHtml(e.published_at || '未知日期')}　${_escHtml(e.podcaster || '')}</option>`).join('');
-  if (list.length) onThesisEpisodeChange();
+// calculator.js 的 setMode() 會呼叫：手動輸入時停用論點情境試算，並切回股價模擬
+function onCalcModeChanged(m) {
+  const btn = document.getElementById('calc-mod-btn-thesis');
+  if (!btn) return;
+  const ok = m === 'episode';
+  btn.disabled = !ok;
+  btn.title = ok ? '' : '論點情境試算需要「從節目挑選」';
+  document.getElementById('calc-mod-hint').textContent = ok ? '' : '論點情境試算需要先切到「從節目挑選」';
+  if (!ok && _calcModule === 'thesis') showCalcModule('sim');
 }
 
-function onThesisEpisodeChange() {
-  const scoreId = document.getElementById('thesis-pick-episode').value;
-  if (scoreId) loadThesisValuation(scoreId);
+// calculator.js 的 onEpisodeChange() 會呼叫：上方換了一集
+function onCalcEpisodeChanged(scoreId) {
+  _thesisPendingScore = scoreId;
+  if (_calcModule === 'thesis') loadThesisValuation(scoreId);
 }
 
 function loadThesisValuation(scoreId) {
@@ -455,3 +435,6 @@ function _thesisWaterfallHtml(d) {
     <div class="space-y-1">${rows.join('')}</div>
     <p class="text-xs text-outline">依勾選順序逐一加入情境計算，各步加總等於目標價與發布日股價的差距。</p>`;
 }
+
+// calculator.js 載入時已經呼叫過 setMode('manual')，那時這個檔案還沒載入，這裡補套用一次初始模式
+onCalcModeChanged(typeof mode !== 'undefined' ? mode : 'manual');
