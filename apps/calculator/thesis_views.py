@@ -22,7 +22,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.calculator.services.thesis_valuation import (
-    LEVERS, apply_scenarios, compute_baseline, project, waterfall,
+    apply_scenarios, compute_baseline, project, scenario_levers, waterfall,
 )
 
 PROMPT_VERSION = "v5"
@@ -35,7 +35,7 @@ TYPE_LABELS = {
     "M_AND_A": "併購", "DEMAND_DOWN": "需求放緩", "COMPETITION": "競爭加劇", "COST_UP": "成本上升",
     "PRICE_DOWN": "產品跌價", "RERATING_UP": "估值偏低", "RERATING_DOWN": "估值偏高",
     "MACRO_EASING": "降息、資金寬鬆", "MACRO_TIGHTENING": "升息、資金緊縮", "FINANCIAL_RISK": "財務風險",
-    "EPS_FORECAST": "EPS 預估", "ANALYST_TARGET": "法人目標價", "TECHNICAL_FLOW": "技術面、籌碼面",
+    "REGULATORY_RISK": "法規風險", "EPS_FORECAST": "EPS 預估", "ANALYST_TARGET": "目標價位", "TECHNICAL_FLOW": "技術面、籌碼面",
 }
 LEVER_LABELS = {
     "revenue_growth": "營收成長", "gross_margin": "毛利率", "opex_ratio": "費用率",
@@ -48,7 +48,7 @@ def _scenario_view(s: dict, idx: int) -> dict:
     """給前端顯示用：情境的中文名稱、影響哪些參數、能不能勾選。"""
     t = s.get("type")
     figures = {k: v for k, v in (s.get("figures") or {}).items() if v is not None}
-    effects = [f"{LEVER_LABELS[k]}{'↑' if v > 0 else '↓'}" for k, v in LEVERS.get(t, {}).items()]
+    effects = [f"{LEVER_LABELS[k]}{'↑' if v > 0 else '↓'}" for k, v in scenario_levers(s).items()]
     if t == "EPS_FORECAST":
         effects = ["直接指定 EPS"] if figures.get("eps") else ["EPS 上修（沒有數字，不影響試算）"]
     # 技術面、目標價只顯示不試算；沒有數字的 EPS 預估也沒東西可以算
@@ -57,7 +57,9 @@ def _scenario_view(s: dict, idx: int) -> dict:
         "idx": idx, "type": t, "label": TYPE_LABELS.get(t, t), "stance": s.get("stance"),
         "chain": s.get("chain") or [], "quote": s.get("quote", ""), "figures": figures,
         "effects": effects, "checkable": checkable,
-        "provisional": t in ("FINANCIAL_RISK", "MACRO_EASING", "MACRO_TIGHTENING"),
+        "provisional": t in ("FINANCIAL_RISK", "REGULATORY_RISK", "MACRO_EASING", "MACRO_TIGHTENING"),
+        "source": s.get("source"),                   # 目標價位：analyst(法人) / podcast(節目觀點)
+        "figures_source": s.get("figures_source"),   # thesis = 數字取自論點摘要，不是原文直接講的
     }
 
 
@@ -166,9 +168,10 @@ class ThesisValuationAPIView(APIView):
         payload.update(thesis_id=current.id, scenarios=scenarios,
                        no_driver_reason=current.no_driver_reason if current.status == "no_driver" else "")
 
-        # 法人目標價只當參考線，不參與試算
+        # 目標價位只當參考，不參與試算；source 分法人與節目觀點
         payload["analyst_targets"] = [
-            {"low": s["figures"].get("target_low"), "high": s["figures"].get("target_high"), "quote": s["quote"]}
+            {"low": s["figures"].get("target_low"), "high": s["figures"].get("target_high"), "quote": s["quote"],
+             "source": s.get("source")}
             for s in scenarios if s["type"] == "ANALYST_TARGET" and s["figures"].get("target_low")
         ]
 

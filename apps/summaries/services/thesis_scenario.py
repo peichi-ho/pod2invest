@@ -62,6 +62,9 @@ SCENARIO_TYPES = {
     # v4 新增(v3 跑前50筆時，這三類被硬塞進 DEMAND_UP/RERATING_UP/COST_UP)
     "EPS_FORECAST":       {"name": "對未來 EPS/獲利的預估或上修下修（法人、公司或節目給的）", "levers": {}, "sets": "eps"},
     "ANALYST_TARGET":     {"name": "法人、外資、券商給的目標價（沒有本益比計算過程）", "levers": {}, "reference": "target_price"},
+    # 2026-10-26 從 FINANCIAL_RISK 拆出：反壟斷、訴訟、監管調查這類風險影響的是估值(不確定性)，
+    # 不是 EPS。不在 prompt 讓 AI 直接選，由 apply_checks 依原文關鍵字從 FINANCIAL_RISK 改過來。
+    "REGULATORY_RISK":    {"name": "法規風險（反壟斷、訴訟、監管調查、制裁）", "levers": {"pe": -1}, "check_only": True},
     "FINANCIAL_RISK":     {"name": "財務風險（負債、融資成本、信用違約、投資或匯兌損失、併購成本、訴訟賠償、會計疑慮）",
                            "levers": {"non_operating": -1}},
 }
@@ -148,6 +151,8 @@ PROMPT_TEMPLATE = """你是一位證券分析師，任務是把 Podcast 節目�
 def build_type_list() -> str:
     lines = []
     for code, t in SCENARIO_TYPES.items():
+        if t.get("check_only"):
+            continue
         levers = "、".join(f"{LEVER_ZH[k]}{'↑' if v > 0 else '↓'}" for k, v in t["levers"].items()) or "不對應財務參數"
         lines.append(f"- {code}：{t['name']}（影響：{levers}）")
     return "\n".join(lines)
@@ -195,8 +200,26 @@ _VALUATION_RE = re.compile(r"本益比|P/?E|\d+(?:\.\d+)?\s*倍|低估|高估|�
 _PRICE_END_RE = re.compile(r"股價|漲幅|跌幅|反彈|拉回")
 # 已經發生的現況(v3 前50筆：「毛利創十年新高」「市佔已達六成」「領頭羊地位」被當成會改善)
 # v5 起也套用到 PRICE_UP(v4 把 Seagate「毛利也是近十年新高」當成漲價)
-_CURRENT_STATE_TYPES = {"MIX_UPGRADE", "NEW_BUSINESS", "PRICE_UP"}
-_CURRENT_STATE_RE = re.compile(r"創.{0,6}新高|近.{0,4}年.{0,2}新高|已達|已經達|領導地位|龍頭|壟斷|領頭羊|獨門")
+# 2026-10-26 抽樣檢查(19類各5句)後擴大：「毛利率提升至接近50%」「具備規模與成本優勢」也是現況；
+# 同時套用到成本下降。原文有未來字眼(將、預計、有望…)時不算現況，避免誤殺「毛利率將提升至55%」。
+_CURRENT_STATE_TYPES = {"MIX_UPGRADE", "NEW_BUSINESS", "PRICE_UP", "COST_EFFICIENCY"}
+_CURRENT_STATE_RE = re.compile(
+    r"創.{0,6}新高|近.{0,4}年.{0,2}新高|已達|已經達|領導地位|龍頭|壟斷|領頭羊|獨門"
+    r"|提升至|提高至|達到|具備.{0,8}優勢|具有.{0,8}優勢|擁有.{0,8}優勢")
+_FUTURE_RE = re.compile(r"將|預計|預估|預期|有望|可望|可能|會|未來|明年|後年|下半年|逐步|持續")
+# 目標價來源：原文提到法人、券商、分析師才算「法人」，否則是節目自己的看法
+# 券商名稱要寫完整(元大證/元大投顧)：「300元大關」裡也有「元大」兩個字
+_ANALYST_RE = re.compile(r"法人|外資|投信|券商|分析師|研究員|大摩|小摩|摩根|高盛|瑞銀|花旗|美銀|野村|凱基|元大(?:證|投|期|金)|富邦(?:證|投)|國泰證|群益|永豐證|麥格理|巴克萊|伯恩斯坦|Morgan|Goldman|UBS|Citi")
+# 擴產只有在原文提到海外廠、新廠、折舊、稀釋時才讓毛利率下降(聯電借用 Intel 閒置產能就不會)
+_MARGIN_DRAG_RE = re.compile(r"海外|美國廠|日本廠|德國廠|新廠|折舊|稀釋|擴廠|建廠")
+# 總經情境依影響管道改分類：講需求的是營收面，講匯率/關稅/成本的是毛利面，只有利率/資金/估值才留在總經
+_MACRO_DEMAND_RE = re.compile(r"需求|銷售|銷量|訂單|出貨|買氣|消費")
+_MACRO_COST_RE = re.compile(r"匯|台幣|新台幣|美元|升值|貶值|關稅|成本")
+# 財務風險裡的法規風險、經營風險
+_REGULATORY_RE = re.compile(r"反壟斷|反托拉斯|壟斷調查|訴訟|官司|調查|監管|法規|罰|制裁|禁令")
+_MANAGEMENT_RE = re.compile(r"高管|主管|離職|管理層|接班|內控|執行長")
+# 論點摘要裡的 EPS 數字：「2026年預估32塊」「2027年甚至50塊」；中間不能出現股價、目標價這類字，避免把價位當成 EPS
+_THESIS_EPS_RE = re.compile(r"(20\d{2})\s*年(?:(?!目標價|股價|價位|營收|市值|配息|股利|股息|現金)[^，。；\d]){0,10}?(\d+(?:\.\d+)?)\s*[元塊]")
 _NUMBER_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
 _CN_NUMBER_RE = re.compile(r"[零〇一二兩三四五六七八九十百千萬]+")
 _CN_DIGITS = {"零": 0, "〇": 0, "一": 1, "二": 2, "兩": 2, "三": 3, "四": 4,
@@ -353,7 +376,8 @@ def verify_figures(scenario_type: str, raw_figures, quote: str, published_year: 
 
 
 def apply_checks(scenarios: list, thesis_direction: str, source_text: str,
-                 asset_name: str, ticker: str, published_year: Optional[int] = None) -> tuple[list, list]:
+                 asset_name: str, ticker: str, published_year: Optional[int] = None,
+                 thesis: str = "") -> tuple[list, list]:
     """
     逐筆檢查 AI 輸出，回傳(保留的, 丟掉的)。每筆保留的情境會記下被改了什麼(fixes)：
       1. 類型代碼不在清單內、quote 太短或對不到原文(允許模糊比對) → 丟掉
@@ -364,6 +388,13 @@ def apply_checks(scenarios: list, thesis_direction: str, source_text: str,
       6. figures 只留這個類型該有的欄位、而且 quote 裡真的有的數字(見 verify_figures)
       7. stance 由程式推：情境效果跟論點方向一致 = support，相反 = against；
          論點不是看多/看空時只標 up/down
+    2026-10-26 抽樣檢查後加的規則：
+      8. AI 判斷的利多/利空跟類別方向相反 → 丟掉(多半是否定句，例如「競爭力難以被超越」被分成競爭加劇)
+      9. 總經情境依影響管道改分類(需求 → 需求增加/放緩，匯率關稅 → 成本上升)
+     10. 財務風險裡的反壟斷、訴訟改成法規風險；高管離職這類經營風險丟掉
+     11. 擴產：原文提到海外廠、新廠、折舊、稀釋才標 margin_drag(毛利率才會下降)
+     12. 目標價標來源(法人/節目)，沒有數字的丟掉
+     13. EPS 預估原文沒有數字、但論點摘要寫了「2026年…32塊」時，從論點摘要補(標 figures_source)
     """
     normalized_source = normalize_text(source_text)
     aliases = _company_aliases(asset_name, ticker)
@@ -388,12 +419,33 @@ def apply_checks(scenarios: list, thesis_direction: str, source_text: str,
         if not s["quote_match"]:
             dropped.append({**s, "reason": "quote 對不到原文"})
             continue
+        ai_sign = {"up": 1, "down": -1}.get(s["effect"], 0)
+        type_sign = lever_effect(s["type"])
+        if ai_sign and type_sign and ai_sign != type_sign:
+            dropped.append({**s, "reason": "方向跟類別相反"})
+            continue
         if s["type"] in ("MACRO_EASING", "MACRO_TIGHTENING"):
             blob = s["quote"] + "".join(s["chain"])
             if not any(a in blob for a in aliases):
                 dropped.append({**s, "reason": "總經情境沒有提到這家公司"})
                 continue
-        if s["type"] in _CURRENT_STATE_TYPES and _CURRENT_STATE_RE.search(s["quote"]):
+            sign = ai_sign or (1 if s["type"] == "MACRO_EASING" else -1)
+            if _MACRO_DEMAND_RE.search(blob):
+                new_type = "DEMAND_UP" if sign > 0 else "DEMAND_DOWN"
+                s["fixes"].append(f"{s['type']}→{new_type}(總經透過需求影響)")
+                s["type"] = new_type
+            elif _MACRO_COST_RE.search(blob) and sign < 0:
+                s["fixes"].append(f"{s['type']}→COST_UP(總經透過匯率、關稅、成本影響)")
+                s["type"] = "COST_UP"
+        if s["type"] == "FINANCIAL_RISK":
+            if _MANAGEMENT_RE.search(s["quote"]):
+                dropped.append({**s, "reason": "經營風險不參與試算"})
+                continue
+            if _REGULATORY_RE.search(s["quote"]):
+                s["fixes"].append("FINANCIAL_RISK→REGULATORY_RISK(法規風險)")
+                s["type"] = "REGULATORY_RISK"
+        if s["type"] in _CURRENT_STATE_TYPES and _CURRENT_STATE_RE.search(s["quote"]) \
+                and not _FUTURE_RE.search(s["quote"]):
             dropped.append({**s, "reason": "現況不是未來的變化"})
             continue
 
@@ -411,6 +463,13 @@ def apply_checks(scenarios: list, thesis_direction: str, source_text: str,
 
         s["figures"], removed = verify_figures(s["type"], raw.get("figures"), s["quote"], published_year)
         s["fixes"] += removed
+        if s["type"] == "ANALYST_TARGET":
+            if not s["figures"].get("target_low"):
+                dropped.append({**s, "reason": "目標價沒有數字"})
+                continue
+            s["source"] = "analyst" if _ANALYST_RE.search(s["quote"]) else "podcast"
+        if s["type"] == "CAPACITY_EXPANSION":
+            s["margin_drag"] = bool(_MARGIN_DRAG_RE.search(s["quote"] + "".join(s["chain"])))
 
         effect = lever_effect(s["type"]) or {"up": 1, "down": -1}.get(s["effect"], 0)
         s["effect"] = {1: "up", -1: "down"}.get(effect, "")
@@ -419,7 +478,34 @@ def apply_checks(scenarios: list, thesis_direction: str, source_text: str,
         else:
             s["stance"] = s["effect"] or "unknown"
         kept.append(s)
-    return kept, dropped
+    return _fill_eps_from_thesis(kept, thesis), dropped
+
+
+def _fill_eps_from_thesis(kept: list, thesis: str) -> list:
+    """
+    EPS 預估情境沒有數字，但論點摘要明寫了「2026年預估32塊，2027年甚至50塊」時，用摘要的數字補上：
+    第一組填進原本那個情境，其餘各自複製成一個 EPS 預估情境。只補已經存在的 EPS 預估情境，
+    不會憑空新增；數字來源標 figures_source="thesis"，畫面上看得出來不是原文直接講的。
+    """
+    if not thesis:
+        return kept
+    pairs = [(int(y), float(v)) for y, v in _THESIS_EPS_RE.findall(thesis)]
+    if not pairs or not re.search(r"EPS|每股盈餘|獲利", thesis, re.I):
+        return kept
+    already = {(s["figures"].get("year"), s["figures"].get("eps")) for s in kept if s["type"] == "EPS_FORECAST"}
+    pairs = [p for p in pairs if p not in already]
+    out = []
+    for s in kept:
+        out.append(s)
+        if s["type"] == "EPS_FORECAST" and not s["figures"].get("eps") and pairs:
+            year, eps = pairs.pop(0)
+            s["figures"] = {"eps": eps, "year": year}
+            s["figures_source"] = "thesis"
+            s["fixes"].append("EPS 數字取自論點摘要")
+            for year, eps in pairs:
+                out.append({**s, "figures": {"eps": eps, "year": year}, "fixes": list(s["fixes"])})
+            pairs = []
+    return out
 
 
 def dedupe_scenarios(scenarios: list) -> list:
@@ -491,6 +577,7 @@ def _postprocess(record, ai_scenarios: list, context_text: str) -> tuple[list, l
         [s for s in ai_scenarios if isinstance(s, dict)], record.direction, source_text,
         record.asset, record.ticker,
         published_year=record.summary.published_at.year if record.summary.published_at else None,
+        thesis=record.thesis,
     )
     return dedupe_scenarios(kept), dropped
 

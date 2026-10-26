@@ -203,9 +203,9 @@ function _thesisScenariosHtml(d) {
   const checked = new Set(d.checked || []);
   const item = s => {
     const figs = [];
-    if (s.figures.eps) figs.push(`EPS ${_tNum(s.figures.eps, 2)}${s.figures.year ? '｜' + s.figures.year : ''}`);
+    if (s.figures.eps) figs.push(`EPS ${_tNum(s.figures.eps, 2)}${s.figures.year ? '｜' + s.figures.year : ''}${s.figures_source === 'thesis' ? '｜取自論點摘要' : ''}`);
     if (s.figures.pe) figs.push(`本益比 ${_tNum(s.figures.pe, 1)} 倍`);
-    if (s.figures.target_low) figs.push(`目標價 ${_tNum(s.figures.target_low, 0)}${s.figures.target_high && s.figures.target_high !== s.figures.target_low ? '～' + _tNum(s.figures.target_high, 0) : ''}`);
+    if (s.figures.target_low) figs.push(`${s.source === 'analyst' ? '法人' : '節目觀點'} ${_tNum(s.figures.target_low, 0)}${s.figures.target_high && s.figures.target_high !== s.figures.target_low ? '～' + _tNum(s.figures.target_high, 0) : ''}`);
     const box = s.checkable
       ? `<input type="checkbox" id="thesis-cb-${s.idx}" class="mt-1 h-4 w-4 shrink-0 cursor-pointer accent-[#113236]" ${checked.has(s.idx) ? 'checked' : ''} onchange="thesisToggle(${s.idx}, this.checked)">`
       : '<span class="mt-1 h-4 w-4 shrink-0"></span>';
@@ -236,7 +236,7 @@ function _thesisScenariosHtml(d) {
   const info = all.filter(s => !s.checkable);
   return group('支持節目論點的情境', `${support.length} 個`, support)
     + group('反對節目論點的情境', `${against.length} 個`, against)
-    + group('只供參考（不參與試算）', '技術面、法人目標價、沒有數字的 EPS 上修', info);
+    + group('只供參考（不參與試算）', '技術面、目標價位、沒有數字的 EPS 上修', info);
 }
 
 function _thesisResultHtml(d) {
@@ -258,7 +258,7 @@ function _thesisResultHtml(d) {
       </div>`;
   }
   const targets = (d.analyst_targets || []).map(t =>
-    `${_tNum(t.low, 0)}${t.high && t.high !== t.low ? '～' + _tNum(t.high, 0) : ''}`);
+    `${_tNum(t.low, 0)}${t.high && t.high !== t.low ? '～' + _tNum(t.high, 0) : ''}（${t.source === 'analyst' ? '法人' : '節目觀點'}）`);
   return `
     <div class="flex items-end justify-between gap-3 flex-wrap">
       <div>
@@ -276,7 +276,7 @@ function _thesisResultHtml(d) {
       <span class="text-outline">預估營收</span><span class="text-right font-bold">${_tMoney(p.revenue, d.ticker)}<span class="text-xs text-outline font-normal">（近四季 ${_tMoney(b.revenue, d.ticker)}）</span></span>
     </div>
     ${pctText}
-    ${targets.length ? `<div class="text-xs text-outline pt-2 border-t border-outline-variant/15">節目提到的法人目標價（僅供對照）：${targets.join('、')}</div>` : ''}
+    ${targets.length ? `<div class="text-xs text-outline pt-2 border-t border-outline-variant/15">節目提到的價位（僅供對照）：${targets.join('、')}</div>` : ''}
     ${(d.notes || []).length ? `<ul class="text-xs text-outline space-y-0.5 pt-2 border-t border-outline-variant/15">${d.notes.map(n => `<li>· ${_escHtml(n)}</li>`).join('')}</ul>` : ''}`;
 }
 

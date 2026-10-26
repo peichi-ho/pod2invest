@@ -64,7 +64,20 @@ LEVERS = {
     "MACRO_EASING":       {"pe": +1},
     "MACRO_TIGHTENING":   {"pe": -1},
     "FINANCIAL_RISK":     {"eps_multiplier": -1},
+    "REGULATORY_RISK":    {"pe": -1},
 }
+
+
+def scenario_levers(s: dict) -> dict:
+    """
+    一個情境實際會動哪些參數。大多數照 LEVERS 對照表；擴產只有在 margin_drag(原文提到海外廠、
+    新廠、折舊、稀釋)時才讓毛利率下降——2026-10-26 抽樣發現聯電借 Intel 閒置產能、Meta 的
+    自用資本支出都不會稀釋毛利。margin_drag 由 thesis_scenario.apply_checks 標記。
+    """
+    levers = dict(LEVERS.get(s.get("type"), {}))
+    if s.get("type") == "CAPACITY_EXPANSION" and not s.get("margin_drag"):
+        levers.pop("gross_margin", None)
+    return levers
 
 
 # ── 近四季(TTM)與歷史序列 ────────────────────────────────────────────────
@@ -354,7 +367,7 @@ def apply_scenarios(b: Baseline, scenarios: list) -> tuple[dict, list]:
             notes.append(f"本益比使用節目給的 {figures['pe']:g} 倍")
             continue
 
-        for lever, direction in LEVERS.get(t, {}).items():
+        for lever, direction in scenario_levers(s).items():
             if (lever, direction) in moved:
                 continue
             moved.add((lever, direction))
@@ -401,7 +414,7 @@ def _pe_move(b: Baseline, levers: dict, direction: int, scenario_type: str) -> d
         target = d["p50"] if cur < d["p50"] else max(cur, d["p75"])
     else:
         target = d["p50"] if cur > d["p50"] else min(cur, d["p25"])
-    share = PROVISIONAL["MACRO"] if scenario_type.startswith("MACRO") else 1.0
+    share = PROVISIONAL["MACRO"] if scenario_type.startswith("MACRO") or scenario_type == "REGULATORY_RISK" else 1.0
     return {key: cur + (target - cur) * share}
 
 
@@ -410,6 +423,8 @@ def _pe_note(b: Baseline, scenario_type: str, direction: int) -> str:
     side = "中位數或 P75" if direction > 0 else "中位數或 P25"
     if scenario_type.startswith("MACRO"):
         return f"總經情境：{name}往歷史{side}移動一半（暫定）"
+    if scenario_type == "REGULATORY_RISK":
+        return f"法規風險：{name}往歷史{side}移動一半（暫定）"
     return f"{name}往歷史分布移動一個級距（{side}）"
 
 

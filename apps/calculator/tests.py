@@ -188,3 +188,75 @@ class WaterfallTests(SimpleTestCase):
         levers = default_levers(self.b)
         levers["pe"] = 50.0
         self.assertAlmostEqual(steps[-1]["value"], project(self.b, levers).target_price)
+
+
+class ScenarioCheckRuleTests(SimpleTestCase):
+    """2026-10-26 抽樣檢查(19 類各 5 句)後加的程式端規則，見 thesis_scenario.apply_checks"""
+
+    def check(self, raw, source=None, thesis="", direction="bullish"):
+        from apps.summaries.services.thesis_scenario import apply_checks
+        source = source if source is not None else raw["quote"]
+        return apply_checks([{"chain": ["a", "營收成長"], **raw}], direction, source + thesis,
+                            "台積電", "2330.TW", published_year=2026, thesis=thesis)
+
+    def test_direction_conflict_is_dropped(self):
+        kept, dropped = self.check({"type": "COMPETITION", "effect": "up", "quote": "長期競爭力短期難以被其他公司超越"})
+        self.assertEqual(kept, [])
+        self.assertEqual(dropped[0]["reason"], "方向跟類別相反")
+
+    def test_current_state_dropped_but_future_kept(self):
+        _, dropped = self.check({"type": "MIX_UPGRADE", "effect": "up", "quote": "毛利率也大幅提升至接近50%"})
+        self.assertEqual(dropped[0]["reason"], "現況不是未來的變化")
+        kept, _ = self.check({"type": "MIX_UPGRADE", "effect": "up", "quote": "毛利率將提升至55%以上"})
+        self.assertEqual(kept[0]["type"], "MIX_UPGRADE")
+
+    def test_macro_through_demand_becomes_demand(self):
+        kept, _ = self.check({"type": "MACRO_EASING", "effect": "up", "quote": "未來降息可能刺激台積電客戶的銷售"})
+        self.assertEqual(kept[0]["type"], "DEMAND_UP")
+
+    def test_macro_through_fx_becomes_cost_up(self):
+        kept, _ = self.check({"type": "MACRO_TIGHTENING", "effect": "down", "quote": "台幣急速升值對台積電產生不利影響"})
+        self.assertEqual(kept[0]["type"], "COST_UP")
+
+    def test_financial_risk_split(self):
+        kept, _ = self.check({"type": "FINANCIAL_RISK", "effect": "down", "quote": "面臨較高的反壟斷調查風險"})
+        self.assertEqual(kept[0]["type"], "REGULATORY_RISK")
+        _, dropped = self.check({"type": "FINANCIAL_RISK", "effect": "down", "quote": "以及多位高管離職的挑戰"})
+        self.assertEqual(dropped[0]["reason"], "經營風險不參與試算")
+
+    def test_capacity_margin_drag_only_with_new_fab_words(self):
+        kept, _ = self.check({"type": "CAPACITY_EXPANSION", "effect": "up", "quote": "在美國擴廠後市占率將大幅提升"})
+        self.assertTrue(kept[0]["margin_drag"])
+        kept, _ = self.check({"type": "CAPACITY_EXPANSION", "effect": "up", "quote": "利用其閒置產能即可擴大產能"})
+        self.assertFalse(kept[0]["margin_drag"])
+
+    def test_target_price_source_and_missing_number(self):
+        kept, _ = self.check({"type": "ANALYST_TARGET", "effect": "up", "quote": "瑞銀調升目標價至1625美元",
+                              "figures": {"target_low": 1625, "target_high": 1625}})
+        self.assertEqual(kept[0]["source"], "analyst")
+        kept, _ = self.check({"type": "ANALYST_TARGET", "effect": "up", "quote": "股價有機會挑戰300元大關",
+                              "figures": {"target_low": 300, "target_high": 300}})
+        self.assertEqual(kept[0]["source"], "podcast")
+        _, dropped = self.check({"type": "ANALYST_TARGET", "effect": "up", "quote": "外資所喊的目標價可以期待"})
+        self.assertEqual(dropped[0]["reason"], "目標價沒有數字")
+
+    def test_eps_filled_from_thesis(self):
+        thesis = "台達電EPS持續調高，2026年預估32塊，2027年甚至50塊。"
+        kept, _ = self.check({"type": "EPS_FORECAST", "effect": "up", "quote": "台達電EPS又調高"}, thesis=thesis)
+        figs = sorted((s["figures"]["year"], s["figures"]["eps"]) for s in kept)
+        self.assertEqual(figs, [(2026, 32.0), (2027, 50.0)])
+        self.assertEqual(kept[0]["figures_source"], "thesis")
+
+    def test_eps_fill_ignores_target_prices(self):
+        kept, _ = self.check({"type": "EPS_FORECAST", "effect": "up", "quote": "EPS預估將持續成長"},
+                             thesis="EPS預估將持續成長，2026年目標價上看1600元")
+        self.assertIsNone(kept[0]["figures"].get("eps"))
+
+
+class CapacityMarginTests(SimpleTestCase):
+    def test_capacity_without_margin_drag_keeps_gross_margin(self):
+        b = build_baseline("TEST", quarter_rows(), price=40.0, as_of=AS_OF)
+        plain, _ = apply_scenarios(b, [{"type": "CAPACITY_EXPANSION"}])
+        drag, _ = apply_scenarios(b, [{"type": "CAPACITY_EXPANSION", "margin_drag": True}])
+        self.assertAlmostEqual(plain["gross_margin"], b.gross_margin)
+        self.assertLess(drag["gross_margin"], b.gross_margin)
