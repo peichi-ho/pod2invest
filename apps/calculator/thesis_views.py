@@ -61,6 +61,8 @@ def _scenario_view(s: dict, idx: int) -> dict:
     checkable = t not in ("TECHNICAL_FLOW", "ANALYST_TARGET") and not (t == "EPS_FORECAST" and not figures.get("eps"))
     return {
         "idx": idx, "type": t, "label": TYPE_LABELS.get(t, t), "stance": s.get("stance"),
+        # 對這家公司是利多(up)還是利空(down)；畫面依這個分成「看多情境／看空情境」
+        "effect": s.get("effect") or "",
         "chain": s.get("chain") or [], "quote": s.get("quote", ""), "figures": figures,
         "effects": effects, "checkable": checkable,
         "provisional": t in ("FINANCIAL_RISK", "REGULATORY_RISK", "MACRO_EASING", "MACRO_TIGHTENING"),

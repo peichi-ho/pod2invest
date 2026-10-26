@@ -116,13 +116,19 @@ function thesisToggle(idx, on) {
   _thesisFetch(150);
 }
 
+// 情境依「對公司是利多還是利空」分成看多／看空兩組(不再用「支持／反對節目論點」，
+// 看空的論點裡 EPS↓ 會被歸在「支持」，容易誤以為是利多)
+function _thesisSide(s) {
+  return s.effect === 'down' ? 'down' : 'up';
+}
+
 function thesisPreset(kind) {
   const scenarios = (_thesis.data && _thesis.data.scenarios) || [];
   _thesis.checked = new Set();
   const used = new Set();
   if (kind !== 'base') {
     scenarios.forEach(s => {
-      if (!s.checkable || (kind === 'support' ? s.stance !== 'support' : s.stance === 'support')) return;
+      if (!s.checkable || _thesisSide(s) !== kind) return;
       const group = _thesisExclusiveGroup(s);
       if (group && used.has(group)) return;   // 同一組只取第一個(節目最先提到的數字)
       if (group) used.add(group);
@@ -274,11 +280,11 @@ function _thesisRender(d) {
 
   document.getElementById('thesis-scenarios').innerHTML = _thesisScenariosHtml(d);
   document.getElementById('thesis-info').innerHTML = _thesisInfoHtml(d);
-  ['support', 'against'].forEach(kind => {
+  ['up', 'down'].forEach(kind => {
     const btn = document.getElementById('thesis-preset-' + kind);
-    const n = (d.scenarios || []).filter(s => s.checkable && (kind === 'support' ? s.stance === 'support' : s.stance !== 'support')).length;
+    const n = (d.scenarios || []).filter(s => s.checkable && _thesisSide(s) === kind).length;
     btn.disabled = n === 0;
-    btn.title = n === 0 ? (kind === 'support' ? '這句論點沒有支持的情境' : '這句論點沒有拆出反方情境') : '';
+    btn.title = n === 0 ? (kind === 'up' ? '這句論點沒有看多的情境' : '這句論點沒有看空的情境') : '';
   });
   document.getElementById('thesis-body').classList.remove('hidden');
 
@@ -327,19 +333,20 @@ function _thesisScenarioItem(s, checked) {
 function _thesisScenariosHtml(d) {
   const all = d.scenarios || [];
   const checked = new Set([..._thesis.checked]);
-  const card = (title, note, list, empty) => `
+  const card = (title, titleCls, note, list, empty) => `
     <div class="bg-surface-container-lowest rounded-xl px-5 py-3 min-w-0">
       <div class="flex items-baseline justify-between gap-2 pb-1">
-        <h5 class="text-sm font-bold text-tertiary-container">${title}</h5>
+        <h5 class="text-sm font-bold ${titleCls}">${title}</h5>
         <span class="text-xs text-outline">${note}</span>
       </div>
       ${list.length ? `<ul>${list.map(s => _thesisScenarioItem(s, checked.has(s.idx))).join('')}</ul>`
                     : `<p class="text-sm text-outline py-2">${empty}</p>`}
     </div>`;
-  const support = all.filter(s => s.checkable && s.stance === 'support');
-  const against = all.filter(s => s.checkable && s.stance !== 'support');
-  return card('支持節目論點', `${support.length} 個`, support, '這句論點沒有拆出支持的情境')
-    + card('反對節目論點', `${against.length} 個（多半是節目提到的風險）`, against, '這句論點沒有拆出反方情境');
+  // 台股慣例：看多紅、看空綠(跟論點的看多/看空標籤一致)
+  const up = all.filter(s => s.checkable && _thesisSide(s) === 'up');
+  const down = all.filter(s => s.checkable && _thesisSide(s) === 'down');
+  return card('看多情境', 'text-[#ba1a1a]', `${up.length} 個・對公司是利多`, up, '這句論點沒有拆出看多的情境')
+    + card('看空情境', 'text-[#1e8e3e]', `${down.length} 個・對公司是利空`, down, '這句論點沒有拆出看空的情境');
 }
 
 // 只供參考的情境(技術面、目標價位、沒有數字的 EPS 上修)收在折疊區
