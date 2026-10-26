@@ -215,7 +215,7 @@ class EpisodeListPreviewAPIView(APIView):
         # 屬於回測驗證的範圍，不是「接下來要看的標的」，所以不放進選單。
         # 快取 key 帶日期，避免跨日之後還沿用昨天的清單。
         today = date.today()
-        cache_key = f"episode-list-preview:v3:{today.isoformat()}"
+        cache_key = f"episode-list-preview:v4:{today.isoformat()}"
         cached = cache.get(cache_key)
         if cached is not None:
             return Response(cached)
@@ -266,6 +266,15 @@ class EpisodeListPreviewAPIView(APIView):
                 dedup_by_key[key] = r
         rows = sorted(dedup_by_key.values(), key=lambda r: r["_sm"]["published_at"], reverse=True)[:200]
 
+        # 計算機「論點情境試算」分頁只列有拆好情境的集數(ThesisScenarioExtraction，見 thesis_views.py)
+        from apps.summaries.models import ThesisScenarioExtraction
+        with_thesis = set(
+            ThesisScenarioExtraction.objects.using("summariesdb")
+            .filter(summary_id__in={r["summary_id"] for r in rows}, prompt_version="v5")
+            .exclude(status=ThesisScenarioExtraction.STATUS_FAILED)
+            .values_list("summary_id", "ticker")
+        )
+
         payload = {
             "episodes": [
                 {
@@ -284,6 +293,7 @@ class EpisodeListPreviewAPIView(APIView):
                     # 來自這集對這支股票的驗證句時間範圍(約略月數)。改版後選單只列有驗證句的，
                     # 所以這裡一定有值；前端對None仍保留原本手動設定的月數(深連結補進來的集可能沒有)。
                     "default_months": months_by_key.get((r["summary_id"], r["ticker"])),
+                    "has_thesis": (r["summary_id"], r["ticker"]) in with_thesis,
                 }
                 for r in rows
             ]

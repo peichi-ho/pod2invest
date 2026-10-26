@@ -1,8 +1,12 @@
 # apps/calculator/thesis_views.py
 """
-論點情境試算的 API(第三步)：計算機「從節目挑選」模式下，選定一集一檔股票後，
+論點情境試算的 API(第三步)：計算機「論點情境試算」分頁選定一集一檔股票後，
 列出這集對這檔股票的論點與拆出的情境，讓使用者勾選、調整參數，算出 12 個月後的
-EPS 與目標價，並標出這個報酬落在歷史股價模擬(B方案拔靴)的第幾百分位。
+EPS 與目標價。
+
+2026-10-26 起跟「投資情境模擬」(歷史拔靴股價模擬)完全分開：不再回報「落在歷史模擬的第幾百分位」。
+兩者的計算方式完全不同(財報 → EPS × 本益比 vs. 重新抽樣過去的每日漲跌)，而拔靴模擬本身也是
+我們自己設計的方法、不是有公信力的基準，放在一起比容易讓人誤以為試算結果被客觀驗證過。
 
 情境來自 ThesisScenarioExtraction(批次算好存在資料庫，見 apps/summaries/services/thesis_scenario.py)；
 基準數字與推算在 apps/calculator/services/thesis_valuation.py。一律以「節目發布日」為基準日：
@@ -16,7 +20,6 @@ GET 參數：
   revenue_growth / gross_margin / opex_ratio / operating_margin / net_margin / pe / ps / eps：
       使用者手動覆寫的參數(小數，例如 0.25 = 25%)，蓋過情境算出來的值
 """
-import numpy as np
 from django.core.cache import cache
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -27,7 +30,7 @@ from apps.calculator.services.thesis_valuation import (
 
 PROMPT_VERSION = "v5"
 BASELINE_CACHE_SECONDS = 6 * 3600     # 基準數字要打 yfinance，同一檔同一天的結果快取起來
-HORIZON_MONTHS = 12                    # 目標價是「12 個月後」，跟拔靴模擬比較時也用 12 個月
+HORIZON_MONTHS = 12                    # 目標價是「12 個月後」
 
 TYPE_LABELS = {
     "DEMAND_UP": "需求、訂單增加", "NEW_BUSINESS": "新產品、新客戶", "PRICE_UP": "產品漲價",
@@ -72,31 +75,6 @@ def _cached_baseline(ticker, as_of):
     return b
 
 
-def _bootstrap_percentile(ticker, as_of, start_price, implied_return):
-    """
-    目標價報酬落在「12 個月歷史拔靴模擬」終點報酬分布的第幾百分位(0~100)。
-    模擬的終點報酬快取起來，使用者拉滑桿時只重算百分位，不重跑模擬。
-    """
-    if implied_return is None or not start_price:
-        return None
-    key = f"thesis-boot:{ticker}:{as_of.isoformat()}"
-    returns = cache.get(key)
-    if returns is None:
-        from apps.calculator.services.bootstrap_path_simulator_v2 import run_bootstrap_path_simulation_v2
-        try:
-            result = run_bootstrap_path_simulation_v2(
-                ticker=ticker, start_price=start_price, horizon_months=HORIZON_MONTHS,
-                n_simulations=1000, as_of_date=as_of, seed=0,
-            )
-            returns = sorted(result.terminal_returns)
-        except Exception:
-            returns = []
-        cache.set(key, returns, BASELINE_CACHE_SECONDS)
-    if not returns:
-        return None
-    return float(np.searchsorted(returns, implied_return) / len(returns) * 100)
-
-
 def _waterfall_label(s: dict) -> str:
     """瀑布圖上的情境名稱：帶數字的情境把數字一起寫上，才分得出是哪一個 EPS/本益比。"""
     f = s["figures"]
@@ -115,8 +93,8 @@ def _parse_float(raw):
 
 
 def _baseline_view(b) -> dict:
-    keys = ("route", "reason", "price", "ttm_end", "revenue", "gross_margin", "opex_ratio",
-            "operating_margin", "net_margin", "eps", "pe", "ps")
+    keys = ("route", "reason", "price", "ttm_end", "revenue", "revenue_growth", "growth_note", "gross_margin",
+            "opex_ratio", "operating_margin", "net_margin", "eps", "pe", "ps")
     out = {k: getattr(b, k) for k in keys}
     out["ttm_end"] = b.ttm_end.isoformat() if b.ttm_end else None
     out["history"] = b.history
@@ -211,7 +189,6 @@ class ThesisValuationAPIView(APIView):
                 "multiple": p.multiple, "target_price": p.target_price, "implied_return": p.implied_return,
             },
             notes=p.notes,
-            bootstrap_percentile=_bootstrap_percentile(score.ticker, as_of, b.price, p.implied_return),
             waterfall=waterfall(b, chosen, [_waterfall_label(scenarios[i]) for i in chosen_idx], override_values),
         )
         return Response(payload)

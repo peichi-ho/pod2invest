@@ -8,8 +8,13 @@
 
 三個原則：
   1. 基準一律用「當時已公告」的近四季財報(disclosure_date <= as_of)，回測舊節目時不偷看未來。
-  2. 情境的預設調整幅度來自這家公司自己過去約5年的分布(第25/50/75百分位)，不是自訂常數；
-     少數還沒有歷史可依的(財務風險、總經)用暫定值，並在結果裡標 provisional=True。
+  2. 以「現在」為基準調整(2026-10-26 起)：都不勾時，營收照目前的年增率、利潤率與本益比維持現值；
+     勾一個情境就是「比現在好一點／差一點」。歷史只決定「一次調多少」——這家公司過去 5 年
+     這個數字通常上下波動多少(P75−P50 或 P50−P25)，不再決定「調到哪個百分位」。
+     改的原因：原本營收成長是直接跳到歷史 P75/P25，但回測樣本有 47% 的公司當時成長率已經高於 P75，
+     勾了利多反而比現在還低；而且拿「目前年增率」預估隔年營收成長，誤差中位數 9.2 個百分點，
+     比用歷史中位數的 13.4 個百分點小(scripts/backtest_thesis_scenarios.py 同一批樣本)。
+     少數還沒有歷史可依的(財務風險、總經、法規)用暫定值，並在結果裡標 provisional=True。
   3. 依資料完整度自動選計算路線(route)，資料不夠就說明原因，不硬算：
        full     營收 → 毛利率 − 費用率 → 營業利益 → EPS → × 本益比
        no_gross 缺毛利(金融以外約13檔美股)：營收 → 營業利益率 → EPS → × 本益比
@@ -37,6 +42,9 @@ MIN_STEP = {"revenue_growth": 0.05, "gross_margin": 0.01, "opex_ratio": 0.005,
 # 利潤率一次最多調整現值的這個比例：GE 這種分拆過好幾次的公司，歷史淨利率波動極大，
 # 用(P50−P25)當步幅會讓 Bear 情境的 EPS 直接掉八成，不是「一個情境」該有的幅度
 MAX_MARGIN_STEP_RATIO = 0.25
+MAX_GROWTH_STEP = 0.25          # 營收成長一次最多調 25 個百分點(輝達這類成長率波動極大的公司)
+GROWTH_CLAMP = (-0.5, 1.0)      # 目前年增率當基準時的合理範圍，超出的視為基期效應
+MULTIPLE_STEP = (0.05, 0.25)    # 本益比/P/S 一次調整幅度：最少現值的 5%、最多 25%
 PE_CLAMP = (3.0, 150.0)         # 本益比合理範圍，超出的歷史點視為資料異常(例如EPS趨近0)
 PS_CLAMP = (0.1, 100.0)
 
@@ -194,6 +202,8 @@ class Baseline:
     operating_income: Optional[float] = None
     net_income: Optional[float] = None
     net_margin: Optional[float] = None
+    revenue_growth: Optional[float] = None   # 目前的營收年增率(近四季 vs 再前四季)，已限制在 GROWTH_CLAMP
+    growth_note: str = ""                    # 目前年增率遠離歷史範圍時的提醒(基期效應)
     eps: Optional[float] = None
     shares: Optional[float] = None
     pe: Optional[float] = None
@@ -220,6 +230,20 @@ def build_baseline(ticker: str, rows: list, price: Optional[float], as_of: date,
     if not t["revenue"] or t["revenue"] <= 0:
         b.supported, b.reason = False, "還沒有營收，無法用營收或獲利估值"
         return b
+    prior = next((p for p in series if 350 <= (t["end"] - p["end"]).days <= 380), None)
+    if prior and prior["revenue"] and prior["revenue"] > 0:
+        raw = t["revenue"] / prior["revenue"] - 1
+        b.revenue_growth = min(max(raw, GROWTH_CLAMP[0]), GROWTH_CLAMP[1])
+        d = b.history.get("revenue_growth")
+        if d:
+            iqr = d["p75"] - d["p25"]
+            if raw > d["p75"] + 1.5 * iqr or raw < d["p25"] - 1.5 * iqr:
+                side = "高於" if raw > d["p50"] else "低於"
+                b.growth_note = (f"目前營收年增率 {raw:.0%}，遠{side}過去 5 年的一般水準（中位數 {d['p50']:.0%}），"
+                                 "可能有基期效應，延續這個成長率的假設要小心")
+        if raw != b.revenue_growth:
+            b.growth_note = (b.growth_note + "；" if b.growth_note else "") + \
+                f"目前年增率 {raw:.0%} 超出合理範圍，試算時以 {b.revenue_growth:.0%} 計"
     if t["eps"] and t["net_income"]:
         b.shares = t["net_income"] / t["eps"]
     if t["gross_profit"] is not None:
@@ -299,12 +323,16 @@ def compute_baseline(ticker: str, as_of: Optional[date] = None) -> Baseline:
 
 def default_levers(b: Baseline) -> dict:
     """
-    Base 情境(什麼都不勾)的參數：營收成長用歷史中位數(P50)，毛利率/費用率/本益比用近四季現值。
-    歷史不足時營收成長用 0，並在 notes 說明。
+    什麼都不勾時的參數：延續目前的營收年增率，毛利率/費用率/本益比維持近四季現值。
+    取不到目前年增率(財報不足五季)時退回歷史中位數，再沒有就用 0。
     """
     hist = b.history
+    if b.revenue_growth is not None:
+        growth = b.revenue_growth
+    else:
+        growth = hist["revenue_growth"]["p50"] if "revenue_growth" in hist else 0.0
     levers = {
-        "revenue_growth": hist["revenue_growth"]["p50"] if "revenue_growth" in hist else 0.0,
+        "revenue_growth": growth,
         "gross_margin": b.gross_margin,
         "opex_ratio": b.opex_ratio,
         "operating_margin": b.operating_margin,
@@ -319,8 +347,10 @@ def default_levers(b: Baseline) -> dict:
 
 def _step(b: Baseline, lever: str, direction: int) -> Optional[float]:
     step = _raw_step(b, lever, direction)
+    if lever == "revenue_growth":
+        return max(-MAX_GROWTH_STEP, min(step, MAX_GROWTH_STEP))
     current = getattr(b, lever, None)
-    if lever != "revenue_growth" and current:
+    if current:
         cap = max(abs(current) * MAX_MARGIN_STEP_RATIO, MIN_STEP.get(lever, 0.0))
         step = max(-cap, min(step, cap))
     return step
@@ -328,11 +358,10 @@ def _step(b: Baseline, lever: str, direction: int) -> Optional[float]:
 
 def _raw_step(b: Baseline, lever: str, direction: int) -> Optional[float]:
     """
-    勾選一個情境時，這個參數要移動多少(有正負號)。來源：
-      revenue_growth：往上移到 P75、往下移到 P25(相對 Base 的 P50)
-      gross_margin / opex_ratio / operating_margin：加減 (P75−P50) 或 (P50−P25)，即公司自己一般的波動幅度
-    兩種都有最小步幅 MIN_STEP，避免歷史非常平穩的公司勾了情境卻幾乎沒變化；
-    利潤率類另有上限 MAX_MARGIN_STEP_RATIO(見 _step)。
+    勾選一個情境時，這個參數要從現值移動多少(有正負號)：加減 (P75−P50) 或 (P50−P25)，
+    也就是這家公司過去 5 年這個數字一般的波動幅度。營收成長、各種利潤率都一樣。
+    都有最小步幅 MIN_STEP，避免歷史非常平穩的公司勾了情境卻幾乎沒變化；
+    上限：營收成長 MAX_GROWTH_STEP，利潤率是現值的 MAX_MARGIN_STEP_RATIO(見 _step)。
     """
     d = b.history.get(lever)
     floor = MIN_STEP.get(lever, 0.0)
@@ -399,33 +428,33 @@ def apply_scenarios(b: Baseline, scenarios: list) -> tuple[dict, list]:
 
 def _pe_move(b: Baseline, levers: dict, direction: int, scenario_type: str) -> dict:
     """
-    本益比(虧損公司則是 P/S)往歷史分布移動「一個級距」：
-      估值偏低：現值低於中位數 → 修復到中位數；介於中位數與 P75 → 到 P75；已經高於 P75 → 不動
-      估值偏高：反過來，往中位數或 P25 移動
-    一開始是直接跳到 P75/P25，但現值遠低於歷史時會跳太多(Netflix 本益比 21.6 → 46.6 倍，目標價 +192%)。
-    總經情境只移動一半(暫定)。
+    本益比(虧損公司則是 P/S)跟其他參數一樣以現值為基準：現值加減這家公司本益比一般的波動幅度
+    (P75−P50 或 P50−P25)，最少現值的 5%、最多 25%；沒有歷史時固定調 10%。
+    總經、法規情境只移動一半(暫定)。
+    (之前是往歷史中位數/P75 移一個級距，現值遠低於歷史時會跳太多：Netflix 21.6 → 39.5 倍。)
     """
     key = "ps" if b.route == "ps" else "pe"
     cur = levers.get(key)
-    d = b.history.get(key)
-    if cur is None or not d:
+    if not cur:
         return {}
-    if direction > 0:
-        target = d["p50"] if cur < d["p50"] else max(cur, d["p75"])
+    d = b.history.get(key)
+    if d:
+        gap = (d["p75"] - d["p50"]) if direction > 0 else (d["p50"] - d["p25"])
+        step = min(max(gap, cur * MULTIPLE_STEP[0]), cur * MULTIPLE_STEP[1])
     else:
-        target = d["p50"] if cur > d["p50"] else min(cur, d["p25"])
+        step = cur * 0.10
     share = PROVISIONAL["MACRO"] if scenario_type.startswith("MACRO") or scenario_type == "REGULATORY_RISK" else 1.0
-    return {key: cur + (target - cur) * share}
+    return {key: cur + direction * step * share}
 
 
 def _pe_note(b: Baseline, scenario_type: str, direction: int) -> str:
     name = "股價營收比" if b.route == "ps" else "本益比"
-    side = "中位數或 P75" if direction > 0 else "中位數或 P25"
+    side = "調高" if direction > 0 else "調低"
     if scenario_type.startswith("MACRO"):
-        return f"總經情境：{name}往歷史{side}移動一半（暫定）"
+        return f"總經情境：{name}從現值{side}半個一般波動幅度（暫定）"
     if scenario_type == "REGULATORY_RISK":
-        return f"法規風險：{name}往歷史{side}移動一半（暫定）"
-    return f"{name}往歷史分布移動一個級距（{side}）"
+        return f"法規風險：{name}從現值{side}半個一般波動幅度（暫定）"
+    return f"{name}從現值{side}一個一般波動幅度"
 
 
 @dataclass
@@ -497,7 +526,7 @@ def project_scenarios(b: Baseline, scenarios: list) -> Optional[Projection]:
 def waterfall(b: Baseline, scenarios: list, labels: list, overrides: Optional[dict] = None) -> Optional[list]:
     """
     瀑布圖：從發布日股價開始，一步一步加上去，看每個情境各把目標價推高或拉低多少。
-      1. 公司一般趨勢：什麼都不勾(Base)的目標價 − 發布日股價
+      1. 延續目前成長：什麼都不勾的目標價 − 發布日股價(營收照目前年增率、其他維持現值)
       2. 依勾選順序逐一加入情境：加入後的目標價 − 加入前的目標價
          (同方向的情境不疊加，所以後面重複的情境會是 0，畫面會說明)
       3. 手動調整：套用使用者拉過的滑桿/指定的 EPS 後的差額
@@ -521,7 +550,7 @@ def waterfall(b: Baseline, scenarios: list, labels: list, overrides: Optional[di
     base = target_of([])
     if base is None:
         return None
-    steps.append({"label": "公司一般趨勢", "kind": "trend", "delta": base - prev, "value": base})
+    steps.append({"label": "延續目前成長", "kind": "trend", "delta": base - prev, "value": base})
     prev = base
     for k, label in enumerate(labels, start=1):
         cur = target_of(scenarios[:k])

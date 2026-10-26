@@ -1,8 +1,9 @@
-// ── 論點情境試算(計算機「從節目挑選」模式) ─────────────────────────────────
-// 選定一集一檔股票後：列出節目論點拆出的情境 → 使用者勾選、調整參數 → 後端推算
-// 12 個月後的 EPS 與目標價，並標出落在歷史股價模擬(12 個月拔靴)的第幾百分位。
-// 計算都在後端(apps/calculator/thesis_views.py)，這裡只負責勾選狀態、參數覆寫與畫面。
-// 依賴 calculator.js 的 _escHtml()；calculator.js 在 onEpisodeChange()/setMode() 會呼叫這裡。
+// ── 論點情境試算(計算機頁面的第二個分頁) ─────────────────────────────────
+// 選股、選集 → 列出節目論點拆出的情境 → 使用者勾選、調整參數 → 後端推算 12 個月後的 EPS 與目標價。
+// 跟第一個分頁「投資情境模擬」(歷史股價拔靴模擬)完全分開：各自選股選集，結果不互相比較——
+// 兩者計算方式完全不同，拔靴模擬也不是有公信力的基準(2026-10-26 起拿掉「落在第幾百分位」)。
+// 計算都在後端(apps/calculator/thesis_views.py)，這裡只負責分頁、選單、勾選狀態、參數覆寫與畫面。
+// 依賴 calculator.js 的 _escHtml() 與 B_EPISODES_URL。
 
 const THESIS_API_URL = '/api/calculator/thesis-valuation/';
 
@@ -23,15 +24,73 @@ function _thesisExclusiveGroup(s) {
   return null;
 }
 
+// ── 分頁與選單 ──
+const CALC_TAB_TEXT = {
+  sim: ['投資情境模擬', '用過去的股價走勢加上你的假設，推演這檔股票可能走到哪裡'],
+  thesis: ['論點情境試算', '把節目的投資論點拆成財務情境，推算 12 個月後的 EPS 與目標價'],
+};
+let _thesisEpisodes = null;   // 選集清單(跟投資情境模擬同一支 API，但只留有拆好情境的)
+
+function showCalcTab(tab) {
+  ['sim', 'thesis'].forEach(t => {
+    const on = t === tab;
+    document.getElementById('calc-tab-' + t).classList.toggle('hidden', !on);
+    const btn = document.getElementById('calc-tab-btn-' + t);
+    btn.setAttribute('aria-selected', on ? 'true' : 'false');
+    btn.classList.toggle('border-tertiary-container', on);
+    btn.classList.toggle('text-tertiary-container', on);
+    btn.classList.toggle('border-transparent', !on);
+    btn.classList.toggle('text-outline', !on);
+  });
+  document.getElementById('calc-title').textContent = CALC_TAB_TEXT[tab][0];
+  document.getElementById('calc-subtitle').textContent = CALC_TAB_TEXT[tab][1];
+  if (tab === 'thesis' && !_thesisEpisodes) _thesisInitPickers();
+}
+
+async function _thesisInitPickers() {
+  _thesisEpisodes = [];
+  _thesisSetStatus('載入節目清單中…');
+  try {
+    const resp = await fetch(B_EPISODES_URL);
+    const data = await resp.json();
+    _thesisEpisodes = (data.episodes || []).filter(e => e.has_thesis);
+  } catch (e) {
+    _thesisSetStatus('載入節目清單失敗：' + e);
+    return;
+  }
+  // 股票依「被討論的集數」多到少排，同一檔只出現一次
+  const byTicker = new Map();
+  _thesisEpisodes.forEach(e => {
+    const cur = byTicker.get(e.ticker) || { ticker: e.ticker, name: e.asset_name, n: 0 };
+    cur.n += 1;
+    byTicker.set(e.ticker, cur);
+  });
+  const tickers = [...byTicker.values()].sort((a, b) => b.n - a.n);
+  document.getElementById('thesis-pick-ticker').innerHTML = tickers.map(t =>
+    `<option value="${_escHtml(t.ticker)}">${_escHtml(t.name)}（${_escHtml(t.ticker)}）・${t.n} 集</option>`).join('');
+  onThesisTickerChange();
+}
+
+function onThesisTickerChange() {
+  const ticker = document.getElementById('thesis-pick-ticker').value;
+  const list = (_thesisEpisodes || []).filter(e => e.ticker === ticker);
+  document.getElementById('thesis-pick-episode').innerHTML = list.map(e =>
+    `<option value="${e.score_id}">${_escHtml(e.published_at || '未知日期')}　${_escHtml(e.podcaster || '')}</option>`).join('');
+  if (list.length) onThesisEpisodeChange();
+}
+
+function onThesisEpisodeChange() {
+  const scoreId = document.getElementById('thesis-pick-episode').value;
+  if (scoreId) loadThesisValuation(scoreId);
+}
+
 function loadThesisValuation(scoreId) {
   _thesis.scoreId = scoreId;
   _thesis.thesisId = null;
   _thesis.checked = new Set();
   _thesis.overrides = {};
   _thesis.data = null;
-  const panel = document.getElementById('thesis-panel');
-  if (panel && typeof mode !== 'undefined') panel.classList.toggle('hidden', mode !== 'episode');
-  _thesisSetStatus('載入論點與財報基準中…（第一次要抓股價、跑模擬，約需幾秒）');
+  _thesisSetStatus('載入論點與財報基準中…');
   document.getElementById('thesis-body').classList.add('hidden');
   _thesisFetch(0);
 }
@@ -243,20 +302,8 @@ function _thesisResultHtml(d) {
   const p = d.projection;
   const b = d.baseline;
   const multipleLabel = p.route === 'ps' ? '股價營收比' : '本益比';
-  const pct = d.bootstrap_percentile;
-  let pctText = '';
-  if (pct != null) {
-    const band = pct < 25 ? '比多數歷史走勢保守' : pct <= 75 ? '落在歷史上常見的範圍' : pct <= 90 ? '需要比多數歷史走勢更好' : '高於九成的歷史走勢';
-    pctText = `
-      <div class="space-y-1 pt-2 border-t border-outline-variant/15">
-        <div class="flex justify-between text-xs text-outline"><span>這個報酬在歷史股價模擬（12 個月）中的位置</span><span class="font-bold text-tertiary-container">第 ${Math.round(pct)} 百分位</span></div>
-        <div class="relative h-2 rounded-full bg-surface-container">
-          <div class="absolute inset-y-0 rounded-full bg-[#113236]/15" style="left:25%;right:25%"></div>
-          <div class="absolute -top-1 h-4 w-1 rounded bg-[#113236]" style="left:calc(${Math.min(99, Math.max(0, pct))}% - 2px)"></div>
-        </div>
-        <div class="text-xs text-outline">${band}（深色區塊是歷史上一半走勢落在的範圍）</div>
-      </div>`;
-  }
+  const growthNote = b.growth_note
+    ? `<div class="text-xs font-bold text-[#a16207] pt-2 border-t border-outline-variant/15">${_escHtml(b.growth_note)}</div>` : '';
   const targets = (d.analyst_targets || []).map(t =>
     `${_tNum(t.low, 0)}${t.high && t.high !== t.low ? '～' + _tNum(t.high, 0) : ''}（${t.source === 'analyst' ? '法人' : '節目觀點'}）`);
   return `
@@ -275,7 +322,7 @@ function _thesisResultHtml(d) {
       <span class="text-outline">${multipleLabel}</span><span class="text-right font-bold">${_tNum(p.multiple, 1)} 倍</span>
       <span class="text-outline">預估營收</span><span class="text-right font-bold">${_tMoney(p.revenue, d.ticker)}<span class="text-xs text-outline font-normal">（近四季 ${_tMoney(b.revenue, d.ticker)}）</span></span>
     </div>
-    ${pctText}
+    ${growthNote}
     ${targets.length ? `<div class="text-xs text-outline pt-2 border-t border-outline-variant/15">節目提到的價位（僅供對照）：${targets.join('、')}</div>` : ''}
     ${(d.notes || []).length ? `<ul class="text-xs text-outline space-y-0.5 pt-2 border-t border-outline-variant/15">${d.notes.map(n => `<li>· ${_escHtml(n)}</li>`).join('')}</ul>` : ''}`;
 }
@@ -334,14 +381,15 @@ function _thesisBaselineHtml(d) {
   if (b.pe != null) parts.push(`本益比 ${_tNum(b.pe, 1)} 倍${h.pe ? `（過去 5 年中位數 ${_tNum(h.pe.p50, 1)} 倍）` : ''}`);
   if (b.gross_margin != null) parts.push(`毛利率 ${_tPct(b.gross_margin)}`);
   if (b.operating_margin != null) parts.push(`營業利益率 ${_tPct(b.operating_margin)}`);
-  if (h.revenue_growth) parts.push(`過去 5 年營收年增率中位數 ${_tPct(h.revenue_growth.p50)}`);
+  if (b.revenue_growth != null) parts.push(`目前營收年增率 ${_tPct(b.revenue_growth)}`);
   let text = parts.join('，') + '。';
   if (b.reason) text += ` ${_escHtml(b.reason)}。`;
-  text += ' 情境的預設幅度取自這家公司自己過去 5 年的分布；標示「幅度暫定」的情境還沒有校準。';
+  text += ' 都不勾時，營收照目前的年增率成長、其他數字維持現值；勾一個情境，就從現值加減這家公司過去 5 年這個數字一般的波動幅度。'
+    + '這是以歷史表現為基礎的參考幅度，不是這個事件一定會造成的效果；標示「幅度暫定」的情境還沒有校準。';
   return text;
 }
 
-// 瀑布圖：發布日股價 → 公司一般趨勢 → 每個勾選的情境 → 手動調整 → 目標價。
+// 瀑布圖：發布日股價 → 延續目前成長 → 每個勾選的情境 → 手動調整 → 目標價。
 // 橫條都從 0 起算(不截斷座標軸，避免小變動看起來很大)；漲紅跌綠沿用台股慣例。
 function _thesisWaterfallHtml(d) {
   const steps = d.waterfall;
@@ -385,7 +433,7 @@ function _thesisWaterfallHtml(d) {
   steps.forEach(s => {
     const up = s.delta >= 0;
     const zero = Math.abs(s.delta) < 0.005 * price;
-    let sub = s.kind === 'trend' ? '都不勾時：歷史中位數的營收成長' : s.kind === 'manual' ? '滑桿或直接指定 EPS' : '';
+    let sub = s.kind === 'trend' ? '都不勾時：營收照目前年增率成長，其他維持現值' : s.kind === 'manual' ? '滑桿或直接指定 EPS' : '';
     if (s.kind === 'scenario') {
       if (zero) sub = zeroReasons[scenarioIdx] || '';
       scenarioIdx += 1;

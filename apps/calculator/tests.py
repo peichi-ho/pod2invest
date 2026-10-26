@@ -139,14 +139,38 @@ class ProjectionTests(SimpleTestCase):
         self.assertAlmostEqual(p.eps, 75.0)
         self.assertAlmostEqual(p.target_price, 1500.0)
 
-    def test_rerating_moves_one_step_toward_median_first(self):
+    def test_base_growth_is_current_growth(self):
+        """都不勾時延續目前的營收年增率(每季 +3%，年增約 12.6%)，不是歷史中位數"""
+        self.assertAlmostEqual(self.b.revenue_growth, 1.03 ** 4 - 1, places=6)
+        self.assertAlmostEqual(default_levers(self.b)["revenue_growth"], self.b.revenue_growth)
+
+    def test_bullish_never_lowers_growth_below_current(self):
+        """原本跳到歷史 P75，目前成長率高於 P75 時勾利多反而變低；現在一律從現值往上加"""
+        self.b.history["revenue_growth"] = {"p25": 0.02, "p50": 0.04, "p75": 0.06, "n": 20}
+        levers, _ = apply_scenarios(self.b, [{"type": "DEMAND_UP"}])
+        self.assertGreater(levers["revenue_growth"], self.b.revenue_growth)
+        down, _ = apply_scenarios(self.b, [{"type": "DEMAND_DOWN"}])
+        self.assertLess(down["revenue_growth"], self.b.revenue_growth)
+
+    def test_growth_step_is_capped(self):
+        self.b.history["revenue_growth"] = {"p25": 0.0, "p50": 0.5, "p75": 2.0, "n": 20}
+        levers, _ = apply_scenarios(self.b, [{"type": "DEMAND_UP"}])
+        self.assertAlmostEqual(levers["revenue_growth"] - self.b.revenue_growth, 0.25)
+
+    def test_pe_moves_from_current_by_typical_swing(self):
         self.b.history["pe"] = {"p25": 30.0, "p50": 40.0, "p75": 50.0, "n": 20}
         self.b.pe = 20.0
         levers, _ = apply_scenarios(self.b, [{"type": "RERATING_UP"}])
-        self.assertAlmostEqual(levers["pe"], 40.0)      # 低於中位數 → 先到中位數，不是直接跳到 P75
-        self.b.pe = 45.0
-        levers, _ = apply_scenarios(self.b, [{"type": "RERATING_UP"}])
-        self.assertAlmostEqual(levers["pe"], 50.0)
+        self.assertAlmostEqual(levers["pe"], 25.0)      # 一般波動 10 倍，但最多現值的 25%(5 倍)
+        self.b.history["pe"] = {"p25": 19.0, "p50": 20.0, "p75": 21.0, "n": 20}
+        levers, _ = apply_scenarios(self.b, [{"type": "RERATING_DOWN"}])
+        self.assertAlmostEqual(levers["pe"], 19.0)      # 一般波動 1 倍，最少現值的 5%(1 倍)
+
+    def test_extreme_current_growth_is_flagged(self):
+        rows = quarter_rows()
+        rows[-1]["revenue"] *= 3          # 最近一季暴增(基期效應)
+        b = build_baseline("TEST", rows, price=40.0, as_of=AS_OF)
+        self.assertIn("基期效應", b.growth_note)
 
     def test_margin_step_is_capped_relative_to_current_margin(self):
         self.b.history["gross_margin"] = {"p25": 0.1, "p50": 0.5, "p75": 0.9, "n": 20}
