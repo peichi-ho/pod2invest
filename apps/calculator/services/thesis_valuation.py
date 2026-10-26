@@ -460,6 +460,7 @@ def _pe_note(b: Baseline, scenario_type: str, direction: int) -> str:
 @dataclass
 class Projection:
     route: str
+    months: int                          # 試算期間(月)
     revenue: Optional[float]
     operating_income: Optional[float]
     eps: Optional[float]
@@ -468,11 +469,21 @@ class Projection:
     implied_return: Optional[float]
     levers: dict
     notes: list
+    revenue_factor: Optional[float] = None   # 預估營收 ÷ 近四季營收(畫面顯示計算過程用)
+    profit_factor: Optional[float] = None    # 預估獲利 ÷ 近四季獲利(EPS 就是近四季 EPS × 這個倍數)
+    margin_share: float = 1.0                # 利潤率變化反映到這段期間的比例(見 project 說明)
 
 
-def project(b: Baseline, levers: dict, notes: Optional[list] = None) -> Optional[Projection]:
+def project(b: Baseline, levers: dict, notes: Optional[list] = None, months: int = 12) -> Optional[Projection]:
     """
-    參數 → 未來12個月的營收、營業利益、EPS、目標價。
+    參數 → 試算期間結束時(months 個月後)的近四季營收、營業利益、EPS、目標價。
+
+    試算期間依節目回測期間(例如「未來幾個季度」→ 6 個月)，不是固定 12 個月：
+      營收：營收成長率是「年增率」，m 個月後的近四季營收 = 近四季營收 × (1 + 年增率)^(m/12)
+      利潤率：情境讓利潤率改變多少是以一年計，m 個月後的近四季只有 m/12 的部分反映新利潤率
+              (最多 100%)，所以利潤率的變化乘上 min(1, m/12)
+      本益比：市場隨時會重新定價，不依期間縮放
+    什麼都不調時：目標價 = 發布日股價 × (1 + 目前年增率)^(m/12)。
       full：    營業利益 = 營收 × (毛利率 − 費用率)
       no_gross：營業利益 = 營收 × 營業利益率
       net：     淨利 = 營收 × 淨利率，EPS = 近四季EPS × 淨利 ÷ 近四季淨利
@@ -484,20 +495,29 @@ def project(b: Baseline, levers: dict, notes: Optional[list] = None) -> Optional
     if not b.supported or not b.route:
         return None
     notes = list(notes or [])
-    revenue = b.revenue * (1 + levers["revenue_growth"])
+    months = max(1, int(months))
+    share = min(1.0, months / 12)
+    revenue_factor = max(1 + levers["revenue_growth"], 0.0) ** (months / 12)
+    revenue = b.revenue * revenue_factor
+
+    def blended(key, base):
+        return base + (levers[key] - base) * share
 
     if b.route == "ps":
         multiple = levers.get("ps")
         target = revenue * multiple / b.shares if multiple and b.shares else None
-        return Projection("ps", revenue, None, None, multiple, target,
-                          _ret(target, b.price), levers, notes)
+        return Projection("ps", months, revenue, None, None, multiple, target,
+                          _ret(target, b.price), levers, notes, revenue_factor, None, share)
 
     if b.route == "net":
         operating_income = None
-        net_income = revenue * levers["net_margin"]
+        net_income = revenue * blended("net_margin", b.net_margin)
         base_profit, profit = b.net_income, net_income
     else:
-        margin = (levers["gross_margin"] - levers["opex_ratio"]) if b.route == "full" else levers["operating_margin"]
+        if b.route == "full":
+            margin = blended("gross_margin", b.gross_margin) - blended("opex_ratio", b.opex_ratio)
+        else:
+            margin = blended("operating_margin", b.operating_margin)
         operating_income = revenue * margin
         base_profit, profit = b.operating_income, operating_income
     if levers.get("eps_override"):
@@ -509,21 +529,22 @@ def project(b: Baseline, levers: dict, notes: Optional[list] = None) -> Optional
     target = eps * multiple if multiple and eps > 0 else None
     if eps <= 0:
         notes.append("推算的 EPS 為負，本益比估值不適用")
-    return Projection(b.route, revenue, operating_income, eps, multiple, target,
-                      _ret(target, b.price), levers, notes)
+    return Projection(b.route, months, revenue, operating_income, eps, multiple, target,
+                      _ret(target, b.price), levers, notes, revenue_factor, profit / base_profit, share)
 
 
 def _ret(target: Optional[float], price: Optional[float]) -> Optional[float]:
     return target / price - 1 if target and price else None
 
 
-def project_scenarios(b: Baseline, scenarios: list) -> Optional[Projection]:
+def project_scenarios(b: Baseline, scenarios: list, months: int = 12) -> Optional[Projection]:
     """一步到位：勾選的情境 → Projection。"""
     levers, notes = apply_scenarios(b, scenarios)
-    return project(b, levers, notes)
+    return project(b, levers, notes, months)
 
 
-def waterfall(b: Baseline, scenarios: list, labels: list, overrides: Optional[dict] = None) -> Optional[list]:
+def waterfall(b: Baseline, scenarios: list, labels: list, overrides: Optional[dict] = None,
+              months: int = 12) -> Optional[list]:
     """
     瀑布圖：從發布日股價開始，一步一步加上去，看每個情境各把目標價推高或拉低多少。
       1. 延續目前成長：什麼都不勾的目標價 − 發布日股價(營收照目前年增率、其他維持現值)
@@ -542,7 +563,7 @@ def waterfall(b: Baseline, scenarios: list, labels: list, overrides: Optional[di
         levers, notes = apply_scenarios(b, chosen)
         if extra:
             levers.update(extra)
-        p = project(b, levers, notes)
+        p = project(b, levers, notes, months)
         return p.target_price if p else None
 
     steps = []

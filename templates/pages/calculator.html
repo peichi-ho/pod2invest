@@ -215,41 +215,72 @@
 
     <div id="calc-mod-thesis" class="hidden">
     <!-- 論點情境試算，見 static/js/thesis_calc.js、apps/calculator/thesis_views.py -->
-    <section id="thesis-panel" class="bg-surface-container-low rounded-xl p-6 lg:p-8 space-y-5">
-      <div class="flex flex-wrap items-baseline justify-between gap-2 border-b border-outline-variant/20 pb-4">
-        <div>
-          <h3 class="font-['Epilogue'] text-xl font-bold text-tertiary-container">論點與情境</h3>
-          <p class="text-sm text-outline mt-1">把節目的論點拆成財務情境，推算 12 個月後的 EPS 與目標價。以節目發布日 <span id="thesis-asof" class="font-bold">—</span> 的股價與當時已公告的財報為基準。</p>
+    <section id="thesis-panel" class="bg-surface-container-low rounded-xl p-6 lg:p-8 space-y-6">
+      <!-- 標題、論點、試算期間 -->
+      <div class="space-y-4">
+        <div class="flex flex-wrap items-start justify-between gap-3">
+          <div class="min-w-0">
+            <h3 class="font-['Epilogue'] text-xl font-bold text-tertiary-container">論點情境試算</h3>
+            <p class="text-sm text-outline mt-1">把節目的論點拆成財務情境，推算試算期間結束時的 EPS 與目標價。以節目發布日 <span id="thesis-asof" class="font-bold">—</span> 的股價與當時已公告的財報為基準。</p>
+          </div>
+          <select id="thesis-select" class="hidden text-sm px-3 py-2 bg-surface-container border border-outline-variant/50 rounded-DEFAULT text-on-surface-variant max-w-full" onchange="onThesisSelect(this.value)"></select>
         </div>
-        <select id="thesis-select" class="hidden text-sm px-3 py-2 bg-surface-container border border-outline-variant/50 rounded-DEFAULT text-on-surface-variant max-w-full" onchange="onThesisSelect(this.value)"></select>
+        <p id="thesis-status" class="text-sm text-outline">在上方「從節目挑選」選一集後，這裡會列出它的論點與情境。</p>
+        <p id="thesis-text" class="hidden border-l-4 border-secondary bg-surface-container-lowest rounded-r-lg px-4 py-3 text-[15px] leading-7 text-on-surface"></p>
       </div>
-      <p id="thesis-status" class="text-sm text-outline">在上方「從節目挑選」選一集後，這裡會列出它的論點與情境。</p>
-      <div id="thesis-body" class="hidden space-y-5">
-        <p id="thesis-text" class="border-l-4 border-secondary bg-surface-container rounded-r-lg px-4 py-3 text-[15px] leading-7 text-on-surface"></p>
-        <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-          <!-- 左：情境勾選 -->
-          <div class="lg:col-span-7 space-y-4 min-w-0">
-            <div class="flex flex-wrap items-center gap-2">
-              <span class="text-sm font-bold text-outline">快速套用</span>
-              <button type="button" class="mode-btn px-3 py-1 rounded-full text-sm font-bold border border-outline-variant/40" onclick="thesisPreset('base')">延續目前成長（都不勾）</button>
-              <button type="button" id="thesis-preset-support" class="mode-btn px-3 py-1 rounded-full text-sm font-bold border border-outline-variant/40 disabled:opacity-40 disabled:cursor-not-allowed" onclick="thesisPreset('support')">節目的論點</button>
-              <button type="button" id="thesis-preset-against" class="mode-btn px-3 py-1 rounded-full text-sm font-bold border border-outline-variant/40 disabled:opacity-40 disabled:cursor-not-allowed" onclick="thesisPreset('against')">反方情境</button>
-            </div>
-            <div id="thesis-scenarios" class="space-y-4"></div>
+
+      <div id="thesis-body" class="hidden space-y-6">
+        <!-- ① 選情境 -->
+        <div class="space-y-3">
+          <div class="flex flex-wrap items-baseline justify-between gap-2">
+            <h4 class="font-['Epilogue'] text-lg font-bold text-tertiary-container">① 選擇你相信的情境</h4>
+            <span class="text-xs text-outline">可以都不勾，代表公司延續目前的成長</span>
           </div>
-          <!-- 右：參數與結果 -->
-          <div class="lg:col-span-5 space-y-4 min-w-0">
-            <div id="thesis-result" class="bg-surface-container-lowest rounded-xl p-5 space-y-3"></div>
-            <div id="thesis-waterfall" class="hidden bg-surface-container-lowest rounded-xl p-5 space-y-3"></div>
-            <div class="bg-surface-container-lowest rounded-xl p-5 space-y-4">
-              <div class="flex items-center justify-between gap-2">
-                <h4 class="text-sm font-bold text-tertiary-container uppercase tracking-widest">試算參數</h4>
-                <button type="button" id="thesis-reset" class="hidden text-xs font-bold text-secondary hover:underline" onclick="thesisResetOverrides()">回到情境預設值</button>
-              </div>
-              <div id="thesis-levers" class="space-y-4"></div>
-            </div>
-            <p id="thesis-baseline" class="text-xs text-outline leading-relaxed"></p>
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="text-sm font-bold text-outline">快速套用</span>
+            <button type="button" class="mode-btn px-3 py-1 rounded-full text-sm font-bold border border-outline-variant/40" onclick="thesisPreset('base')">全部不勾</button>
+            <button type="button" id="thesis-preset-support" class="mode-btn px-3 py-1 rounded-full text-sm font-bold border border-outline-variant/40 disabled:opacity-40 disabled:cursor-not-allowed" onclick="thesisPreset('support')">節目的論點</button>
+            <button type="button" id="thesis-preset-against" class="mode-btn px-3 py-1 rounded-full text-sm font-bold border border-outline-variant/40 disabled:opacity-40 disabled:cursor-not-allowed" onclick="thesisPreset('against')">反方情境</button>
           </div>
+          <div id="thesis-scenarios" class="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start"></div>
+          <div id="thesis-info"></div>
+        </div>
+
+        <!-- ② 試算期間與參數 -->
+        <div class="space-y-3">
+          <h4 class="font-['Epilogue'] text-lg font-bold text-tertiary-container">② 試算條件</h4>
+          <div class="bg-surface-container-lowest rounded-xl px-5 py-4 flex flex-wrap items-center gap-x-4 gap-y-2">
+            <label for="thesis-months" class="text-sm font-bold text-outline">試算期間</label>
+            <div class="flex items-center gap-2">
+              <input id="thesis-months" type="number" min="1" max="36" step="1" value="12" oninput="thesisSetMonths(this.value)"
+                class="w-20 px-3 py-2 bg-surface-container border-none rounded-DEFAULT focus:ring-2 focus:ring-secondary text-tertiary-container font-['Epilogue'] font-semibold text-sm"/>
+              <span class="text-sm text-outline">個月</span>
+            </div>
+            <span id="thesis-months-hint" class="text-xs text-outline"></span>
+          </div>
+          <details id="thesis-levers-box" class="bg-surface-container-lowest rounded-xl px-5 py-4">
+            <summary class="text-sm font-bold text-tertiary-container cursor-pointer select-none">手動調整參數（選填）<span class="font-normal text-outline ml-2">不調整就依勾選的情境自動設定</span></summary>
+            <div class="mt-4 space-y-4">
+              <div class="flex justify-end"><button type="button" id="thesis-reset" class="hidden text-xs font-bold text-secondary hover:underline" onclick="thesisResetOverrides()">回到情境預設值</button></div>
+              <div id="thesis-levers" class="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-5"></div>
+            </div>
+          </details>
+        </div>
+
+        <!-- ③ 開始試算 -->
+        <div class="flex flex-wrap items-center gap-3">
+          <button type="button" id="thesis-run" onclick="thesisRun()"
+            class="px-8 py-3 bg-tertiary-container hover:opacity-90 active:scale-95 text-white font-label font-bold text-sm uppercase tracking-widest rounded-full transition-all">開始試算</button>
+          <span id="thesis-run-hint" class="text-sm text-outline"></span>
+        </div>
+
+        <!-- 結果：按「開始試算」後才顯示 -->
+        <div id="thesis-results" class="hidden space-y-4 transition-opacity">
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
+            <div id="thesis-result" class="bg-surface-container-lowest rounded-xl p-5 space-y-4 min-w-0"></div>
+            <div id="thesis-waterfall" class="bg-surface-container-lowest rounded-xl p-5 space-y-3 min-w-0"></div>
+          </div>
+          <p id="thesis-baseline" class="text-xs text-outline leading-relaxed"></p>
         </div>
       </div>
     </section>

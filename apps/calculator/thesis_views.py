@@ -17,6 +17,8 @@ GET 參數：
   score_id(必填)：計算機選集清單的那一筆 StockSentimentScore
   thesis_id：同一集同一檔有好幾句論點時選哪一句(ThesisScenarioExtraction.id)，不給用第一句
   checked：勾選的情境序號，逗號分隔(例如 0,2,3)；不給 = 都不勾(Base)
+  months：試算期間(月)；不給就用這句論點的回測期間(驗證句的起訖日，例如「未來幾個季度」→ 6 個月)，
+      沒有回測期間才用 12 個月
   revenue_growth / gross_margin / opex_ratio / operating_margin / net_margin / pe / ps / eps：
       使用者手動覆寫的參數(小數，例如 0.25 = 25%)，蓋過情境算出來的值
 """
@@ -30,7 +32,8 @@ from apps.calculator.services.thesis_valuation import (
 
 PROMPT_VERSION = "v5"
 BASELINE_CACHE_SECONDS = 6 * 3600     # 基準數字要打 yfinance，同一檔同一天的結果快取起來
-HORIZON_MONTHS = 12                    # 目標價是「12 個月後」
+DEFAULT_HORIZON_MONTHS = 12            # 論點沒有回測期間時的試算期間
+HORIZON_RANGE = (1, 36)
 
 TYPE_LABELS = {
     "DEMAND_UP": "需求、訂單增加", "NEW_BUSINESS": "新產品、新客戶", "PRICE_UP": "產品漲價",
@@ -132,7 +135,6 @@ class ThesisValuationAPIView(APIView):
 
         payload = {
             "ticker": score.ticker, "asset_name": score.asset_name, "as_of": as_of.isoformat(),
-            "horizon_months": HORIZON_MONTHS,
             "theses": [{"id": r.id, "thesis": r.backtest_record.thesis, "direction": r.backtest_record.direction,
                         "timeframe": r.backtest_record.timeframe_raw, "status": r.status} for r in theses],
         }
@@ -145,6 +147,18 @@ class ThesisValuationAPIView(APIView):
         scenarios = [_scenario_view(s, i) for i, s in enumerate(current.scenarios)]
         payload.update(thesis_id=current.id, scenarios=scenarios,
                        no_driver_reason=current.no_driver_reason if current.status == "no_driver" else "")
+
+        # 試算期間：預設跟這句論點的回測期間一致
+        bt = current.backtest_record
+        if bt.start_time and bt.end_time and bt.end_time > bt.start_time:
+            default_months = round((bt.end_time - bt.start_time).days / 30)
+            horizon_source = f"節目回測期間（{bt.timeframe_raw or '依驗證句起訖日'}）"
+        else:
+            default_months, horizon_source = DEFAULT_HORIZON_MONTHS, "這句論點沒有回測期間，預設 12 個月"
+        default_months = min(max(default_months, HORIZON_RANGE[0]), HORIZON_RANGE[1])
+        requested = _parse_float(request.query_params.get("months"))
+        months = min(max(int(requested), HORIZON_RANGE[0]), HORIZON_RANGE[1]) if requested else default_months
+        payload.update(horizon_months=months, horizon_default=default_months, horizon_source=horizon_source)
 
         # 目標價位只當參考，不參與試算；source 分法人與節目觀點
         payload["analyst_targets"] = [
@@ -180,15 +194,18 @@ class ThesisValuationAPIView(APIView):
         if overridden:
             notes.append("已手動調整：" + "、".join(overridden))
 
-        p = project(b, levers, notes)
+        p = project(b, levers, notes, months)
         payload.update(
             available=True, checked=[i for i in checked if i < len(scenarios) and scenarios[i]["checkable"]],
             levers_auto=levers_auto, levers=levers, overridden=overridden,
             projection={
                 "route": p.route, "revenue": p.revenue, "operating_income": p.operating_income, "eps": p.eps,
                 "multiple": p.multiple, "target_price": p.target_price, "implied_return": p.implied_return,
+                "months": p.months, "revenue_factor": p.revenue_factor, "profit_factor": p.profit_factor,
+                "margin_share": p.margin_share,
             },
             notes=p.notes,
-            waterfall=waterfall(b, chosen, [_waterfall_label(scenarios[i]) for i in chosen_idx], override_values),
+            waterfall=waterfall(b, chosen, [_waterfall_label(scenarios[i]) for i in chosen_idx], override_values,
+                                months=months),
         )
         return Response(payload)

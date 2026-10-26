@@ -284,3 +284,27 @@ class CapacityMarginTests(SimpleTestCase):
         drag, _ = apply_scenarios(b, [{"type": "CAPACITY_EXPANSION", "margin_drag": True}])
         self.assertAlmostEqual(plain["gross_margin"], b.gross_margin)
         self.assertLess(drag["gross_margin"], b.gross_margin)
+
+
+class HorizonTests(SimpleTestCase):
+    def setUp(self):
+        self.b = build_baseline("TEST", quarter_rows(), price=40.0, as_of=AS_OF)
+
+    def test_six_month_base_compounds_half_year_of_growth(self):
+        p = project(self.b, default_levers(self.b), months=6)
+        self.assertAlmostEqual(p.target_price, 40.0 * (1 + self.b.revenue_growth) ** 0.5)
+        self.assertEqual(p.months, 6)
+
+    def test_margin_change_only_partly_reflected_in_six_months(self):
+        levers = default_levers(self.b)
+        levers["revenue_growth"] = 0.0
+        levers["gross_margin"] += 0.03
+        six = project(self.b, levers, months=6)
+        twelve = project(self.b, levers, months=12)
+        self.assertAlmostEqual(six.eps, self.b.eps * 0.315 / 0.30)
+        self.assertAlmostEqual(twelve.eps, self.b.eps * 0.33 / 0.30)
+
+    def test_waterfall_respects_months(self):
+        steps = waterfall(self.b, [{"type": "DEMAND_UP"}], ["需求"], months=6)
+        final = project_scenarios(self.b, [{"type": "DEMAND_UP"}], months=6).target_price
+        self.assertAlmostEqual(steps[-1]["value"], final)
