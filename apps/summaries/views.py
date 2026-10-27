@@ -8,6 +8,7 @@ from rest_framework import status
 from .serializers import SummarizeRequestSerializer, GenerateFromPodcastSerializer
 from .services.engine import summarize_from_srt_text
 from .services.backtesting import create_backtesting_rows
+from .services.sector_accuracy import accuracy_by_sector, ticker_sector_clause
 from .models import SummaryRecord, BacktestingRecord, TickerMap, SpeakerAccuracy
 from apps.podcasts.models import PodcastEpisode
 from apps.glossary.services.annotator import annotate
@@ -109,13 +110,23 @@ def _save_summary(result: dict, *, mode: str,
 
 
 class AccuracyRankingAPIView(APIView):
-    """從 speaker_accuracy 快照表取得講者準確率排名"""
+    """
+    講者準確率排名。
+      - 不帶 sector：讀 speaker_accuracy 快照表的「全體」列（sector=''）。
+      - 帶 sector（Rankings 的 8 大類）：不讀快照，直接從 backtesting 依 TICKER_SECTOR 現算
+        （見 services/sector_accuracy.py），快照的 sector 欄位目前是另一套細分類，對不上。
+    這裡回傳完整資料、不套樣本數門檻——探索頁／節目頁的準確率標籤也在用這支 API；
+    排名頁「至少 10 筆才排名」的門檻在 static/js/rankings.js。
+    """
 
     def get(self, request):
         sector = request.query_params.get('sector', '').strip()
 
+        if sector:
+            return Response(accuracy_by_sector().get(sector, []))
+
         qs = (SpeakerAccuracy.objects.using('summariesdb')
-              .filter(sector=sector)
+              .filter(sector='')
               .exclude(accuracy=None)
               .order_by('-accuracy', '-evaluatable'))
 
@@ -381,16 +392,13 @@ class AllBacktestingAPIView(APIView):
             sector_filter_sql = ""
             params = [podcaster]
             if sector:
-                # Rankings 的 8 大類（半導體/電子元件、科技類…）是以 tag_ticker_sectors.TICKER_SECTOR
-                # 為準（見該檔案開頭「前端顯示用」），不能直接拿 ticker_map.sector 比對——資料庫裡的
-                # ticker_map.sector 目前可能是別套更細的分類（例如「半導體」「電子/硬體」），拿 Rankings
-                # 的類別名稱去比會永遠篩不到東西。
-                from .management.commands.tag_ticker_sectors import TICKER_SECTOR
-                sector_tickers = [t for t, sec in TICKER_SECTOR.items() if sec == sector]
-                if not sector_tickers:
+                # Rankings 的 8 大類以 TICKER_SECTOR 為準、不看 ticker_map.sector；不在對照表的標的
+                # 歸「其他產業」。判斷邏輯跟排名頁共用 services/sector_accuracy.py，兩邊的「N 筆」才會一致。
+                clause = ticker_sector_clause(sector)
+                if clause is None:
                     return Response([])
-                sector_filter_sql = "AND b.ticker = ANY(%s)"
-                params.append(sector_tickers)
+                sector_filter_sql, clause_params = clause
+                params.extend(clause_params)
             params.append(limit)
             with connections["summariesdb"].cursor() as c:
                 c.execute(f"""

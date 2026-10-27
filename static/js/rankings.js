@@ -1,6 +1,11 @@
 // ── Sector filter ─────────────────────────────────────────────
 let _currentSector = null;
 
+// 排名頁至少要累積這麼多筆已驗證的預測才參與排名，不然「2 筆全中 = 100%」會直接擠進前三。
+// 只套用在排名頁：探索頁／節目頁的準確率標籤（app.js 的 _ensureAccuracyCache）仍顯示完整資料。
+const MIN_RANK_SAMPLE = 10;
+const _RANK_SUBTITLE_SUFFIX = `依準確率排名（至少 ${MIN_RANK_SAMPLE} 筆驗證）`;
+
 function toggleRankingsFilter() {
   const dd      = document.getElementById('rankings-filter-dropdown');
   const chevron = document.getElementById('rankings-filter-chevron');
@@ -19,8 +24,6 @@ function applySectorFilter(sector) {
   _currentSector = sector || null;
   _closeRankingsFilter();
   document.getElementById('rankings-filter-label').textContent = sector || '全部';
-  document.getElementById('rankings-subtitle').textContent =
-    sector ? `${sector} · 依準確率排名` : '全部節目 · 依準確率排名';
   document.querySelectorAll('.sector-btn').forEach(btn => {
     const isAll   = btn.id === 'sector-btn-all';
     const active  = (!sector && isAll);
@@ -107,6 +110,10 @@ async function loadRankings() {
   const fullList = document.getElementById('rankings-full-list');
   if (!podium || !fullList) return;
 
+  // 放在這裡而不是 applySectorFilter：第一次進頁面（沒按過篩選）也要看到門檻說明。
+  const subtitleEl = document.getElementById('rankings-subtitle');
+  if (subtitleEl) subtitleEl.textContent = `${_currentSector || '全部節目'} · ${_RANK_SUBTITLE_SUFFIX}`;
+
   const podiumSection = podium.closest('section');
   if (_currentSector) {
     if (podiumSection) podiumSection.classList.add('hidden');
@@ -136,10 +143,13 @@ async function loadRankings() {
 
     let data;
     if (_currentSector) {
-      data = accData.map(a => ({ podcaster: a.podcaster, episodes: epMap[a.podcaster] ?? '--', accuracy: a.accuracy, total: a.total }));
+      data = accData
+        .filter(a => a.total >= MIN_RANK_SAMPLE)
+        .map(a => ({ podcaster: a.podcaster, episodes: epMap[a.podcaster] ?? '--', accuracy: a.accuracy, total: a.total }));
     } else {
+      // 樣本不足的節目不進準確率排名，跟「還沒有驗證紀錄」的節目一樣排在後面、顯示「準確率 待驗證」。
       const accMap = {};
-      for (const a of accData) accMap[a.podcaster] = a;
+      for (const a of accData) if (a.total >= MIN_RANK_SAMPLE) accMap[a.podcaster] = a;
       const withAcc    = podData.filter(p => accMap[p.podcaster]);
       const withoutAcc = podData.filter(p => !accMap[p.podcaster]);
       withAcc.sort((a, b) => {
@@ -155,8 +165,18 @@ async function loadRankings() {
     _rankData = data;
 
     if (!data.length) {
-      podium.innerHTML   = `<div class="col-span-3 text-outline text-sm text-center py-12">${_currentSector ? '此類別暫無回測資料' : '暫無節目資料'}</div>`;
-      fullList.innerHTML = '';
+      // 篩選後空白有兩種原因，要講清楚：完全沒資料，或有資料但沒有任何節目累積到門檻。
+      const emptyMsg = !_currentSector ? '暫無節目資料'
+        : accData.length ? `此類別目前沒有節目累積到 ${MIN_RANK_SAMPLE} 筆驗證，暫無排名`
+        : '此類別暫無回測資料';
+      // 套用篩選時前三名區塊是隱藏的（見上面 podiumSection.classList.add('hidden')），訊息寫進去
+      // 使用者看不到、只會看到一片空白，所以篩選模式改寫進一定看得到的清單區。
+      if (_currentSector) {
+        fullList.innerHTML = `<div class="text-outline text-sm text-center py-12">${emptyMsg}</div>`;
+      } else {
+        podium.innerHTML   = `<div class="col-span-3 text-outline text-sm text-center py-12">${emptyMsg}</div>`;
+        fullList.innerHTML = '';
+      }
       return;
     }
 
