@@ -133,7 +133,7 @@ class ProjectionTests(SimpleTestCase):
 
     def test_eps_forecast_and_pe_figures_are_used_directly(self):
         p = project_scenarios(self.b, [
-            {"type": "EPS_FORECAST", "figures": {"eps": 75.0, "year": 2026}},
+            {"type": "EPS_FORECAST", "figures": {"eps": 75.0, "year": 2027}},   # 基準日 2026-09，12 個月後是 2027
             {"type": "RERATING_UP", "figures": {"pe": 20.0}},
         ])
         self.assertAlmostEqual(p.eps, 75.0)
@@ -308,3 +308,53 @@ class HorizonTests(SimpleTestCase):
         steps = waterfall(self.b, [{"type": "DEMAND_UP"}], ["需求"], months=6)
         final = project_scenarios(self.b, [{"type": "DEMAND_UP"}], months=6).target_price
         self.assertAlmostEqual(steps[-1]["value"], final)
+
+
+class CorrectnessFixTests(SimpleTestCase):
+    """2026-10-27：會直接算錯的四個問題"""
+
+    def test_eps_year_must_fit_trial_period(self):
+        from apps.calculator.services.thesis_valuation import eps_year_fits
+        b = build_baseline("TEST", quarter_rows(), price=40.0, as_of=date(2025, 10, 13))
+        self.assertTrue(eps_year_fits(b, 2026, 12))       # 近四季 2025-10~2026-10，2026 年重疊 9 個多月
+        self.assertFalse(eps_year_fits(b, 2027, 12))
+        self.assertFalse(eps_year_fits(b, 2026, 3))       # 3 個月後的近四季大多還在 2025 年
+        self.assertTrue(eps_year_fits(b, None, 12))
+        p = project_scenarios(b, [{"type": "EPS_FORECAST", "figures": {"eps": 360.0, "year": 2027}}])
+        self.assertNotAlmostEqual(p.eps, 360.0)
+        self.assertTrue(any("不符" in n for n in p.notes))
+
+    def test_non_operating_gain_uses_core_eps(self):
+        rows = quarter_rows()
+        for r in rows[-2:]:              # 最近兩季淨利暴增(業外收益)
+            r["net_income"] *= 3
+            r["eps"] *= 3
+        b = build_baseline("TEST", rows, price=40.0, as_of=AS_OF)
+        self.assertTrue(b.eps_note)
+        self.assertLess(b.eps, b.eps_reported)
+        normal = build_baseline("TEST", quarter_rows(), price=40.0, as_of=AS_OF)
+        self.assertAlmostEqual(b.eps, normal.eps, delta=normal.eps * 0.05)
+        self.assertEqual(normal.eps_note, "")
+
+    def test_thin_margin_falls_back_to_price_to_sales(self):
+        # 營業利益率 1%、淨利率 0.8%：用獲利比例推算會被放大，改用 P/S
+        # (營業利益很薄但淨利很高的情況，會先被業外收益規則改成本業 EPS)
+        thin = build_baseline("TEST", quarter_rows(gross=0.21, opex=0.2), price=40.0, as_of=AS_OF)
+        self.assertEqual(thin.route, "ps")
+        ok = build_baseline("TEST", quarter_rows(gross=0.25, opex=0.2), price=40.0, as_of=AS_OF)
+        self.assertEqual(ok.route, "full")      # 營業利益率 5%
+
+    def test_cost_down_split_by_cost_kind(self):
+        from apps.calculator.services.thesis_valuation import scenario_levers
+        self.assertEqual(scenario_levers({"type": "COST_EFFICIENCY", "cost_kind": "cogs"}), {"gross_margin": +1})
+        self.assertEqual(scenario_levers({"type": "COST_EFFICIENCY", "cost_kind": "opex"}), {"opex_ratio": -1})
+        self.assertEqual(len(scenario_levers({"type": "COST_EFFICIENCY"})), 2)
+
+    def test_cost_kind_tagged_from_wording(self):
+        from apps.summaries.services.thesis_scenario import apply_checks
+        def kind(quote):
+            kept, _ = apply_checks([{"type": "COST_EFFICIENCY", "effect": "up", "chain": ["a", "毛利率"], "quote": quote}],
+                                   "bullish", quote, "台積電", "2330.TW")
+            return kept[0]["cost_kind"]
+        self.assertEqual(kind("18A製程良率大幅超標成本下滑"), "cogs")
+        self.assertEqual(kind("Xbox部門裁員3200人降低支出"), "opex")

@@ -210,6 +210,9 @@ _FUTURE_RE = re.compile(r"將|預計|預估|預期|有望|可望|可能|會|未�
 # 目標價來源：原文提到法人、券商、分析師才算「法人」，否則是節目自己的看法
 # 券商名稱要寫完整(元大證/元大投顧)：「300元大關」裡也有「元大」兩個字
 _ANALYST_RE = re.compile(r"法人|外資|投信|券商|分析師|研究員|大摩|小摩|摩根|高盛|瑞銀|花旗|美銀|野村|凱基|元大(?:證|投|期|金)|富邦(?:證|投)|國泰證|群益|永豐證|麥格理|巴克萊|伯恩斯坦|Morgan|Goldman|UBS|Citi")
+# 成本下降分兩種：生產成本(良率、原料、製程)只影響毛利率；組織成本(裁員、精簡、費用)只影響營業費用率
+_COGS_RE = re.compile(r"良率|原料|材料|製程|生產|製造|採購|單位成本|產能利用")
+_OPEX_RE = re.compile(r"裁員|人力|精簡|組織|費用|管銷|行銷|研發支出|營運成本|人事")
 # 擴產只有在原文提到海外廠、新廠、折舊、稀釋時才讓毛利率下降(聯電借用 Intel 閒置產能就不會)
 _MARGIN_DRAG_RE = re.compile(r"海外|美國廠|日本廠|德國廠|新廠|折舊|稀釋|擴廠|建廠")
 # 總經情境依影響管道改分類：講需求的是營收面，講匯率/關稅/成本的是毛利面，只有利率/資金/估值才留在總經
@@ -395,6 +398,7 @@ def apply_checks(scenarios: list, thesis_direction: str, source_text: str,
      11. 擴產：原文提到海外廠、新廠、折舊、稀釋才標 margin_drag(毛利率才會下降)
      12. 目標價標來源(法人/節目)，沒有數字的丟掉
      13. EPS 預估原文沒有數字、但論點摘要寫了「2026年…32塊」時，從論點摘要補(標 figures_source)
+     14. 成本下降依原文標 cost_kind：生產成本(良率、原料)只動毛利率，組織成本(裁員、費用)只動費用率
     """
     normalized_source = normalize_text(source_text)
     aliases = _company_aliases(asset_name, ticker)
@@ -470,6 +474,10 @@ def apply_checks(scenarios: list, thesis_direction: str, source_text: str,
             s["source"] = "analyst" if _ANALYST_RE.search(s["quote"]) else "podcast"
         if s["type"] == "CAPACITY_EXPANSION":
             s["margin_drag"] = bool(_MARGIN_DRAG_RE.search(s["quote"] + "".join(s["chain"])))
+        if s["type"] == "COST_EFFICIENCY":
+            blob = s["quote"] + "".join(s["chain"])
+            cogs, opex = bool(_COGS_RE.search(blob)), bool(_OPEX_RE.search(blob))
+            s["cost_kind"] = "cogs" if cogs and not opex else "opex" if opex and not cogs else "both"
 
         effect = lever_effect(s["type"]) or {"up": 1, "down": -1}.get(s["effect"], 0)
         s["effect"] = {1: "up", -1: "down"}.get(effect, "")
@@ -607,3 +615,74 @@ def financial_sector_tickers() -> set[str]:
 
     rows = IndustryClassification.objects.using("summariesdb").values_list("ticker", "industry_name")
     return {t for t, name in rows if name and FINANCIAL_INDUSTRY_PATTERN.search(name)}
+
+
+def save_extraction(record, model: str, result: dict):
+    """把一筆驗證句的萃取結果存進 ThesisScenarioExtraction(批次指令與即時補拆共用)。"""
+    from apps.summaries.models import ThesisScenarioExtraction
+
+    return ThesisScenarioExtraction.objects.using("summariesdb").update_or_create(
+        backtest_record_id=record.id,
+        prompt_version=PROMPT_VERSION,
+        defaults={
+            "summary_id": record.summary_id,
+            "ticker": record.ticker,
+            "asset_name": record.asset,
+            "model_name": model,
+            "status": result["status"],
+            "scenarios": result["scenarios"],
+            "ai_scenarios": result["ai_scenarios"],
+            "dropped": result["dropped"],
+            "no_driver_reason": result["no_driver_reason"],
+            "error": result["error"],
+        },
+    )[0]
+
+
+MAX_ON_DEMAND_THESES = 5   # 一集一檔最多即時補拆幾句論點，避免單一請求跑太久
+
+
+def ensure_thesis_extractions(summary_id: int, ticker: str, client=None, model: Optional[str] = None) -> int:
+    """
+    即時補拆(cache-aside)：這一集這檔股票有驗證句、但還沒有拆好的情境時，當場呼叫 Gemini 拆完並存起來，
+    回傳新拆了幾句。批次指令(backfill_thesis_scenarios)只處理跑當下已經存在的驗證句，之後新上架的
+    節目要等下一次批次；這裡讓使用者第一次在論點情境試算打開它時就補上，之後都讀存好的結果
+    (不會每次打開都重拆，結果才穩定——temperature=0 也不完全穩定)。
+
+    只補「拆了也試算得了」的：個股、不是銀行壽險、有財報資料。重複的論點文字只拆一次。
+    """
+    import os
+    from apps.summaries.models import BacktestingRecord, FinancialReportCache, ThesisScenarioExtraction
+    from .gemini import make_client
+
+    if not is_extractable_ticker(ticker) or ticker in financial_sector_tickers():
+        return 0
+    if not FinancialReportCache.objects.using("summariesdb").filter(ticker=ticker).exists():
+        return 0
+    records = list(
+        BacktestingRecord.objects.using("summariesdb")
+        .filter(summary_id=summary_id, ticker=ticker, summary__mode="pro")
+        .exclude(thesis="").select_related("summary").order_by("id")
+    )
+    done = set(
+        ThesisScenarioExtraction.objects.using("summariesdb")
+        .filter(backtest_record_id__in=[r.id for r in records], prompt_version=PROMPT_VERSION)
+        .exclude(status=ThesisScenarioExtraction.STATUS_FAILED)
+        .values_list("backtest_record_id", flat=True)
+    )
+    todo = [r for r in records if r.id not in done]
+    if not todo:
+        return 0
+
+    model = model or os.getenv("THESIS_SCENARIO_MODEL", "gemini-2.5-flash")
+    client = client or make_client(api_key=os.getenv("GEMINI_API_KEY", ""))
+    by_text = {}
+    for r in todo:
+        by_text.setdefault(r.thesis.strip(), []).append(r)
+    n = 0
+    for group in list(by_text.values())[:MAX_ON_DEMAND_THESES]:
+        result = extract_thesis_scenarios(client, model, group[0])
+        for r in group:
+            save_extraction(r, model, result)
+        n += 1
+    return n

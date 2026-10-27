@@ -34,6 +34,7 @@ from apps.summaries.services.thesis_scenario import (
     recheck_thesis_scenarios,
     financial_sector_tickers,
     is_extractable_ticker,
+    save_extraction,
 )
 
 
@@ -137,22 +138,7 @@ class Command(BaseCommand):
         """
         for attempt in range(1, max_tries + 1):
             try:
-                ThesisScenarioExtraction.objects.using("summariesdb").update_or_create(
-                    backtest_record_id=record.id,
-                    prompt_version=PROMPT_VERSION,
-                    defaults={
-                        "summary_id": record.summary_id,
-                        "ticker": record.ticker,
-                        "asset_name": record.asset,
-                        "model_name": model,
-                        "status": result["status"],
-                        "scenarios": result["scenarios"],
-                        "ai_scenarios": result["ai_scenarios"],
-                        "dropped": result["dropped"],
-                        "no_driver_reason": result["no_driver_reason"],
-                        "error": result["error"],
-                    },
-                )
+                save_extraction(record, model, result)
                 return
             except OperationalError as e:
                 if attempt == max_tries:

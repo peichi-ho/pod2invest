@@ -45,6 +45,12 @@ MAX_MARGIN_STEP_RATIO = 0.25
 MAX_GROWTH_STEP = 0.25          # 營收成長一次最多調 25 個百分點(輝達這類成長率波動極大的公司)
 GROWTH_CLAMP = (-0.5, 1.0)      # 目前年增率當基準時的合理範圍，超出的視為基期效應
 MULTIPLE_STEP = (0.05, 0.25)    # 本益比/P/S 一次調整幅度：最少現值的 5%、最多 25%
+# 近四季淨利超過營業利益的這個倍數，視為含大額業外收益(一般公司淨利約是營業利益的 0.8~0.95 倍)。
+# 例：Google 2026 上半年股權投資大幅增值，近四季 EPS 19.91，本業只有 11~12，本益比看起來只有 16 倍。
+NONOP_RATIO = 1.2
+# 營業利益率(或淨利率)低於這個值，「預估獲利 ÷ 近四季獲利」的比例會被極度放大
+# (利潤率 1% 時調 1 個百分點，EPS 就翻倍)，改走其他路線
+THIN_MARGIN = 0.03
 PE_CLAMP = (3.0, 150.0)         # 本益比合理範圍，超出的歷史點視為資料異常(例如EPS趨近0)
 PS_CLAMP = (0.1, 100.0)
 
@@ -85,6 +91,13 @@ def scenario_levers(s: dict) -> dict:
     levers = dict(LEVERS.get(s.get("type"), {}))
     if s.get("type") == "CAPACITY_EXPANSION" and not s.get("margin_drag"):
         levers.pop("gross_margin", None)
+    # 成本下降：良率、原料這類生產成本只影響毛利率；裁員、精簡這類只影響營業費用率(cost_kind 由
+    # thesis_scenario.apply_checks 依原文標記，看不出來的兩個都動)
+    if s.get("type") == "COST_EFFICIENCY":
+        if s.get("cost_kind") == "cogs":
+            levers.pop("opex_ratio", None)
+        elif s.get("cost_kind") == "opex":
+            levers.pop("gross_margin", None)
     return levers
 
 
@@ -202,6 +215,8 @@ class Baseline:
     operating_income: Optional[float] = None
     net_income: Optional[float] = None
     net_margin: Optional[float] = None
+    eps_reported: Optional[float] = None     # 財報上的近四季 EPS；含大額業外收益時 eps 會改成本業估算值
+    eps_note: str = ""                       # EPS 改用本業估算時的說明
     revenue_growth: Optional[float] = None   # 目前的營收年增率(近四季 vs 再前四季)，已限制在 GROWTH_CLAMP
     growth_note: str = ""                    # 目前年增率遠離歷史範圍時的提醒(基期效應)
     eps: Optional[float] = None
@@ -257,25 +272,45 @@ def build_baseline(ticker: str, rows: list, price: Optional[float], as_of: date,
     if price and b.shares and b.shares > 0:
         b.ps = price * b.shares / t["revenue"]
 
+    # 含大額業外收益：EPS 改用本業估算 = 營業利益 × 這家公司一般的「淨利 ÷ 營業利益」(稅與業外的常態)
+    b.eps_reported = t["eps"]
+    oi, ni = t["operating_income"], t["net_income"]
+    if t["eps"] and t["eps"] > 0 and oi and oi > 0 and ni and ni > oi * NONOP_RATIO:
+        ratios = [x["net_income"] / x["operating_income"] for x in series
+                  if x["operating_income"] and x["operating_income"] > 0 and x["net_income"] and x["net_income"] > 0]
+        conv = min(max(float(np.median(ratios)), 0.5), 1.0) if ratios else 0.8
+        core_ni = oi * conv
+        b.eps = t["eps"] * core_ni / ni
+        b.net_income = core_ni
+        b.net_margin = core_ni / t["revenue"]
+        b.eps_note = (f"近四季淨利是營業利益的 {ni / oi:.1f} 倍，含大額業外收益（例如持股增值），"
+                      f"EPS 改用本業估算：財報 {t['eps']:.2f} → 本業約 {b.eps:.2f}")
+
+    def use_ps(reason):
+        if b.ps:
+            b.route, b.reason = "ps", reason + "，改用股價營收比(P/S)估值"
+        else:
+            b.supported, b.reason = False, reason + "，且股數不足以計算股價營收比"
+
     # 先看有沒有獲利(EPS)，再看營業利益有沒有申報——虧損公司就算沒申報營業利益也能用 P/S
     if t["eps"] is None:
         b.supported, b.reason = False, "近四季 EPS 資料不完整"
     elif t["eps"] <= 0:
-        if b.ps:
-            b.route, b.reason = "ps", "近四季虧損，本益比沒有意義，改用股價營收比(P/S)估值"
-        else:
-            b.supported, b.reason = False, "近四季虧損，且股數不足以計算股價營收比"
+        use_ps("近四季虧損，本益比沒有意義")
     else:
-        b.pe = price / t["eps"] if price else None
-        if t["operating_income"] is not None and t["operating_income"] > 0:
+        b.pe = price / b.eps if price else None
+        om_ok = b.operating_margin is not None and b.operating_margin >= THIN_MARGIN
+        nm_ok = b.net_margin is not None and b.net_margin >= THIN_MARGIN
+        if om_ok:
             if b.gross_margin is not None:
                 b.route = "full"
             else:
                 b.route, b.reason = "no_gross", "沒有毛利資料，跳過毛利率，直接用營業利益率推算"
-        elif b.net_margin and b.net_margin > 0:
-            b.route, b.reason = "net", "沒有營業利益資料，改用淨利率推算(毛利、費用類情境都反映在淨利率上)"
+        elif nm_ok:
+            why = "沒有營業利益資料" if b.operating_margin is None else f"營業利益率只有 {b.operating_margin:.1%}，用它推算會被放大"
+            b.route, b.reason = "net", why + "，改用淨利率推算(毛利、費用類情境都反映在淨利率上)"
         else:
-            b.supported, b.reason = False, "近四季營業利益與淨利都不足以推算"
+            use_ps("營業利益率與淨利率都很薄，用獲利比例推算會被極度放大")
     return b
 
 
@@ -371,7 +406,23 @@ def _raw_step(b: Baseline, lever: str, direction: int) -> Optional[float]:
     return direction * max(gap, floor)
 
 
-def apply_scenarios(b: Baseline, scenarios: list) -> tuple[dict, list]:
+def eps_year_fits(b: Baseline, year, months: int = 12) -> bool:
+    """
+    節目給的「某年度 EPS」能不能當成試算期間結束時的近四季 EPS：
+    試算期間結束時的近四季 = 結束日往前 12 個月，跟那個年度(1/1~12/31)重疊至少半年才算相符。
+    例：2025-10 的節目、試算 12 個月 → 近四季是 2025-10~2026-10，2026 年 EPS 相符、2027 年不相符。
+    沒有年份的視為「未來一年」，算相符。
+    """
+    if not year or not b.as_of:
+        return True
+    end = b.as_of + timedelta(days=round(months * 30.44))
+    start = end - timedelta(days=365)
+    fy_start, fy_end = date(int(year), 1, 1), date(int(year), 12, 31)
+    overlap = (min(end, fy_end) - max(start, fy_start)).days
+    return overlap >= 182
+
+
+def apply_scenarios(b: Baseline, scenarios: list, months: int = 12) -> tuple[dict, list]:
     """
     勾選的情境 → 調整後的參數。回傳(參數, 說明清單)。
 
@@ -387,6 +438,9 @@ def apply_scenarios(b: Baseline, scenarios: list) -> tuple[dict, list]:
         t = s.get("type")
         figures = s.get("figures") or {}
         if t == "EPS_FORECAST" and figures.get("eps"):
+            if not eps_year_fits(b, figures.get("year"), months):
+                notes.append(f"節目給的 EPS {figures['eps']}（{figures.get('year')} 年）跟試算期間不符，沒有直接套用")
+                continue
             levers["eps_override"] = float(figures["eps"])
             notes.append(f"EPS 直接使用節目給的 {figures['eps']}" + (f"（{figures.get('year')} 年）" if figures.get("year") else ""))
             continue
@@ -539,7 +593,7 @@ def _ret(target: Optional[float], price: Optional[float]) -> Optional[float]:
 
 def project_scenarios(b: Baseline, scenarios: list, months: int = 12) -> Optional[Projection]:
     """一步到位：勾選的情境 → Projection。"""
-    levers, notes = apply_scenarios(b, scenarios)
+    levers, notes = apply_scenarios(b, scenarios, months)
     return project(b, levers, notes, months)
 
 
@@ -560,7 +614,7 @@ def waterfall(b: Baseline, scenarios: list, labels: list, overrides: Optional[di
         return None
 
     def target_of(chosen, extra=None):
-        levers, notes = apply_scenarios(b, chosen)
+        levers, notes = apply_scenarios(b, chosen, months)
         if extra:
             levers.update(extra)
         p = project(b, levers, notes, months)

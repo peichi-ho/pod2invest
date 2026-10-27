@@ -427,10 +427,10 @@ function _thesisResultHtml(d) {
       steps.push(['預估 EPS', '直接使用指定的 EPS', _tNum(p.eps, 2)]);
     } else {
       const profitName = p.route === 'net' ? '淨利' : '營業利益';
-      steps.push(['預估 EPS', `近四季 ${_tNum(b.eps, 2)} × ${profitName}倍數 ${_tNum(p.profit_factor, 3)}`
+      steps.push(['預估 EPS', `近四季${b.eps_note ? '本業' : ''} ${_tNum(b.eps, 2)} × ${profitName}倍數 ${_tNum(p.profit_factor, 3)}`
         + ((L.eps_multiplier || 1) !== 1 ? ` × 財務風險 ${_tNum(L.eps_multiplier, 2)}` : ''), _tNum(p.eps, 2)]);
     }
-    steps.push([multipleLabel, p.multiple === b.pe ? `發布日股價 ${_tNum(b.price, 2)} ÷ 近四季 EPS ${_tNum(b.eps, 2)}` : `現值 ${_tNum(b.pe, 1)} 倍，依情境或手動調整`, `${_tNum(p.multiple, 1)} 倍`]);
+    steps.push([multipleLabel, p.multiple === b.pe ? `發布日股價 ${_tNum(b.price, 2)} ÷ 近四季${b.eps_note ? '本業' : ''} EPS ${_tNum(b.eps, 2)}` : `現值 ${_tNum(b.pe, 1)} 倍，依情境或手動調整`, `${_tNum(p.multiple, 1)} 倍`]);
     steps.push(['目標價', `預估 EPS ${_tNum(p.eps, 2)} × ${multipleLabel} ${_tNum(p.multiple, 1)}`, _tNum(p.target_price, 2)]);
   } else {
     steps.push([multipleLabel, `現值 ${_tNum(b.ps, 1)} 倍`, `${_tNum(p.multiple, 1)} 倍`]);
@@ -447,7 +447,8 @@ function _thesisResultHtml(d) {
     .some(k => L[k] != null && b[k] != null && Math.abs(L[k] - b[k]) > 1e-9);
   const marginNote = p.margin_share < 1 && p.route !== 'ps' && marginChanged
     ? `<li>· 試算期間 ${m} 個月，利潤率的變化只反映 ${Math.round(p.margin_share * 100)}%（到期時的近四季只有部分是新的利潤率）</li>` : '';
-  const growthNote = b.growth_note ? `<li class="text-[#a16207] font-bold">· ${_escHtml(b.growth_note)}</li>` : '';
+  const growthNote = (b.growth_note ? `<li class="text-[#a16207] font-bold">· ${_escHtml(b.growth_note)}</li>` : '')
+    + (b.eps_note ? `<li class="text-[#a16207] font-bold">· ${_escHtml(b.eps_note)}</li>` : '');
   const targets = (d.analyst_targets || []).map(t =>
     `${_tNum(t.low, 0)}${t.high && t.high !== t.low ? '～' + _tNum(t.high, 0) : ''}（${t.source === 'analyst' ? '法人' : '節目觀點'}）`);
   const notes = (d.notes || []).map(n => `<li>· ${_escHtml(n)}</li>`).join('');
@@ -474,7 +475,7 @@ function _thesisResultHtml(d) {
 function _thesisBaselineHtml(d) {
   const b = d.baseline;
   const h = b.history || {};
-  const parts = [`基準：近四季（至 ${_escHtml(b.ttm_end || '—')}）EPS ${_tNum(b.eps, 2)}`];
+  const parts = [`基準：近四季（至 ${_escHtml(b.ttm_end || '—')}）EPS ${_tNum(b.eps, 2)}${b.eps_note ? `（本業估算，財報為 ${_tNum(b.eps_reported, 2)}）` : ''}`];
   if (b.pe != null) parts.push(`本益比 ${_tNum(b.pe, 1)} 倍${h.pe ? `（過去 5 年中位數 ${_tNum(h.pe.p50, 1)} 倍）` : ''}`);
   if (b.gross_margin != null) parts.push(`毛利率 ${_tPct(b.gross_margin)}`);
   if (b.operating_margin != null) parts.push(`營業利益率 ${_tPct(b.operating_margin)}`);

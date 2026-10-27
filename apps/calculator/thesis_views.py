@@ -27,7 +27,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.calculator.services.thesis_valuation import (
-    apply_scenarios, compute_baseline, project, scenario_levers, waterfall,
+    apply_scenarios, compute_baseline, eps_year_fits, project, scenario_levers, waterfall,
 )
 
 PROMPT_VERSION = "v5"
@@ -72,7 +72,7 @@ def _scenario_view(s: dict, idx: int) -> dict:
 
 
 def _cached_baseline(ticker, as_of):
-    key = f"thesis-baseline:{ticker}:{as_of.isoformat()}"
+    key = f"thesis-baseline:v2:{ticker}:{as_of.isoformat()}"   # 基準算法改了就換版號，舊快取不再使用
     b = cache.get(key)
     if b is None:
         b = compute_baseline(ticker, as_of=as_of)
@@ -99,7 +99,7 @@ def _parse_float(raw):
 
 def _baseline_view(b) -> dict:
     keys = ("route", "reason", "price", "ttm_end", "revenue", "revenue_growth", "growth_note", "gross_margin",
-            "opex_ratio", "operating_margin", "net_margin", "eps", "pe", "ps")
+            "opex_ratio", "operating_margin", "net_margin", "eps", "eps_reported", "eps_note", "pe", "ps")
     out = {k: getattr(b, k) for k in keys}
     out["ttm_end"] = b.ttm_end.isoformat() if b.ttm_end else None
     out["history"] = b.history
@@ -122,12 +122,22 @@ class ThesisValuationAPIView(APIView):
         as_of = score.summary.published_at.date()
 
         # 同一集同一檔的所有論點(同一句論點可能有好幾筆重複的驗證句，依論點文字去重)
-        rows = list(
-            ThesisScenarioExtraction.objects.using("summariesdb")
-            .filter(summary_id=score.summary_id, ticker=score.ticker, prompt_version=PROMPT_VERSION)
-            .exclude(status=ThesisScenarioExtraction.STATUS_FAILED)
-            .select_related("backtest_record").order_by("id")
-        )
+        def load_rows():
+            return list(
+                ThesisScenarioExtraction.objects.using("summariesdb")
+                .filter(summary_id=score.summary_id, ticker=score.ticker, prompt_version=PROMPT_VERSION)
+                .exclude(status=ThesisScenarioExtraction.STATUS_FAILED)
+                .select_related("backtest_record").order_by("id")
+            )
+        rows = load_rows()
+        if not rows:
+            # 新上架、批次還沒處理到的節目：第一次打開時當場拆情境並存起來，之後就讀存好的結果
+            from apps.summaries.services.thesis_scenario import ensure_thesis_extractions
+            try:
+                if ensure_thesis_extractions(score.summary_id, score.ticker):
+                    rows = load_rows()
+            except Exception:
+                rows = []
         seen, theses = set(), []
         for r in rows:
             text = r.backtest_record.thesis.strip()
@@ -171,6 +181,13 @@ class ThesisValuationAPIView(APIView):
 
         b = _cached_baseline(score.ticker, as_of)
         payload["baseline"] = _baseline_view(b)
+        # 節目給的 EPS 年份跟試算期間不符的，不能勾選(試算期間改了會重新判斷)
+        for sv in scenarios:
+            year = sv["figures"].get("year")
+            if sv["type"] == "EPS_FORECAST" and sv["figures"].get("eps") and not eps_year_fits(b, year, months):
+                sv["checkable"] = False
+                sv["year_mismatch"] = True
+                sv["effects"] = [f"{year} 年的 EPS，跟試算期間不符"]
         if not b.supported:
             payload.update(available=False, reason=b.reason)
             return Response(payload)
@@ -179,7 +196,7 @@ class ThesisValuationAPIView(APIView):
         checked = sorted({int(x) for x in checked_raw.split(",") if x.strip().isdigit()}) if checked_raw else []
         chosen_idx = [i for i in checked if i < len(current.scenarios) and scenarios[i]["checkable"]]
         chosen = [current.scenarios[i] for i in chosen_idx]
-        levers_auto, notes = apply_scenarios(b, chosen)
+        levers_auto, notes = apply_scenarios(b, chosen, months)
 
         levers = dict(levers_auto)
         overridden, override_values = [], {}
