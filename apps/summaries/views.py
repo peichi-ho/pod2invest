@@ -219,7 +219,12 @@ class SummaryListAPIView(APIView):
         mode = request.query_params.get("mode")
         ids = request.query_params.get("ids")
 
-        qs = SummaryRecord.objects.using("summariesdb").order_by("-created_at")
+        # 列表只回傳摘要卡片要用的欄位。arguments／glossary_matches／mind_map／investment_takeaways
+        # 合計約佔每列 24 KB（整列平均 28 KB），列表完全用不到，defer 之後這些欄位不會從資料庫傳過來。
+        # （要看完整內容的是 SummaryDetailAPIView／SummaryMindmapAPIView，各自取單筆。）
+        qs = (SummaryRecord.objects.using("summariesdb")
+              .defer("arguments", "glossary_matches", "mind_map", "investment_takeaways")
+              .order_by("-created_at"))
         if ids:
             # Profile 頁「收藏單集/觀看紀錄」用：拿一批 summary_id 一次查回顯示用資料
             # （標題/節目名稱/日期等），不用逐筆打 /api/summaries/<id>/。
