@@ -125,6 +125,9 @@ function escapeHtml(str) {
 function _renderMarkdown(text) {
   return text
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    // [集數標題](episode:摘要ID) → 點下去開啟該集的單集摘要（後端 ai_assistant.py 產生並驗證過 ID）
+    .replace(/\[([^\]\n]+)\]\(episode:(\d+)\)/g,
+      '<a href="#" onclick="openDeepDive($2); return false;" class="text-secondary font-semibold underline underline-offset-2 hover:opacity-80">$1</a>')
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/\*(.+?)\*/g, '<em>$1</em>')
     .replace(/^[\*\-] (.+)/gm, '<li>$1</li>')

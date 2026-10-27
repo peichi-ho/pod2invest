@@ -27,6 +27,8 @@ class PodcastHit:
     episode_number: Optional[str]
     summary: str
     score: float
+    # 對應 summaries_summaryrecord.id，前端 openDeepDive() 用它開啟單集摘要
+    summary_id: Optional[int] = None
 
 
 @dataclass
@@ -492,6 +494,7 @@ def search_podcast_transcript(
                 episode_number=None,
                 summary=c["chunk_text"],
                 score=c.get("cross_score", c.get("combined_score", c["score"])),
+                summary_id=c["record_id"],
             )
             for c in candidates
         ]
@@ -678,6 +681,77 @@ def call_gemini_text(
 # Orchestrator
 # =============================================================================
 
+# 回答裡的集數連結：[集數標題](episode:摘要ID)，前端 ai.js 的 _renderMarkdown() 會轉成可點擊的連結
+_EPISODE_LINK_RE = re.compile(r"\[([^\]\n]+)\]\(episode:(\d+)\)")
+
+
+def _known_episode_ids(tool_results: List[ToolResult], history: List[Dict[str, str]]) -> set:
+    """這一輪檢索到的集數 ID，加上先前對話裡已經出現過的（使用者追問時模型可能沿用）。"""
+    ids = set()
+    for r in tool_results:
+        if r.tool_name != "search_podcast_transcript" or not r.ok:
+            continue
+        for hit in r.data or []:
+            if hit.get("summary_id") is not None:
+                ids.add(int(hit["summary_id"]))
+    for msg in history:
+        if msg.get("role") == "assistant":
+            ids.update(int(m.group(2)) for m in _EPISODE_LINK_RE.finditer(msg.get("content") or ""))
+    return ids
+
+
+def _drop_unknown_episode_links(answer: str, known_ids: set) -> str:
+    """模型偶爾會編出不存在的 ID；不在已知集合裡的連結退回純文字，避免點下去開到錯的集數。"""
+    return _EPISODE_LINK_RE.sub(
+        lambda m: m.group(0) if int(m.group(2)) in known_ids else m.group(1), answer
+    )
+
+
+_SOURCES_RE = re.compile(r"<SOURCES>(.*?)</SOURCES>", re.S)
+_MAX_REFERENCE_EPISODES = 5
+
+
+def _split_sources(raw: str) -> tuple:
+    """把模型輸出裡的 <SOURCES>id,id</SOURCES> 拿掉，回傳 (剩下的文字, 集數 ID 清單)。"""
+    ids: List[int] = []
+    for m in _SOURCES_RE.finditer(raw or ""):
+        ids.extend(int(i) for i in re.findall(r"\d+", m.group(1)))
+    return _SOURCES_RE.sub("", raw or ""), ids
+
+
+def _with_reference_episodes(answer: str, source_ids: List[int], tool_results: List[ToolResult]) -> str:
+    """整合多集內容、正文沒有逐集點名（沒有任何集數連結）時，在結尾補上「參考集數」連結區塊。
+    標題與日期取自檢索結果而不是讓模型抄寫；模型列出的 ID 不在檢索結果裡的一律略過。"""
+    if _EPISODE_LINK_RE.search(answer):
+        return answer
+    hits: Dict[int, Dict[str, Any]] = {}
+    for r in tool_results:
+        if r.tool_name == "search_podcast_transcript" and r.ok:
+            for hit in r.data or []:
+                if hit.get("summary_id") is not None:
+                    hits.setdefault(int(hit["summary_id"]), hit)
+    lines = []
+    seen = set()
+    for sid in dict.fromkeys(source_ids):
+        hit = hits.get(sid)
+        if not hit:
+            continue
+        title = re.sub(r"\.srt$", "", hit.get("episode_title") or "", flags=re.I).strip()
+        # 標題裡的半形中括號會讓 _EPISODE_LINK_RE 切錯，換成全形
+        title = title.replace("[", "［").replace("]", "］") or f"集數 {sid}"
+        date = (hit.get("publish_date") or "")[:10]
+        # 同一集可能有好幾筆摘要紀錄（不同 ID、同標題同日期），只列第一筆
+        if (title, date) in seen:
+            continue
+        seen.add((title, date))
+        lines.append(f"- [{title}](episode:{sid})" + (f"（{date}）" if date else ""))
+        if len(lines) == _MAX_REFERENCE_EPISODES:
+            break
+    if not lines:
+        return answer
+    return answer + "\n\n**參考集數**\n" + "\n".join(lines)
+
+
 class Orchestrator:
     def __init__(
         self,
@@ -841,6 +915,13 @@ class Orchestrator:
         6. 若無法明確回答，要直接說明原因。
         7. 若使用者問的是延續前一個話題的問題，請結合對話歷史作答。
 
+        引用集數的規則（重要）：
+        - 工具結果裡每筆 podcast 內容都有 summary_id。回答中提到某一集時，請把集數名稱寫成連結：
+          [集數標題](episode:summary_id)，例如 [台積電法說會重點](episode:123)。
+        - 集數標題用 episode_title 去掉副檔名（如 .srt）後的文字；summary_id 只能用工具結果裡出現過的數字，不可自行編造。
+        - 只有回答中實際提到的集數才需要連結；沒有 summary_id 的集數用純文字，不要寫成連結。
+        - 若回答是整合多集內容寫成的、正文沒有逐集點名，不用自己寫參考集數，在結尾的 <SOURCES> 填入用到的集數即可。
+
         內容不足時的透明化規則（重要）：
         8. 若 retrieved chunks 的內容與問題明顯不相關（跑題、只沾到邊），主動說明：
            「Podcast 中目前找到的內容與這個問題的關聯性較低，以下回答僅供參考。」
@@ -857,7 +938,10 @@ class Orchestrator:
         - 不要自稱 AI 或模型
 
         輸出結尾（固定格式，不可省略）：
-        在正文結尾後，換行輸出以下區塊，提供 3 個使用者可能想繼續追問的問題：
+        在正文結尾後，換行輸出以下區塊，列出回答實際用到的 podcast 集數的 summary_id（最多 5 個，以逗號分隔）。
+        若回答沒有用到 podcast 內容，或說明了找不到相關內容，就留空：
+        <SOURCES>123,456</SOURCES>
+        接著換行輸出以下區塊，提供 3 個使用者可能想繼續追問的問題：
         <FOLLOWUP>
         1. [問題一]
         2. [問題二]
@@ -873,7 +957,11 @@ class Orchestrator:
             + json.dumps(tool_context, ensure_ascii=False, indent=2)
         )
         raw = self.final_llm(system, user, history)
-        return self._parse_followup(raw)
+        raw, source_ids = _split_sources(raw)
+        result = self._parse_followup(raw)
+        answer = _drop_unknown_episode_links(result["answer"], _known_episode_ids(tool_results, history))
+        result["answer"] = _with_reference_episodes(answer, source_ids, tool_results)
+        return result
 
     @staticmethod
     def _parse_followup(raw: str) -> Dict[str, Any]:
