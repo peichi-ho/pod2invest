@@ -1,6 +1,9 @@
 from django.test import SimpleTestCase
 
 from apps.summaries.services.backtesting import _rule_based_ticker, resolve_ticker
+from apps.summaries.services.sector_accuracy import (
+    FALLBACK_SECTOR, SECTORS, aggregate_by_sector, sector_of, ticker_sector_clause,
+)
 
 
 class RuleBasedTickerTests(SimpleTestCase):
@@ -102,3 +105,49 @@ class TpexIndexPriceTests(SimpleTestCase):
             s = price_history.get_close_history("^TWOTCI", date(2025, 6, 1), date(2025, 6, 4))
         self.assertEqual(list(s.values), [222.04, 1222.50])
         self.assertEqual(str(s.index[0].date()), "2025-06-02")
+
+
+class SectorAccuracyTests(SimpleTestCase):
+    # Rankings 產業篩選：8 大類以 TICKER_SECTOR 為準，不在對照表的歸「其他產業」
+    def test_sector_of(self):
+        self.assertEqual(sector_of("^TWII"), "台股指數")
+        self.assertEqual(sector_of("0050.TW"), "ETF")
+        self.assertEqual(sector_of("BTC-USD"), FALLBACK_SECTOR)   # 不在對照表
+        self.assertEqual(sector_of(""), FALLBACK_SECTOR)
+        self.assertEqual(sector_of(None), FALLBACK_SECTOR)
+
+    def test_dropdown_sectors_cover_every_mapped_value(self):
+        from apps.summaries.management.commands.tag_ticker_sectors import TICKER_SECTOR
+        self.assertTrue(set(TICKER_SECTOR.values()) <= set(SECTORS))
+        self.assertEqual(len(SECTORS), 8)
+
+    def test_clause_lists_members_for_normal_sector(self):
+        sql, params = ticker_sector_clause("台股指數")
+        self.assertIn("= ANY(%s)", sql)
+        self.assertNotIn("NOT", sql)
+        self.assertIn("^TWII", params[0])
+        self.assertNotIn("^GSPC", params[0])
+
+    def test_clause_for_fallback_sector_is_negation_of_the_other_seven(self):
+        sql, params = ticker_sector_clause(FALLBACK_SECTOR)
+        self.assertIn("NOT (COALESCE(b.ticker, '') = ANY(%s))", sql)
+        self.assertIn("^TWII", params[0])            # 屬於別類 -> 要排除
+        self.assertNotIn("BTC-USD", params[0])       # 不在對照表 -> 留下
+
+    def test_clause_rejects_unknown_sector(self):
+        self.assertIsNone(ticker_sector_clause("半導體"))   # 資料庫細分類的名稱不是 Rankings 的類別
+        self.assertIsNone(ticker_sector_clause(""))
+
+    def test_aggregate_groups_by_sector_and_sorts(self):
+        rows = [
+            ("A", "^TWII", "pass"), ("A", "^TWII", "fail"),
+            ("B", "^TWII", "pass"), ("B", "^TWII", "pass"), ("B", "^TWII", "pass"),
+            ("A", "BTC-USD", "pass"),                      # 不在對照表 -> 其他產業
+        ]
+        out = aggregate_by_sector(rows)
+        self.assertEqual(set(out), set(SECTORS))
+        idx = out["台股指數"]
+        self.assertEqual([r["podcaster"] for r in idx], ["B", "A"])        # 100% 在 50% 前面
+        self.assertEqual(idx[1], {"podcaster": "A", "pass": 1, "fail": 1, "total": 2, "accuracy": 50})
+        self.assertEqual(out["其他產業"][0]["podcaster"], "A")
+        self.assertEqual(out["ETF"], [])
