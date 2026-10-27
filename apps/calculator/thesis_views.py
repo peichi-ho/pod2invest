@@ -27,10 +27,11 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.calculator.services.thesis_valuation import (
-    apply_scenarios, compute_baseline, eps_year_fits, project, scenario_levers, waterfall,
+    DISPLAY_ONLY_TYPES, apply_scenarios, calibration, compute_baseline, default_levers, eps_year_fits, project,
+    scenario_levers, waterfall,
 )
+from apps.summaries.services.thesis_scenario import PROMPT_VERSION  # 正式使用的情境版本
 
-PROMPT_VERSION = "v5"
 BASELINE_CACHE_SECONDS = 6 * 3600     # 基準數字要打 yfinance，同一檔同一天的結果快取起來
 DEFAULT_HORIZON_MONTHS = 12            # 論點沒有回測期間時的試算期間
 HORIZON_RANGE = (1, 36)
@@ -56,19 +57,71 @@ def _scenario_view(s: dict, idx: int) -> dict:
     figures = {k: v for k, v in (s.get("figures") or {}).items() if v is not None}
     effects = [f"{LEVER_LABELS[k]}{'↑' if v > 0 else '↓'}" for k, v in scenario_levers(s).items()]
     if t == "EPS_FORECAST":
-        effects = ["直接指定 EPS"] if figures.get("eps") else ["EPS 上修（沒有數字，不影響試算）"]
+        if figures.get("eps"):
+            effects = ["直接指定 EPS"]
+        elif figures.get("eps_partial"):
+            effects = ["單季或半年的 EPS，不能當成全年 EPS，不影響試算"]
+        else:
+            effects = ["EPS 上修（沒有數字，不影響試算）"]
+    if t in DISPLAY_ONLY_TYPES:
+        effects = ["不自動調整本益比，可以在下方手動調整本益比"]
     # 技術面、目標價只顯示不試算；沒有數字的 EPS 預估也沒東西可以算
-    checkable = t not in ("TECHNICAL_FLOW", "ANALYST_TARGET") and not (t == "EPS_FORECAST" and not figures.get("eps"))
+    checkable = _is_checkable(s)
     return {
         "idx": idx, "type": t, "label": TYPE_LABELS.get(t, t), "stance": s.get("stance"),
         # 對這家公司是利多(up)還是利空(down)；畫面依這個分成「看多情境／看空情境」
         "effect": s.get("effect") or "",
         "chain": s.get("chain") or [], "quote": s.get("quote", ""), "figures": figures,
         "effects": effects, "checkable": checkable,
-        "provisional": t in ("FINANCIAL_RISK", "REGULATORY_RISK", "MACRO_EASING", "MACRO_TIGHTENING"),
+        "provisional": False,   # 2026-10-28 起改成卡片上顯示 calibration(依回測／資料不足)
         "source": s.get("source"),                   # 目標價位：analyst(法人) / podcast(節目觀點)
         "figures_source": s.get("figures_source"),   # thesis = 數字取自論點摘要，不是原文直接講的
+        "duration": s.get("duration") or "",         # short = 單月、單季或一次性的變化(v6 起由 AI 標)
     }
+
+
+def _calibration_text(s: dict) -> str:
+    """調幅的依據：依回測校準(附樣本數)，或資料不足用一般比例。帶數字的 EPS／本益比直接用節目的數字，不用寫。"""
+    t, figures = s.get("type"), s.get("figures") or {}
+    if (t == "EPS_FORECAST" and figures.get("eps")) or (t in ("RERATING_UP", "RERATING_DOWN") and figures.get("pe")):
+        return ""
+    if t == "FINANCIAL_RISK":
+        return "幅度依回測（樣本 25 句，暫定）"
+    ns = [calibration(t, lever)[1] for lever in scenario_levers(s)]
+    if ns and all(ns):
+        return f"幅度依回測校準（樣本 {min(ns)} 句）"
+    if ns and any(ns):
+        return "幅度部分依回測校準、部分資料不足"
+    return "回測資料不足，幅度用一般比例" if ns else ""
+
+
+def _is_checkable(s: dict) -> bool:
+    """能不能勾選試算：技術面、目標價、總經、法規風險只顯示；沒有數字(或只有單季數字)的 EPS 預估也不能勾。"""
+    t, figures = s.get("type"), s.get("figures") or {}
+    return t not in ("TECHNICAL_FLOW", "ANALYST_TARGET", *DISPLAY_ONLY_TYPES) \
+        and not (t == "EPS_FORECAST" and not figures.get("eps"))
+
+
+_ADJUST_PP = {"revenue_growth": "營收成長", "gross_margin": "毛利率", "opex_ratio": "營業費用率",
+              "operating_margin": "營業利益率", "net_margin": "淨利率"}
+
+
+def _adjust_text(base: dict, levers: dict) -> list:
+    """單獨勾這個情境時，參數從現值調了多少(給情境卡片顯示「勾了會調多少」)。"""
+    out = []
+    for k, name in _ADJUST_PP.items():
+        a, c = base.get(k), levers.get(k)
+        if a is not None and c is not None and abs(c - a) > 1e-9:
+            out.append(f"{name} {(c - a) * 100:+.1f} 個百分點")
+    for k, name in (("pe", "本益比"), ("ps", "股價營收比")):
+        a, c = base.get(k), levers.get(k)
+        if a and c is not None and abs(c - a) > 1e-9:
+            out.append(f"{name} {a:.1f}→{c:.1f} 倍（{(c / a - 1) * 100:+.0f}%）")
+    if levers.get("eps_override"):
+        out.append(f"EPS 直接指定為 {levers['eps_override']:g}")
+    if abs((levers.get("eps_multiplier") or 1.0) - 1.0) > 1e-9:
+        out.append(f"EPS × {levers['eps_multiplier']:.2f}")
+    return out
 
 
 def _cached_baseline(ticker, as_of):
@@ -148,7 +201,9 @@ class ThesisValuationAPIView(APIView):
         payload = {
             "ticker": score.ticker, "asset_name": score.asset_name, "as_of": as_of.isoformat(),
             "theses": [{"id": r.id, "thesis": r.backtest_record.thesis, "direction": r.backtest_record.direction,
-                        "timeframe": r.backtest_record.timeframe_raw, "status": r.status} for r in theses],
+                        "timeframe": r.backtest_record.timeframe_raw, "status": r.status,
+                        # 可以勾選試算的情境數；0 代表只能看「延續目前成長」或手動調整
+                        "n_checkable": sum(1 for s in r.scenarios if _is_checkable(s))} for r in theses],
         }
         if not theses:
             payload.update(available=False, reason="這一集對這檔股票的論點還沒有拆解成情境")
@@ -191,6 +246,12 @@ class ThesisValuationAPIView(APIView):
         if not b.supported:
             payload.update(available=False, reason=b.reason)
             return Response(payload)
+        # 每個可勾選的情境：單獨勾它時會調多少(依這家公司的歷史波動幅度與試算期間)
+        base_levers = default_levers(b)
+        for sv, s in zip(scenarios, current.scenarios):
+            if sv["checkable"]:
+                sv["adjust"] = _adjust_text(base_levers, apply_scenarios(b, [s], months)[0])
+                sv["calibration"] = _calibration_text(s)
 
         checked_raw = request.query_params.get("checked", "").strip()
         checked = sorted({int(x) for x in checked_raw.split(",") if x.strip().isdigit()}) if checked_raw else []

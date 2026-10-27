@@ -9,10 +9,11 @@ from google import genai
 from google.genai import types
 
 
-def make_client(api_key: str = "") -> genai.Client:
+def make_client(api_key: str = "", location: Optional[str] = None) -> genai.Client:
+    """location：Vertex 區域，不給就用 VERTEX_LOCATION(預設 us-central1)；gemini-3.1-pro-preview 只在 global。"""
     import os
     project = os.getenv("VERTEX_PROJECT_ID", "").strip()
-    location = os.getenv("VERTEX_LOCATION", "us-central1").strip()
+    location = (location or os.getenv("VERTEX_LOCATION", "us-central1")).strip()
 
     # 實測發現偶爾會遇到某次API呼叫卡住沒有回應也沒有拋出例外(不會觸發上面
     # gemini_generate_with_retry的重試邏輯，因為根本沒有例外可以catch)，曾經

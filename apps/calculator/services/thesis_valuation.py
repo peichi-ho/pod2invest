@@ -54,11 +54,55 @@ THIN_MARGIN = 0.03
 PE_CLAMP = (3.0, 150.0)         # 本益比合理範圍，超出的歷史點視為資料異常(例如EPS趨近0)
 PS_CLAMP = (0.1, 100.0)
 
-# 還沒有歷史分布可以校準的情境：暫定幅度，結果會標 provisional，給老師確認後再調
+# 只顯示、不自動試算的情境(2026-10-28 決定)：總經、法規風險對本益比的影響，我們自己的資料只有幾筆、
+# 外部研究也是大盤或消息當天的反應，沒有適合的預設幅度；畫面上列出情境，讓使用者自己拉本益比滑桿。
+DISPLAY_ONLY_TYPES = {"MACRO_EASING", "MACRO_TIGHTENING", "REGULATORY_RISK"}
+
+# 財務風險：EPS 打折。v6 回測(2026-10-28)有財務風險情境的論點，一年後 EPS 成長中位數 11.5%、
+# 全部論點 19.5%，(1.115 / 1.195) ≈ 0.93；樣本只有 25 句，畫面標「幅度暫定」。
 PROVISIONAL = {
-    "FINANCIAL_RISK": -0.05,    # EPS × (1 − 5%)
-    "MACRO": 0.5,               # 降息/升息：本益比往歷史 P75/P25 移動一半的距離
+    "FINANCIAL_RISK": -0.07,    # EPS × (1 − 7%)
 }
+
+# 調幅校準(2026-10-28)：勾一個情境的調幅 = 這家公司的一般波動幅度(_step) × 這一類情境的校準比例。
+# 校準比例 = v6 回測「有這類情境的論點，一年後比全部論點(對照組)多出的變化」÷「回測樣本裡這類情境調幅的中位數」，
+# 例：需求增加，營收年增率實際只多 0.5 個百分點，原本卻調 10 個百分點 → 0.05。整體平均跟回測一致，
+# 波動大的公司仍然調得比較多。見 scripts/backtest_thesis_scenarios.py 與 out/thesis_backtest_v6.log。
+# 只採用樣本 20 句以上、而且方向跟類別一致的；其他(方向相反、樣本太少)用可靠類別比例的中位數 FALLBACK_FACTOR。
+# 限制：只有 2025-04 之後一段 AI 多頭行情；估值偏低實際 +23%、原本調 +9%(2.5 倍)，其中有一部分是多頭時
+# 本益比整體擴張，保守上限 1.6 倍。
+CALIBRATION = {   # (情境, 參數): (比例, 回測樣本句數)
+    ("DEMAND_UP", "revenue_growth"):    (0.05, 340),   # 實際 +0.5 / 原本 +10.0 個百分點
+    ("NEW_BUSINESS", "revenue_growth"): (0.24, 180),   # +2.7 / +11.2
+    ("PRICE_UP", "revenue_growth"):     (0.38, 42),    # +4.0 / +10.4
+    ("DEMAND_DOWN", "revenue_growth"):  (0.36, 124),   # −2.9 / −8.1
+    ("PRICE_UP", "gross_margin"):       (1.34, 42),    # +3.9 / +2.9
+    ("MIX_UPGRADE", "gross_margin"):    (0.60, 44),    # +1.2 / +2.0
+    ("COMPETITION", "gross_margin"):    (0.13, 58),    # −0.3 / −2.4
+    ("RERATING_UP", "pe"):              (1.60, 35),    # +23% / +9%，保守上限 1.6
+    ("RERATING_DOWN", "pe"):            (1.20, 23),    # −12% / −10%
+}
+FALLBACK_FACTOR = 0.3   # 上面可靠比例的中位數；擴產、成本上升、競爭加劇的營收等方向相反或樣本太少的類別用這個
+# 校準後的最小調幅：需求增加的比例只有 0.05，很多公司勾了只調 0.3 個百分點，瀑布圖幾乎是 0、使用者會以為沒作用。
+# 時間切分驗證(scripts/calibration_split.py)：加這個下限後半段誤差 6.9 → 7.2 個百分點，代價很小(原本 18.4)。
+CALIBRATED_MIN = {"revenue_growth": 0.01, "gross_margin": 0.005, "operating_margin": 0.005,
+                  "net_margin": 0.005, "opex_ratio": 0.003}
+
+
+def _calibrated_step(b: "Baseline", lever: str, direction: int, factor: float) -> float:
+    """一般波動幅度 × 校準比例，再套最小調幅(方向不變)。"""
+    v = _step(b, lever, direction) * factor
+    floor = CALIBRATED_MIN.get(lever, 0.0)
+    return v if abs(v) >= floor else (floor if direction > 0 else -floor)
+
+
+def calibration(scenario_type: str, lever: str) -> tuple[float, Optional[int]]:
+    """(校準比例, 回測樣本句數)；沒有可靠回測數字的回傳 (FALLBACK_FACTOR, None)。"""
+    if lever in ("operating_margin", "net_margin"):   # 沒有毛利資料的公司，毛利率的情境改調營業利益率/淨利率
+        lever = "gross_margin"
+    if lever == "ps":
+        lever = "pe"
+    return CALIBRATION.get((scenario_type, lever), (FALLBACK_FACTOR, None))
 
 # 情境類型 → 影響哪個參數、往哪個方向(跟 thesis_scenario.SCENARIO_TYPES 的 levers 一致)
 LEVERS = {
@@ -426,17 +470,22 @@ def apply_scenarios(b: Baseline, scenarios: list, months: int = 12) -> tuple[dic
     """
     勾選的情境 → 調整後的參數。回傳(參數, 說明清單)。
 
-    同一個參數、同一個方向的情境不疊加(勾了「需求增加」又勾「新產品」，營收成長只移動一次)，
+    調幅 = 這家公司的一般波動幅度(_step) × 這一類情境的校準比例(calibration)。
+    同一個參數、同一個方向的情境不疊加(勾了「需求增加」又勾「新產品」，營收成長只移動一次，用比例較大的那個)，
     方向相反的會互相抵銷一部分。帶數字的情境(EPS 預估、本益比)直接用節目給的數字。
     scenarios 的元素是 thesis_scenario 存下來的情境 dict(至少有 type，可能有 figures)。
     """
     levers = default_levers(b)
     notes = []
-    moved = set()          # (參數, 方向)，同方向只動一次
+    # (參數, 方向) → 最大的校準比例：同方向只動一次，勾了好幾個同方向的情境時取比例最大的那個(跟勾選順序無關)
+    moves = {}
+    pe_from_figures = set()   # 本益比直接用了節目給的數字的方向
 
     for s in scenarios:
         t = s.get("type")
         figures = s.get("figures") or {}
+        if t in DISPLAY_ONLY_TYPES:
+            continue
         if t == "EPS_FORECAST" and figures.get("eps"):
             if not eps_year_fits(b, figures.get("year"), months):
                 notes.append(f"節目給的 EPS {figures['eps']}（{figures.get('year')} 年）跟試算期間不符，沒有直接套用")
@@ -446,45 +495,47 @@ def apply_scenarios(b: Baseline, scenarios: list, months: int = 12) -> tuple[dic
             continue
         if t in ("RERATING_UP", "RERATING_DOWN") and figures.get("pe"):
             levers["pe"] = float(figures["pe"])
-            moved.add(("pe", +1 if t == "RERATING_UP" else -1))
+            pe_from_figures.add(+1 if t == "RERATING_UP" else -1)
             notes.append(f"本益比使用節目給的 {figures['pe']:g} 倍")
             continue
-
         for lever, direction in scenario_levers(s).items():
-            if (lever, direction) in moved:
+            factor = calibration(t, lever)[0]
+            if moves.get((lever, direction), (-1, ""))[0] < factor:
+                moves[(lever, direction)] = (factor, t)
+
+    for (lever, direction), (factor, t) in moves.items():
+        if lever == "eps_multiplier":
+            levers["eps_multiplier"] *= 1 + PROVISIONAL["FINANCIAL_RISK"]
+            notes.append("財務風險：EPS 打 93 折（依回測，樣本 25 句，暫定）")
+        elif lever == "pe":
+            if direction in pe_from_figures:
                 continue
-            moved.add((lever, direction))
-            if lever == "eps_multiplier":
-                levers["eps_multiplier"] *= 1 + PROVISIONAL["FINANCIAL_RISK"]
-                notes.append("財務風險：EPS 先暫定打 95 折（尚未校準）")
-            elif lever == "pe":
-                levers.update(_pe_move(b, levers, direction, t))
-                notes.append(_pe_note(b, t, direction))
-            elif lever == "revenue_growth":
-                levers[lever] += _step(b, lever, direction)
-            elif lever == "gross_margin":
-                if b.route == "no_gross":
-                    # 沒有毛利資料：毛利的變化直接反映在營業利益率上
-                    levers["operating_margin"] += _step(b, "operating_margin", direction)
-                elif b.route == "net":
-                    levers["net_margin"] += _step(b, "net_margin", direction)
-                elif levers["gross_margin"] is not None:
-                    levers["gross_margin"] += _step(b, lever, direction)
-            elif lever == "opex_ratio":
-                if b.route == "full" and levers["opex_ratio"] is not None:
-                    levers["opex_ratio"] += _step(b, lever, direction)
-                elif b.route == "no_gross":
-                    levers["operating_margin"] -= _step(b, "operating_margin", direction)
-                elif b.route == "net":
-                    levers["net_margin"] -= _step(b, "net_margin", direction)
+            levers.update(_pe_move(b, levers, direction, factor))
+            notes.append(_pe_note(b, direction))
+        elif lever == "revenue_growth":
+            levers[lever] += _calibrated_step(b, lever, direction, factor)
+        elif lever == "gross_margin":
+            if b.route == "no_gross":
+                # 沒有毛利資料：毛利的變化直接反映在營業利益率上
+                levers["operating_margin"] += _calibrated_step(b, "operating_margin", direction, factor)
+            elif b.route == "net":
+                levers["net_margin"] += _calibrated_step(b, "net_margin", direction, factor)
+            elif levers["gross_margin"] is not None:
+                levers["gross_margin"] += _calibrated_step(b, lever, direction, factor)
+        elif lever == "opex_ratio":
+            if b.route == "full" and levers["opex_ratio"] is not None:
+                levers["opex_ratio"] += _calibrated_step(b, lever, direction, factor)
+            elif b.route == "no_gross":
+                levers["operating_margin"] -= _calibrated_step(b, "operating_margin", direction, factor)
+            elif b.route == "net":
+                levers["net_margin"] -= _calibrated_step(b, "net_margin", direction, factor)
     return levers, notes
 
 
-def _pe_move(b: Baseline, levers: dict, direction: int, scenario_type: str) -> dict:
+def _pe_move(b: Baseline, levers: dict, direction: int, factor: float = 1.0) -> dict:
     """
     本益比(虧損公司則是 P/S)跟其他參數一樣以現值為基準：現值加減這家公司本益比一般的波動幅度
-    (P75−P50 或 P50−P25)，最少現值的 5%、最多 25%；沒有歷史時固定調 10%。
-    總經、法規情境只移動一半(暫定)。
+    (P75−P50 或 P50−P25)，最少現值的 5%、最多 25%；沒有歷史時固定調 10%。再乘上校準比例(calibration)。
     (之前是往歷史中位數/P75 移一個級距，現值遠低於歷史時會跳太多：Netflix 21.6 → 39.5 倍。)
     """
     key = "ps" if b.route == "ps" else "pe"
@@ -497,18 +548,12 @@ def _pe_move(b: Baseline, levers: dict, direction: int, scenario_type: str) -> d
         step = min(max(gap, cur * MULTIPLE_STEP[0]), cur * MULTIPLE_STEP[1])
     else:
         step = cur * 0.10
-    share = PROVISIONAL["MACRO"] if scenario_type.startswith("MACRO") or scenario_type == "REGULATORY_RISK" else 1.0
-    return {key: cur + direction * step * share}
+    return {key: cur + direction * step * factor}
 
 
-def _pe_note(b: Baseline, scenario_type: str, direction: int) -> str:
+def _pe_note(b: Baseline, direction: int) -> str:
     name = "股價營收比" if b.route == "ps" else "本益比"
-    side = "調高" if direction > 0 else "調低"
-    if scenario_type.startswith("MACRO"):
-        return f"總經情境：{name}從現值{side}半個一般波動幅度（暫定）"
-    if scenario_type == "REGULATORY_RISK":
-        return f"法規風險：{name}從現值{side}半個一般波動幅度（暫定）"
-    return f"{name}從現值{side}一個一般波動幅度"
+    return f"{name}從現值{'調高' if direction > 0 else '調低'}（一般波動幅度 × 回測校準比例）"
 
 
 @dataclass
@@ -600,10 +645,12 @@ def project_scenarios(b: Baseline, scenarios: list, months: int = 12) -> Optiona
 def waterfall(b: Baseline, scenarios: list, labels: list, overrides: Optional[dict] = None,
               months: int = 12) -> Optional[list]:
     """
-    瀑布圖：從發布日股價開始，一步一步加上去，看每個情境各把目標價推高或拉低多少。
+    瀑布圖：從發布日股價開始，看每個情境各把目標價推高或拉低多少。
       1. 延續目前成長：什麼都不勾的目標價 − 發布日股價(營收照目前年增率、其他維持現值)
-      2. 依勾選順序逐一加入情境：加入後的目標價 − 加入前的目標價
-         (同方向的情境不疊加，所以後面重複的情境會是 0，畫面會說明)
+      2. 每個勾選的情境：用「所有加入順序的平均貢獻」(Shapley 值)。情境之間會互相放大
+         (營收 +10%、利潤率 +10% → 獲利 +21%，多出來的 1% 算給誰都說得通)，依序逐步加入的話
+         每一步的金額會隨順序改變；平均所有順序後，結果跟勾選順序無關。同方向不疊加的情境
+         (例如需求增加＋新產品)會平分那一次調整的貢獻。
       3. 手動調整：套用使用者拉過的滑桿/指定的 EPS 後的差額
     每一步的金額加總 = 最終目標價 − 發布日股價。任何一步算不出目標價(例如 EPS 變負)就回傳 None。
 
@@ -620,22 +667,82 @@ def waterfall(b: Baseline, scenarios: list, labels: list, overrides: Optional[di
         p = project(b, levers, notes, months)
         return p.target_price if p else None
 
-    steps = []
-    prev = b.price
     base = target_of([])
     if base is None:
         return None
-    steps.append({"label": "延續目前成長", "kind": "trend", "delta": base - prev, "value": base})
+    full = target_of(scenarios)
+    if full is None:
+        return None
+    contrib = _shapley(scenarios, target_of)
+    if contrib is None:
+        return None
+
+    steps = [{"label": "延續目前成長", "kind": "trend", "delta": base - b.price, "value": base}]
     prev = base
-    for k, label in enumerate(labels, start=1):
-        cur = target_of(scenarios[:k])
-        if cur is None:
-            return None
-        steps.append({"label": label, "kind": "scenario", "delta": cur - prev, "value": cur})
-        prev = cur
+    for label, delta in zip(labels, contrib):
+        prev += delta
+        steps.append({"label": label, "kind": "scenario", "delta": delta, "value": prev})
+    steps[-1]["value"] = full if scenarios else base      # 消掉浮點誤差，最後一步剛好等於目標價
+    prev = full
     if overrides:
         cur = target_of(scenarios, overrides)
         if cur is None:
             return None
         steps.append({"label": "手動調整", "kind": "manual", "delta": cur - prev, "value": cur})
     return steps
+
+
+SHAPLEY_EXACT_MAX = 10      # 情境數不超過這個就算全部組合(2^n 次試算)，再多改用隨機抽樣順序
+SHAPLEY_SAMPLES = 300
+
+
+def _shapley(scenarios: list, value) -> Optional[list]:
+    """
+    每個情境的 Shapley 值：所有加入順序下「加入它之前 → 之後」目標價差額的平均。
+    value(子集合清單) 回傳目標價；子集合維持原本勾選順序(同一組只取第一個 EPS/本益比數字的規則才一致)。
+    """
+    import math
+    import random
+    from itertools import combinations
+
+    n = len(scenarios)
+    if n == 0:
+        return []
+    cache = {}
+
+    def v(mask: tuple):
+        if mask not in cache:
+            cache[mask] = value([scenarios[i] for i in mask])
+        return cache[mask]
+
+    out = [0.0] * n
+    if n <= SHAPLEY_EXACT_MAX:
+        for i in range(n):
+            others = [j for j in range(n) if j != i]
+            for k in range(n):
+                weight = math.factorial(k) * math.factorial(n - k - 1) / math.factorial(n)
+                for subset in combinations(others, k):
+                    without = tuple(sorted(subset))
+                    with_i = tuple(sorted(subset + (i,)))
+                    a, c = v(without), v(with_i)
+                    if a is None or c is None:
+                        return None
+                    out[i] += weight * (c - a)
+        return out
+
+    rng = random.Random(0)      # 固定種子，同一組條件每次結果一樣
+    for _ in range(SHAPLEY_SAMPLES):
+        order = list(range(n))
+        rng.shuffle(order)
+        cur, prev = [], v(())
+        for i in order:
+            cur.append(i)
+            val = v(tuple(sorted(cur)))
+            if val is None or prev is None:
+                return None
+            out[i] += (val - prev) / SHAPLEY_SAMPLES
+            prev = val
+    # 抽樣有誤差：等比例修正，讓加總剛好等於全部勾選的差額
+    total = v(tuple(range(n))) - v(())
+    s = sum(out)
+    return [x * total / s for x in out] if s else out

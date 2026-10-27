@@ -1,6 +1,6 @@
 // ── 論點情境試算(計算機頁面的第二個模擬器) ─────────────────────────────────
 // 上方選集 → 切到「論點情境試算」→ ① 勾選情境(可以都不勾) → ② 試算期間與參數(選填) → ③ 按「開始試算」
-// → 後端推算試算期間結束時的 EPS 與目標價。結果只在按下「開始試算」後顯示，之後再改條件會提示重新試算，
+// → 後端推算試算期間結束時的 EPS 與試算價格(依情境推算，不是預測，畫面不用「目標價」以免誤會)。結果只在按下「開始試算」後顯示，之後再改條件會提示重新試算，
 // 避免使用者一打開就看到一堆數字、不知道是怎麼來的(2026-10-26 調整)。
 // 跟「股價模擬」(歷史股價拔靴模擬)共用上方的選標的、選集，但結果分開顯示、不互相比較——
 // 兩者計算方式完全不同，拔靴模擬也不是有公信力的基準(2026-10-26 起拿掉「落在第幾百分位」)。
@@ -47,12 +47,33 @@ function showCalcModule(m) {
     btn.classList.toggle('text-white', on);
     btn.classList.toggle('text-on-surface-variant', !on);
   });
+  _thesisFilterEpisodes(m === 'thesis');
   if (m === 'thesis' && _thesisPendingScore && String(_thesis.scoreId) !== String(_thesisPendingScore)) {
     loadThesisValuation(_thesisPendingScore);
   }
 }
 
+function _thesisFilterEpisodes(on) {
+  // 論點情境試算模式時，上方選集清單只列「有可以勾選試算的情境」的集數，避免選到空的；
+  // 切回股價模擬就恢復完整清單。深連結補進來、還不知道有沒有情境的集(沒有 has_calc 欄位)照樣列出。
+  const sel = document.getElementById('in-episode');
+  if (!sel || typeof episodes === 'undefined' || !episodes.length) return;
+  const list = on ? episodes.filter(e => e.has_calc !== false) : episodes;
+  const current = sel.value;
+  sel.innerHTML = list.map(e =>
+    `<option value="${e.score_id}">${e.published_at || '未知日期'}　${e.asset_name}(${e.ticker})　${e.podcaster || ''}</option>`
+  ).join('');
+  if (!list.length) return;
+  if (list.some(e => String(e.score_id) === String(current))) {
+    sel.value = current;
+  } else {
+    sel.value = list[0].score_id;
+    if (typeof onEpisodeChange === 'function') onEpisodeChange();
+  }
+}
+
 // calculator.js 的 setMode() 會呼叫：手動輸入時停用論點情境試算，並切回股價模擬
+
 function onCalcModeChanged(m) {
   const btn = document.getElementById('calc-mod-btn-thesis');
   if (!btn) return;
@@ -79,6 +100,12 @@ function loadThesisValuation(scoreId) {
   _thesis.shown = null;
   _thesis.stale = false;
   _thesisSetStatus('載入論點與財報基準中…');
+  // 新上架、還沒拆過情境的節目，後端會當場用 AI 拆(約 20～40 秒)，等太久時說明原因
+  clearTimeout(_thesis.slowTimer);
+  _thesis.slowTimer = setTimeout(() => {
+    if (String(_thesis.scoreId) === String(scoreId) && !_thesis.data)
+      _thesisSetStatus('這一集還沒拆解過情境，正在用 AI 拆解（約 20～40 秒，之後再打開就會直接顯示）…');
+  }, 4000);
   document.getElementById('thesis-body').classList.add('hidden');
   document.getElementById('thesis-text').classList.add('hidden');
   document.getElementById('thesis-results').classList.add('hidden');
@@ -120,24 +147,6 @@ function thesisToggle(idx, on) {
 // 看空的論點裡 EPS↓ 會被歸在「支持」，容易誤以為是利多)
 function _thesisSide(s) {
   return s.effect === 'down' ? 'down' : 'up';
-}
-
-function thesisPreset(kind) {
-  const scenarios = (_thesis.data && _thesis.data.scenarios) || [];
-  _thesis.checked = new Set();
-  const used = new Set();
-  if (kind !== 'base') {
-    scenarios.forEach(s => {
-      if (!s.checkable || _thesisSide(s) !== kind) return;
-      const group = _thesisExclusiveGroup(s);
-      if (group && used.has(group)) return;   // 同一組只取第一個(節目最先提到的數字)
-      if (group) used.add(group);
-      _thesis.checked.add(s.idx);
-    });
-  }
-  _thesis.overrides = {};
-  _thesisConditionsChanged();
-  _thesisFetch(0);
 }
 
 function thesisResetOverrides() {
@@ -207,6 +216,7 @@ function _thesisFetch(delay, immediate) {
       const resp = await fetch(THESIS_API_URL + '?' + params.toString());
       const data = await resp.json();
       if (mySeq !== _thesis.seq) return null;
+      clearTimeout(_thesis.slowTimer);
       if (!resp.ok) { _thesisSetStatus('載入失敗：' + (data.error || resp.statusText)); return null; }
       _thesis.data = data;
       if (!_thesis.thesisId && data.thesis_id) _thesis.thesisId = data.thesis_id;
@@ -227,6 +237,119 @@ function _thesisSetStatus(text) {
   const el = document.getElementById('thesis-status');
   el.textContent = text;
   el.classList.toggle('hidden', !text);
+}
+
+// ── 說明泡泡：標題旁的 i 圖示，滑過去(手機點一下)顯示說明，畫面上不放一大段小字(做法同個股頁 assets.js) ──
+const _THESIS_NOTES = {
+  intro: () => ({
+    title: '論點情境試算',
+    body: `把節目的論點拆成財務情境，勾選你相信的情境，推算試算期間結束時的 EPS 與試算價格。以節目發布日${_thesis.asOf ? '（' + _thesis.asOf + '）' : ''}的股價、與當時已公告的財報為基準。試算價格是依勾選的情境推算，不是預測。`,
+  }),
+  choose: () => ({
+    title: '選擇情境',
+    body: '勾選你相信會發生的情境，可以都不勾（代表公司延續目前的成長）。',
+    points: [
+      ['看多情境', '對公司是利多的變化。', 'up'],
+      ['看空情境', '假設節目提到的風險發生，不代表一定會發生。', 'down'],
+    ],
+    footer: '每個情境下面的數字，是單獨勾它時參數會調多少。',
+  }),
+  bear: () => ({ title: '看空情境', body: '節目提到的風險或反方因素。勾選代表「假設這個風險發生」，不代表節目認為一定會發生。' }),
+  info: () => ({
+    title: '節目還提到',
+    body: '這些內容只供參考，不參與試算：技術面與籌碼面、節目或法人提到的價位、總經（利率、資金）、法規風險、沒有數字或只有單季數字的 EPS 預估。',
+    footer: '總經、法規風險如果你覺得會影響估值，可以在「手動調整參數」自己調本益比。',
+  }),
+  months: () => ({
+    title: '試算期間',
+    body: `推算幾個月後的 EPS 與試算價格。${_thesis.monthsNote || '預設跟這句論點的回測期間一樣。'}`,
+    footer: '可以改成 1～36 個月；不滿一年時，營收依期間換算、利潤率的變化依比例反映。',
+  }),
+  levers: () => ({
+    title: '手動調整參數',
+    body: '不調整就依勾選的情境自動設定。滑桿下方的「依情境」是情境算出的預設值；改了之後可以按「回到情境預設值」。直接指定 EPS 會跳過營收與利潤率，直接用 EPS × 本益比。',
+  }),
+  assumptions: () => ({
+    title: '計算方式與假設',
+    body: '試算價格 = 預估 EPS × 本益比；預估 EPS = 近四季 EPS × 預估獲利 ÷ 近四季獲利。',
+    points: [
+      ['都不勾', '營收照目前的年增率成長，毛利率、費用率、本益比維持現值。', ''],
+      ['勾一個情境', '只調它影響的數字：這家公司過去 5 年的一般波動幅度 × 這類情境的回測校準比例（回測不足的類別用一般比例），最少營收 1 個百分點、利潤率 0.5 個百分點。這是參考值，不是這個事件一定會造成的效果。', ''],
+      ['同一個方向不疊加', '例如同時勾需求增加和新產品，營收只調一次；方向相反的會互相抵銷。', ''],
+      ['本益比預設不變', '除非勾了估值類的情境；總經、法規只顯示，可以自己調本益比。', ''],
+      ['試算期間不滿一年', '營收依期間換算，利潤率的變化依比例反映，本益比不縮放。', ''],
+      ['短期情境', '單月、單季或一次性的變化，但仍以一整年的幅度調整，可能偏重。', ''],
+      ['財務風險', 'EPS 打 93 折，依回測（樣本 25 句），屬於暫定。', ''],
+    ],
+    footer: '回測只涵蓋 2025 年起的一段多頭行情；看多、看空依情境對公司的整體效果分組。',
+  }),
+  waterfall: () => ({
+    title: '試算價格怎麼來的',
+    body: '從發布日股價開始，先加上「延續目前成長」，再加上每個勾選的情境、手動調整，最後就是試算價格。',
+    footer: '每個情境的金額是所有加入順序的平均貢獻：情境之間會互相放大，平均之後跟勾選順序無關。',
+  }),
+  baseline: () => ({
+    title: '試算基準',
+    body: '節目發布日當時，已經公告的近四季財報與股價。所有情境都從這些數字往上或往下調整。',
+  }),
+  short: () => ({ title: '短期情境', body: '節目講的是單月、單季或一次性的變化，但試算仍以一整年的幅度調整，可能偏重。' }),
+};
+
+function _tInfo(key, cls = '') {
+  return `<span class="material-symbols-outlined text-base leading-none text-outline hover:text-secondary cursor-help align-middle ${cls}"
+    role="button" tabindex="0" aria-label="說明" onmouseenter="showThesisNote(event, '${key}')" onmouseleave="hideThesisNote()"
+    onclick="event.preventDefault(); event.stopPropagation(); showThesisNote(event, '${key}', true)">info</span>`;
+}
+
+function _thesisMountInfo(root) {
+  (root || document).querySelectorAll('[data-thesis-info]').forEach(el => {
+    if (el.dataset.mounted) return;
+    el.dataset.mounted = '1';
+    el.outerHTML = _tInfo(el.dataset.thesisInfo);
+  });
+}
+
+function _thesisNoteHtml(key) {
+  const n = _THESIS_NOTES[key] ? _THESIS_NOTES[key]() : null;
+  if (!n) return '';
+  const tones = { up: 'text-[#ba1a1a] bg-[#ba1a1a]/10', down: 'text-[#1e8e3e] bg-[#1e8e3e]/10' };
+  const points = n.points ? `<ul class="mt-2 space-y-1.5">${n.points.map(([k, v, tone]) =>
+    `<li class="rounded-md px-2.5 py-1.5 ${tones[tone] ? tones[tone].split(' ')[1] : 'bg-surface-container'}"><div class="font-bold ${tones[tone] ? tones[tone].split(' ')[0] : 'text-tertiary-container'}">${k}</div><div>${v}</div></li>`).join('')}</ul>` : '';
+  const footer = n.footer ? `<div class="mt-2 flex items-start gap-1 text-xs text-outline"><span class="material-symbols-outlined text-sm leading-none">lightbulb</span><span>${n.footer}</span></div>` : '';
+  return `<div class="flex items-center gap-1 font-bold text-base text-tertiary-container mb-1"><span class="material-symbols-outlined text-lg leading-none">info</span>${n.title}</div><div>${n.body}</div>${points}${footer}`;
+}
+
+function showThesisNote(event, key, sticky) {
+  let note = document.getElementById('thesis-note');
+  if (!note) {
+    note = document.createElement('div');
+    note.id = 'thesis-note';
+    note.className = 'hidden fixed z-50 w-80 max-w-[calc(100vw-16px)] text-sm text-left font-normal bg-surface-container-high rounded-lg p-4 text-on-surface-variant leading-relaxed shadow-lg';
+    note.innerHTML = '<div id="thesis-note-arrow" class="absolute -top-1 -translate-x-1/2 w-2 h-2 bg-surface-container-high rotate-45"></div><div id="thesis-note-content"></div>';
+    document.body.appendChild(note);
+    document.addEventListener('click', () => hideThesisNote(true));
+    window.addEventListener('scroll', () => hideThesisNote(true), { passive: true });
+  }
+  document.getElementById('thesis-note-content').innerHTML = _thesisNoteHtml(key);
+  note.dataset.sticky = sticky ? '1' : '';
+  note.classList.remove('hidden');
+  const rect = event.currentTarget.getBoundingClientRect();
+  const margin = 8;
+  const w = note.offsetWidth;
+  const cx = rect.left + rect.width / 2;
+  const left = Math.max(margin, Math.min(cx - w / 2, window.innerWidth - w - margin));
+  const below = rect.bottom + 8 + note.offsetHeight < window.innerHeight;
+  note.style.left = `${left}px`;
+  note.style.top = below ? `${rect.bottom + 8}px` : `${Math.max(margin, rect.top - 8 - note.offsetHeight)}px`;
+  const arrow = document.getElementById('thesis-note-arrow');
+  arrow.style.left = `${Math.max(12, Math.min(cx - left, w - 12))}px`;
+  arrow.classList.toggle('-top-1', below);
+  arrow.classList.toggle('-bottom-1', !below);
+}
+
+function hideThesisNote(force) {
+  const note = document.getElementById('thesis-note');
+  if (note && (force || !note.dataset.sticky)) note.classList.add('hidden');
 }
 
 // ── 格式 ──
@@ -251,12 +374,12 @@ function _tReturnColor(x) {
 
 // ── 畫面：論點、情境、試算條件(每次條件改變都更新) ──
 function _thesisRender(d) {
-  document.getElementById('thesis-asof').textContent = d.as_of || '—';
+  _thesis.asOf = d.as_of || '';
 
   const sel = document.getElementById('thesis-select');
   if (d.theses && d.theses.length > 1) {
     sel.innerHTML = d.theses.map((t, i) =>
-      `<option value="${t.id}" ${t.id === d.thesis_id ? 'selected' : ''}>論點 ${i + 1}：${_escHtml(t.thesis.slice(0, 36))}${t.thesis.length > 36 ? '…' : ''}</option>`).join('');
+      `<option value="${t.id}" ${t.id === d.thesis_id ? 'selected' : ''}>論點 ${i + 1}：${_escHtml(t.thesis.slice(0, 36))}${t.thesis.length > 36 ? '…' : ''}${t.n_checkable ? '' : '（無可試算情境）'}</option>`).join('');
     sel.classList.remove('hidden');
   } else {
     sel.classList.add('hidden');
@@ -271,21 +394,15 @@ function _thesisRender(d) {
   }
   const current = d.theses.find(t => t.id === d.thesis_id) || d.theses[0];
   const dirChip = current.direction === 'bullish'
-    ? '<span class="inline-block mr-2 px-2 py-0.5 rounded-full text-xs font-bold text-[#ba1a1a] bg-[#ba1a1a]/10">看多</span>'
+    ? '<span class="inline-block mr-2 px-2.5 py-0.5 rounded-full text-xs font-bold text-[#ba1a1a] bg-[#ba1a1a]/10 align-middle">看多論點</span>'
     : current.direction === 'bearish'
-      ? '<span class="inline-block mr-2 px-2 py-0.5 rounded-full text-xs font-bold text-[#1e8e3e] bg-[#1e8e3e]/10">看空</span>' : '';
+      ? '<span class="inline-block mr-2 px-2.5 py-0.5 rounded-full text-xs font-bold text-[#1e8e3e] bg-[#1e8e3e]/10 align-middle">看空論點</span>' : '';
   textEl.innerHTML = dirChip + _escHtml(current.thesis) +
     (current.timeframe ? `<span class="text-xs text-outline ml-2">（時間：${_escHtml(current.timeframe)}）</span>` : '');
   textEl.classList.remove('hidden');
 
   document.getElementById('thesis-scenarios').innerHTML = _thesisScenariosHtml(d);
   document.getElementById('thesis-info').innerHTML = _thesisInfoHtml(d);
-  ['up', 'down'].forEach(kind => {
-    const btn = document.getElementById('thesis-preset-' + kind);
-    const n = (d.scenarios || []).filter(s => s.checkable && _thesisSide(s) === kind).length;
-    btn.disabled = n === 0;
-    btn.title = n === 0 ? (kind === 'up' ? '這句論點沒有看多的情境' : '這句論點沒有看空的情境') : '';
-  });
   document.getElementById('thesis-body').classList.remove('hidden');
 
   if (!d.available) {
@@ -296,12 +413,14 @@ function _thesisRender(d) {
     return;
   }
   document.getElementById('thesis-run').disabled = false;
-  _thesisSetStatus(d.no_driver_reason ? '這句論點沒有拆出具體情境：' + d.no_driver_reason + '（仍可直接試算或手動調整參數）' : '');
+  const nCheckable = (d.scenarios || []).filter(s => s.checkable).length;
+  _thesisSetStatus(nCheckable ? '' : '這句論點沒有可以勾選試算的情境'
+    + (d.no_driver_reason ? `（${d.no_driver_reason}）` : '（只有技術面、價位等參考資訊，或說法太空泛）')
+    + '，只能看「延續目前成長」的結果，或在下方手動調整參數。');
 
   const monthsInput = document.getElementById('thesis-months');
   if (document.activeElement !== monthsInput) monthsInput.value = d.horizon_months;
-  document.getElementById('thesis-months-hint').textContent =
-    d.horizon_months === d.horizon_default ? `預設依${d.horizon_source}` : `預設是 ${d.horizon_default} 個月（${d.horizon_source}）`;
+  _thesis.monthsNote = `預設 ${d.horizon_default} 個月，依${d.horizon_source}。`;
 
   document.getElementById('thesis-levers').innerHTML = _thesisLeversHtml(d);
   document.getElementById('thesis-reset').classList.toggle('hidden', !(d.overridden && d.overridden.length));
@@ -309,23 +428,31 @@ function _thesisRender(d) {
 }
 
 function _thesisScenarioItem(s, checked) {
-  const figs = [];
-  if (s.figures.eps) figs.push(`EPS ${_tNum(s.figures.eps, 2)}${s.figures.year ? '｜' + s.figures.year : ''}${s.figures_source === 'thesis' ? '｜取自論點摘要' : ''}`);
-  if (s.figures.pe) figs.push(`本益比 ${_tNum(s.figures.pe, 1)} 倍`);
-  if (s.figures.target_low) figs.push(`${s.source === 'analyst' ? '法人' : '節目觀點'} ${_tNum(s.figures.target_low, 0)}${s.figures.target_high && s.figures.target_high !== s.figures.target_low ? '～' + _tNum(s.figures.target_high, 0) : ''}`);
+  // 一列 = 勾選框｜情境名稱＋標籤｜勾了會調多少(重點)｜節目原文(淡色、最多兩行)
+  const tags = [];
+  if (s.figures.eps) tags.push(`EPS ${_tNum(s.figures.eps, 2)}${s.figures.year ? '（' + s.figures.year + '）' : ''}${s.figures_source === 'thesis' ? '・取自論點摘要' : ''}`);
+  if (s.figures.eps_partial) tags.push(`單季／半年 EPS ${_tNum(s.figures.eps_partial, 2)}`);
+  if (s.figures.pe) tags.push(`本益比 ${_tNum(s.figures.pe, 1)} 倍`);
+  if (s.figures.target_low) tags.push(`${s.source === 'analyst' ? '法人' : '節目觀點'} ${_tNum(s.figures.target_low, 0)}${s.figures.target_high && s.figures.target_high !== s.figures.target_low ? '～' + _tNum(s.figures.target_high, 0) : ''}`);
+  const tagHtml = tags.map(t => `<span class="text-[11px] font-bold px-1.5 py-0.5 rounded bg-surface-container text-on-surface-variant">${_escHtml(t)}</span>`).join('');
+  const shortHtml = s.duration === 'short'
+    ? `<span class="inline-flex items-center gap-0.5 text-[11px] font-bold px-1.5 py-0.5 rounded bg-[#a16207]/10 text-[#a16207]">短期${_tInfo('short', '!text-sm text-[#a16207]')}</span>` : '';
+  const impacts = s.adjust && s.adjust.length ? s.adjust : s.effects;
+  const impactHtml = impacts.map(t => `<span class="text-xs font-bold ${s.checkable ? 'text-tertiary-container' : 'text-outline'}">${_escHtml(t)}</span>`)
+    .join('<span class="text-outline/50 mx-1">・</span>');
   const box = s.checkable
-    ? `<input type="checkbox" id="thesis-cb-${s.idx}" class="mt-1 h-4 w-4 shrink-0 cursor-pointer accent-[#113236]" ${checked ? 'checked' : ''} onchange="thesisToggle(${s.idx}, this.checked)">`
-    : '<span class="mt-1 h-4 w-4 shrink-0"></span>';
-  return `<li class="flex gap-3 items-start py-2.5 border-t border-outline-variant/15 first:border-t-0">
-    ${box}
-    <label for="thesis-cb-${s.idx}" class="min-w-0 space-y-1 ${s.checkable ? 'cursor-pointer' : ''}">
-      <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
-        <span class="font-bold text-sm text-tertiary-container">${_escHtml(s.label)}</span>
-        ${s.effects.length ? `<span class="text-xs text-outline">${_escHtml(s.effects.join('、'))}</span>` : ''}
-        ${figs.map(f => `<span class="text-xs font-bold px-2 py-0.5 rounded bg-surface-container border border-outline-variant/40">${_escHtml(f)}</span>`).join('')}
-        ${s.provisional ? '<span class="text-xs font-bold text-[#a16207]">幅度暫定</span>' : ''}
+    ? `<input type="checkbox" id="thesis-cb-${s.idx}" class="mt-0.5 h-4 w-4 shrink-0 cursor-pointer accent-[#113236]" ${checked ? 'checked' : ''} onchange="thesisToggle(${s.idx}, this.checked)">`
+    : '<span class="mt-0.5 h-4 w-4 shrink-0"></span>';
+  return `<li class="rounded transition-colors ${checked ? 'bg-tertiary-container/5' : 'hover:bg-surface-container/50'}">
+    <label for="thesis-cb-${s.idx}" class="flex gap-3 items-start px-3 py-2.5 ${s.checkable ? 'cursor-pointer' : ''}">
+      ${box}
+      <div class="min-w-0 flex-1 space-y-1">
+        <div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span class="font-bold text-sm text-on-surface">${_escHtml(s.label)}</span>${shortHtml}${tagHtml}
+        </div>
+        ${impactHtml ? `<div class="flex flex-wrap items-center">${impactHtml}</div>` : ''}
+        <p class="text-xs leading-relaxed text-outline line-clamp-2" title="${_escHtml(s.quote)}"><span class="font-bold mr-1">節目原文</span>${_escHtml(s.quote)}</p>
       </div>
-      <div class="text-xs text-outline leading-relaxed">「${_escHtml(s.quote)}」</div>
     </label>
   </li>`;
 }
@@ -333,33 +460,36 @@ function _thesisScenarioItem(s, checked) {
 function _thesisScenariosHtml(d) {
   const all = d.scenarios || [];
   const checked = new Set([..._thesis.checked]);
-  const card = (title, titleCls, note, list, empty) => `
-    <div class="bg-surface-container-lowest rounded-xl px-5 py-3 min-w-0">
-      <div class="flex items-baseline justify-between gap-2 pb-1">
-        <h5 class="text-sm font-bold ${titleCls}">${title}</h5>
-        <span class="text-xs text-outline">${note}</span>
+  // 看多、看空用卡片左側色條＋小圖示區分(台股慣例：看多紅、看空綠)，字級跟其他區塊一致
+  const card = (kind, list) => {
+    const up = kind === 'up';
+    const tone = up ? 'border-[#ba1a1a] text-[#ba1a1a]' : 'border-[#1e8e3e] text-[#1e8e3e]';
+    return `<div class="bg-surface-container-lowest rounded border-l-4 ${tone.split(' ')[0]} px-3 py-3 min-w-0">
+      <div class="flex items-center gap-1.5 px-3 pb-1 ${tone.split(' ')[1]}">
+        <span class="material-symbols-outlined text-lg leading-none">${up ? 'trending_up' : 'trending_down'}</span>
+        <h5 class="text-sm font-bold">${up ? '看多情境' : '看空情境'}</h5>
+        ${up ? '' : _tInfo('bear', '!text-sm')}
       </div>
-      ${list.length ? `<ul>${list.map(s => _thesisScenarioItem(s, checked.has(s.idx))).join('')}</ul>`
-                    : `<p class="text-sm text-outline py-2">${empty}</p>`}
+      ${list.length ? `<ul class="space-y-0.5">${list.map(s => _thesisScenarioItem(s, checked.has(s.idx))).join('')}</ul>`
+                    : `<p class="text-xs text-outline px-3 py-1.5">這句論點沒有${up ? '看多' : '看空'}的情境</p>`}
     </div>`;
-  // 台股慣例：看多紅、看空綠(跟論點的看多/看空標籤一致)
-  const up = all.filter(s => s.checkable && _thesisSide(s) === 'up');
-  const down = all.filter(s => s.checkable && _thesisSide(s) === 'down');
-  return card('看多情境', 'text-[#ba1a1a]', `${up.length} 個・對公司是利多`, up, '這句論點沒有拆出看多的情境')
-    + card('看空情境', 'text-[#1e8e3e]', `${down.length} 個・對公司是利空`, down, '這句論點沒有拆出看空的情境');
+  };
+  return card('up', all.filter(s => s.checkable && _thesisSide(s) === 'up'))
+    + card('down', all.filter(s => s.checkable && _thesisSide(s) === 'down'));
 }
 
-// 只供參考的情境(技術面、目標價位、沒有數字的 EPS 上修)收在折疊區
 function _thesisInfoHtml(d) {
+  // 只供參考的情境(技術面、目標價位、總經、法規風險、沒有數字的 EPS)收在折疊區
   const info = (d.scenarios || []).filter(s => !s.checkable);
   if (!info.length) return '';
-  return `<details class="bg-surface-container-lowest rounded-xl px-5 py-3">
-    <summary class="text-sm font-bold text-tertiary-container cursor-pointer select-none">節目還提到（只供參考，不參與試算）<span class="font-normal text-outline ml-2">${info.length} 個：技術面、目標價位、沒有數字的 EPS 上修</span></summary>
-    <ul class="mt-2">${info.map(s => _thesisScenarioItem(s, false)).join('')}</ul>
+  return `<details class="bg-surface-container-lowest rounded px-6 py-3">
+    <summary class="text-sm font-bold text-tertiary-container cursor-pointer select-none flex items-center gap-1.5">
+      節目還提到（只供參考）<span class="text-[11px] font-bold px-1.5 py-0.5 rounded bg-surface-container text-outline">${info.length}</span>${_tInfo('info', '!text-sm')}
+    </summary>
+    <ul class="mt-2 -mx-3 space-y-0.5">${info.map(s => _thesisScenarioItem(s, false)).join('')}</ul>
   </details>`;
 }
 
-// 依計算路線決定要給哪些滑桿：完整(營收、毛利率、費用率)、缺毛利(營業利益率)、只有淨利(淨利率)、虧損(P/S)
 function _thesisLeversHtml(d) {
   const L = d.levers || {};
   const A = d.levers_auto || {};
@@ -419,23 +549,44 @@ function _thesisResultHtml(d) {
   const m = p.months;
   const multipleLabel = p.route === 'ps' ? '股價營收比' : '本益比';
 
-  // 計算過程：每個數字怎麼來的
+  // 計算過程：每個數字怎麼來的。跟預設(都不勾、沒有手動調整)不同的參數用強調色標出來，讓使用者看得出改了哪裡
+  const CH = 'text-secondary font-bold';
+  const hl = (text, on) => on ? `<span class="${CH}">${text}</span>` : text;
+  const diff = (a, c) => a != null && c != null && Math.abs(a - c) > 1e-9;
+  const baseGrowth = b.revenue_growth != null ? b.revenue_growth
+    : ((b.history || {}).revenue_growth ? b.history.revenue_growth.p50 : 0);
+  const growthChanged = diff(L.revenue_growth, baseGrowth);
+  const marginLabels = { gross_margin: '毛利率', opex_ratio: '營業費用率', operating_margin: '營業利益率', net_margin: '淨利率' };
+  const marginChanges = Object.entries(marginLabels)
+    .filter(([k]) => diff(L[k], b[k]))
+    .map(([k, name]) => `${name} ${_tPct(b[k])} → ${_tPct(L[k])}`);
+  const riskChanged = (L.eps_multiplier || 1) !== 1;
+  const baseMultiple = p.route === 'ps' ? b.ps : b.pe;
+  const multipleChanged = diff(p.multiple, baseMultiple);
+
   const steps = [];
-  steps.push(['預估營收', `近四季 ${_tMoney(b.revenue, d.ticker)} ×（1 + 年增率 ${_tPct(L.revenue_growth)}）<sup>${m}/12</sup>`, _tMoney(p.revenue, d.ticker)]);
+  steps.push(['預估營收', `近四季 ${_tMoney(b.revenue, d.ticker)} ×（1 + 年增率 ${hl(_tPct(L.revenue_growth), growthChanged)}）<sup>${m}/12</sup>`
+    + (growthChanged ? `<span class="text-outline">（預設 ${_tPct(baseGrowth)}）</span>` : ''), hl(_tMoney(p.revenue, d.ticker), growthChanged)]);
   if (p.route !== 'ps') {
     if (L.eps_override) {
-      steps.push(['預估 EPS', '直接使用指定的 EPS', _tNum(p.eps, 2)]);
+      steps.push(['預估 EPS', hl('直接使用指定的 EPS', true), hl(_tNum(p.eps, 2), true)]);
     } else {
       const profitName = p.route === 'net' ? '淨利' : '營業利益';
+      const epsChanged = marginChanges.length > 0 || riskChanged;
       steps.push(['預估 EPS', `近四季${b.eps_note ? '本業' : ''} ${_tNum(b.eps, 2)} × ${profitName}倍數 ${_tNum(p.profit_factor, 3)}`
-        + ((L.eps_multiplier || 1) !== 1 ? ` × 財務風險 ${_tNum(L.eps_multiplier, 2)}` : ''), _tNum(p.eps, 2)]);
+        + (riskChanged ? ` × ${hl('財務風險 ' + _tNum(L.eps_multiplier, 2), true)}` : '')
+        + (marginChanges.length ? `<br>${hl(marginChanges.join('、'), true)}` : ''), hl(_tNum(p.eps, 2), epsChanged)]);
     }
-    steps.push([multipleLabel, p.multiple === b.pe ? `發布日股價 ${_tNum(b.price, 2)} ÷ 近四季${b.eps_note ? '本業' : ''} EPS ${_tNum(b.eps, 2)}` : `現值 ${_tNum(b.pe, 1)} 倍，依情境或手動調整`, `${_tNum(p.multiple, 1)} 倍`]);
-    steps.push(['目標價', `預估 EPS ${_tNum(p.eps, 2)} × ${multipleLabel} ${_tNum(p.multiple, 1)}`, _tNum(p.target_price, 2)]);
+    steps.push([multipleLabel, multipleChanged
+      ? hl(`現值 ${_tNum(baseMultiple, 1)} 倍 → ${_tNum(p.multiple, 1)} 倍（依情境或手動調整）`, true)
+      : `發布日股價 ${_tNum(b.price, 2)} ÷ 近四季${b.eps_note ? '本業' : ''} EPS ${_tNum(b.eps, 2)}`, hl(`${_tNum(p.multiple, 1)} 倍`, multipleChanged)]);
+    steps.push(['試算價格', `預估 EPS ${_tNum(p.eps, 2)} × ${multipleLabel} ${_tNum(p.multiple, 1)}`, _tNum(p.target_price, 2)]);
   } else {
-    steps.push([multipleLabel, `現值 ${_tNum(b.ps, 1)} 倍`, `${_tNum(p.multiple, 1)} 倍`]);
-    steps.push(['目標價', `預估營收 × ${multipleLabel} ÷ 股數`, _tNum(p.target_price, 2)]);
+    steps.push([multipleLabel, multipleChanged ? hl(`現值 ${_tNum(b.ps, 1)} 倍 → ${_tNum(p.multiple, 1)} 倍`, true) : `現值 ${_tNum(b.ps, 1)} 倍`,
+      hl(`${_tNum(p.multiple, 1)} 倍`, multipleChanged)]);
+    steps.push(['試算價格', `預估營收 × ${multipleLabel} ÷ 股數`, _tNum(p.target_price, 2)]);
   }
+  const anyChanged = growthChanged || marginChanges.length || riskChanged || multipleChanged || !!L.eps_override;
   const stepRows = steps.map(([k, how, v]) => `
     <div class="grid grid-cols-[5.5rem_minmax(0,1fr)_auto] gap-3 items-baseline py-1.5 border-t border-outline-variant/15 first:border-t-0">
       <span class="text-sm font-bold text-outline">${k}</span>
@@ -456,7 +607,7 @@ function _thesisResultHtml(d) {
   return `
     <div class="flex items-end justify-between gap-3 flex-wrap">
       <div>
-        <div class="text-xs text-outline font-bold uppercase tracking-widest">${m} 個月後的目標價（每股）</div>
+        <div class="text-xs text-outline font-bold uppercase tracking-widest">${m} 個月後的試算價格（每股）</div>
         <div class="font-['Epilogue'] text-3xl font-bold text-tertiary-container">${_tNum(p.target_price, 2)}</div>
       </div>
       <div class="text-right">
@@ -465,7 +616,10 @@ function _thesisResultHtml(d) {
       </div>
     </div>
     <div>
-      <div class="text-xs text-outline font-bold uppercase tracking-widest mb-1">計算過程</div>
+      <div class="flex items-baseline justify-between gap-2 mb-1">
+        <div class="text-xs text-outline font-bold uppercase tracking-widest">計算過程</div>
+        ${anyChanged ? '<div class="text-xs text-secondary font-bold">● 跟預設（都不勾）不同的數字</div>' : ''}
+      </div>
       ${stepRows}
     </div>
     ${(marginNote || growthNote || notes) ? `<ul class="text-xs text-outline space-y-0.5 pt-2 border-t border-outline-variant/15">${growthNote}${marginNote}${notes}</ul>` : ''}
@@ -475,40 +629,31 @@ function _thesisResultHtml(d) {
 function _thesisBaselineHtml(d) {
   const b = d.baseline;
   const h = b.history || {};
-  const parts = [`基準：近四季（至 ${_escHtml(b.ttm_end || '—')}）EPS ${_tNum(b.eps, 2)}${b.eps_note ? `（本業估算，財報為 ${_tNum(b.eps_reported, 2)}）` : ''}`];
-  if (b.pe != null) parts.push(`本益比 ${_tNum(b.pe, 1)} 倍${h.pe ? `（過去 5 年中位數 ${_tNum(h.pe.p50, 1)} 倍）` : ''}`);
-  if (b.gross_margin != null) parts.push(`毛利率 ${_tPct(b.gross_margin)}`);
-  if (b.operating_margin != null) parts.push(`營業利益率 ${_tPct(b.operating_margin)}`);
-  if (b.revenue_growth != null) parts.push(`目前營收年增率 ${_tPct(b.revenue_growth)}`);
-  let text = parts.join('，') + '。';
-  if (b.reason) text += ` ${_escHtml(b.reason)}。`;
-  text += ' 都不勾時，營收照目前的年增率成長、其他數字維持現值，所以報酬大約等於這段期間的營收成長；'
-    + '勾一個情境，就從現值加減這家公司過去 5 年這個數字一般的波動幅度。這是以歷史表現為基礎的參考幅度，'
-    + '不是這個事件一定會造成的效果；本益比預設不變，這段期間市場若重新評價，目標價會有很大落差。標示「幅度暫定」的情境還沒有校準。';
-  return text;
+  const tile = (label, value, sub) => `<div class="bg-surface-container rounded-lg px-4 py-3 min-w-0">
+      <div class="text-xs text-outline font-bold">${label}</div>
+      <div class="text-lg font-bold text-tertiary-container font-['Epilogue'] tabular-nums">${value}</div>
+      ${sub ? `<div class="text-xs text-outline mt-0.5">${sub}</div>` : ''}
+    </div>`;
+  const tiles = [
+    tile('財報截至', _escHtml(b.ttm_end || '—'), '近四季'),
+    tile(b.eps_note ? '近四季 EPS（本業）' : '近四季 EPS', _tNum(b.eps, 2), b.eps_note ? `財報 ${_tNum(b.eps_reported, 2)}` : ''),
+  ];
+  if (b.pe != null) tiles.push(tile('本益比', `${_tNum(b.pe, 1)} 倍`, h.pe ? `5 年中位數 ${_tNum(h.pe.p50, 1)} 倍` : ''));
+  if (b.gross_margin != null) tiles.push(tile('毛利率', _tPct(b.gross_margin), ''));
+  if (b.operating_margin != null) tiles.push(tile('營業利益率', _tPct(b.operating_margin), ''));
+  if (b.revenue_growth != null) tiles.push(tile('營收年增率', _tPct(b.revenue_growth), '目前'));
+  return `<div class="flex items-center gap-1.5"><h5 class="text-sm font-bold text-tertiary-container">試算基準（發布日 ${_escHtml(d.as_of || '')}）</h5>${_tInfo('baseline')}</div>
+    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">${tiles.join('')}</div>
+    ${b.reason ? `<p class="text-xs text-[#a16207] font-bold">${_escHtml(b.reason)}</p>` : ''}`;
 }
 
-// 瀑布圖：發布日股價 → 延續目前成長 → 每個勾選的情境 → 手動調整 → 目標價。
-// 橫條都從 0 起算(不截斷座標軸，避免小變動看起來很大)；漲紅跌綠沿用台股慣例。
 function _thesisWaterfallHtml(d) {
   const steps = d.waterfall;
   const price = d.baseline.price;
-  if (!steps || !steps.length || !price) return '<p class="text-sm text-outline">這組條件算不出目標價，無法拆解。</p>';
+  if (!steps || !steps.length || !price) return '<p class="text-sm text-outline">這組條件算不出試算價格，無法拆解。</p>';
   const values = [price, ...steps.map(s => s.value)];
   const hi = Math.max(...values) * 1.05;
   const pos = v => Math.max(0, Math.min(100, v / hi * 100));
-
-  // 情境貢獻是 0 時說明原因：EPS 已直接指定，或同方向已經調整過
-  const scenarios = d.scenarios || [];
-  const order = (d.checked || []).map(i => scenarios[i]);
-  let epsFixed = false;
-  const zeroReasons = [];
-  order.forEach(s => {
-    zeroReasons.push(epsFixed && s && s.type !== 'RERATING_UP' && s.type !== 'RERATING_DOWN' && !s.type.startsWith('MACRO')
-      ? 'EPS 已直接指定，營收與利潤率的變化不再影響結果'
-      : '同一個參數同一個方向已經調整過，不重複計算');
-    if (s && s.type === 'EPS_FORECAST' && s.figures.eps) epsFixed = true;
-  });
 
   // 寬螢幕：名稱｜長條｜數字 三欄；手機：名稱與數字一行、長條另起一行佔滿寬度
   const row = (label, sub, left, width, color, valueText, deltaText, deltaColor) => `
@@ -526,34 +671,33 @@ function _thesisWaterfallHtml(d) {
     </div>`;
 
   const fmt = v => _tNum(v, 0);
-  let scenarioIdx = 0;
+  // 情境的金額可能只有幾元(例如股價 250 元、營收多 1 個百分點)：小金額多顯示小數，不要四捨五入成 0
+  const fmtDelta = v => _tNum(v, v >= 100 ? 0 : v >= 10 ? 1 : 2);
   const rows = [row('發布日股價', d.as_of, 0, pos(price), 'bg-[#113236]/40', fmt(price))];
   let prev = price;
   steps.forEach(s => {
     const up = s.delta >= 0;
-    const zero = Math.abs(s.delta) < 0.005 * price;
+    const zero = Math.abs(s.delta) < 0.0005 * price;   // 不到股價的 0.05% 才當成 0
     let sub = s.kind === 'trend' ? '營收照目前年增率成長，其他維持現值' : s.kind === 'manual' ? '滑桿或直接指定 EPS' : '';
-    if (s.kind === 'scenario') {
-      if (zero) sub = zeroReasons[scenarioIdx] || '';
-      scenarioIdx += 1;
-    }
+    if (s.kind === 'scenario' && zero) sub = '在這組條件下幾乎不影響試算價格';
     const left = pos(Math.min(prev, s.value));
     const width = pos(Math.max(prev, s.value)) - left;
     const color = zero ? 'bg-outline/40' : up ? 'bg-[#ba1a1a]/70' : 'bg-[#1e8e3e]/70';
-    const delta = zero ? '0' : (up ? '+' : '−') + fmt(Math.abs(s.delta));
+    const delta = zero ? '0' : (up ? '+' : '−') + fmtDelta(Math.abs(s.delta));
     rows.push(row(s.label, sub, left, width, color, '', delta, zero ? 'text-outline' : up ? 'text-[#ba1a1a]' : 'text-[#1e8e3e]'));
     prev = s.value;
   });
-  rows.push(row('目標價', `${d.projection.months} 個月後`, 0, pos(prev), 'bg-[#113236]', fmt(prev)));
+  rows.push(row('試算價格', `${d.projection.months} 個月後`, 0, pos(prev), 'bg-[#113236]', fmt(prev)));
 
   return `
     <div class="flex items-baseline justify-between gap-2">
-      <h5 class="text-xs text-outline font-bold uppercase tracking-widest">目標價怎麼來的</h5>
+      <h5 class="text-xs text-outline font-bold uppercase tracking-widest flex items-center gap-1">試算價格怎麼來的${_tInfo('waterfall')}</h5>
       <span class="text-xs text-outline">每一步相對前一步的變化</span>
     </div>
-    <div class="space-y-1">${rows.join('')}</div>
-    <p class="text-xs text-outline">依情境在清單中的順序逐一加入計算，各步加總等於目標價與發布日股價的差距；順序不同時每一步的金額會不同，但最後的目標價一樣。</p>`;
+    <div class="space-y-1">${rows.join('')}</div>`;
 }
+
+_thesisMountInfo();
 
 // calculator.js 載入時已經呼叫過 setMode('manual')，那時這個檔案還沒載入，這裡補套用一次初始模式
 onCalcModeChanged(typeof mode !== 'undefined' ? mode : 'manual');

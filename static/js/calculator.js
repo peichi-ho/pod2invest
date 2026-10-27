@@ -202,6 +202,8 @@ async function loadEpisodes() {
     sel.innerHTML = episodes.map(e =>
       `<option value="${e.score_id}">${e.published_at || '未知日期'}　${e.asset_name}(${e.ticker})　${e.podcaster || ''}</option>`
     ).join('');
+    if (typeof _thesisFilterEpisodes === 'function' && typeof _calcModule !== 'undefined')
+      _thesisFilterEpisodes(_calcModule === 'thesis');
     if (_pendingCalcTarget) {
       _applyPendingCalcTarget();
     } else if (episodes.length) {
@@ -2012,7 +2014,7 @@ function resetCalculator() {
 
   // B方案(歷史拔靴模擬)區塊重置回預設狀態
   setMode('manual');
-  document.getElementById('in-ticker').value = '2330.TW';
+  document.getElementById('in-ticker').value = '';
   { const pk = document.getElementById('ticker-picked'); if (pk) pk.classList.add('hidden'); }
   document.getElementById('in-months').value = 12;
   document.getElementById('slider-months').value = 12;

@@ -104,6 +104,26 @@ class ProjectionTests(SimpleTestCase):
     def setUp(self):
         self.b = build_baseline("TEST", quarter_rows(), price=40.0, as_of=AS_OF)
 
+    def test_calibration_scales_step(self):
+        from apps.calculator.services.thesis_valuation import _step, calibration
+        base, _ = apply_scenarios(self.b, [])
+        for t, factor in (("DEMAND_UP", 0.05), ("NEW_BUSINESS", 0.24), ("M_AND_A", 0.3)):
+            levers, _ = apply_scenarios(self.b, [{"type": t}])
+            # 一般波動幅度 × 校準比例，最少 1 個百分點(CALIBRATED_MIN)
+            expected = max(_step(self.b, "revenue_growth", 1) * factor, 0.01)
+            self.assertAlmostEqual(levers["revenue_growth"] - base["revenue_growth"], expected)
+            self.assertEqual(calibration(t, "revenue_growth")[0], factor)
+        levers, _ = apply_scenarios(self.b, [{"type": "FINANCIAL_RISK"}])
+        self.assertAlmostEqual(levers["eps_multiplier"], 0.93)
+
+    def test_macro_and_regulatory_do_not_move_pe(self):
+        from apps.calculator.thesis_views import _is_checkable
+        base, _ = apply_scenarios(self.b, [])
+        for t in ("MACRO_EASING", "MACRO_TIGHTENING", "REGULATORY_RISK"):
+            levers, _ = apply_scenarios(self.b, [{"type": t}])
+            self.assertEqual(levers["pe"], base["pe"], t)
+            self.assertFalse(_is_checkable({"type": t}))
+
     def test_zero_growth_and_unchanged_margins_returns_ttm_eps(self):
         levers = default_levers(self.b)
         levers["revenue_growth"] = 0.0
@@ -120,9 +140,12 @@ class ProjectionTests(SimpleTestCase):
         self.assertAlmostEqual(project(self.b, levers).eps, self.b.eps * 0.33 / 0.30)
 
     def test_same_direction_scenarios_do_not_stack(self):
-        one, _ = apply_scenarios(self.b, [{"type": "DEMAND_UP"}])
+        # 同方向只調一次，用比例較大的那個(新產品 0.24 > 需求增加 0.05)，跟勾選順序無關
+        one, _ = apply_scenarios(self.b, [{"type": "NEW_BUSINESS"}])
         two, _ = apply_scenarios(self.b, [{"type": "DEMAND_UP"}, {"type": "NEW_BUSINESS"}])
+        three, _ = apply_scenarios(self.b, [{"type": "NEW_BUSINESS"}, {"type": "DEMAND_UP"}])
         self.assertAlmostEqual(one["revenue_growth"], two["revenue_growth"])
+        self.assertAlmostEqual(one["revenue_growth"], three["revenue_growth"])
 
     def test_bull_scenarios_raise_and_bear_scenarios_lower_target(self):
         base = project_scenarios(self.b, [])
@@ -155,16 +178,17 @@ class ProjectionTests(SimpleTestCase):
     def test_growth_step_is_capped(self):
         self.b.history["revenue_growth"] = {"p25": 0.0, "p50": 0.5, "p75": 2.0, "n": 20}
         levers, _ = apply_scenarios(self.b, [{"type": "DEMAND_UP"}])
-        self.assertAlmostEqual(levers["revenue_growth"] - self.b.revenue_growth, 0.25)
+        # 一般波動 150 個百分點，上限 25；再乘需求增加的校準比例 0.05
+        self.assertAlmostEqual(levers["revenue_growth"] - self.b.revenue_growth, 0.25 * 0.05)
 
     def test_pe_moves_from_current_by_typical_swing(self):
         self.b.history["pe"] = {"p25": 30.0, "p50": 40.0, "p75": 50.0, "n": 20}
         self.b.pe = 20.0
         levers, _ = apply_scenarios(self.b, [{"type": "RERATING_UP"}])
-        self.assertAlmostEqual(levers["pe"], 25.0)      # 一般波動 10 倍，但最多現值的 25%(5 倍)
+        self.assertAlmostEqual(levers["pe"], 20.0 + 5.0 * 1.6)   # 一般波動 10 倍，最多現值的 25%(5 倍)，× 校準 1.6
         self.b.history["pe"] = {"p25": 19.0, "p50": 20.0, "p75": 21.0, "n": 20}
         levers, _ = apply_scenarios(self.b, [{"type": "RERATING_DOWN"}])
-        self.assertAlmostEqual(levers["pe"], 19.0)      # 一般波動 1 倍，最少現值的 5%(1 倍)
+        self.assertAlmostEqual(levers["pe"], 20.0 - 1.0 * 1.2)   # 一般波動 1 倍，最少現值的 5%(1 倍)，× 校準 1.2
 
     def test_extreme_current_growth_is_flagged(self):
         rows = quarter_rows()
@@ -175,7 +199,8 @@ class ProjectionTests(SimpleTestCase):
     def test_margin_step_is_capped_relative_to_current_margin(self):
         self.b.history["gross_margin"] = {"p25": 0.1, "p50": 0.5, "p75": 0.9, "n": 20}
         levers, _ = apply_scenarios(self.b, [{"type": "COST_UP"}])
-        self.assertAlmostEqual(levers["gross_margin"], 0.5 - 0.5 * 0.25)
+        # 上限是現值的 25%；成本上升沒有可靠的回測數字，乘 FALLBACK_FACTOR 0.3
+        self.assertAlmostEqual(levers["gross_margin"], 0.5 - 0.5 * 0.25 * 0.3)
 
     def test_financial_risk_is_marked_provisional(self):
         _, notes = apply_scenarios(self.b, [{"type": "FINANCIAL_RISK"}])
@@ -201,10 +226,28 @@ class WaterfallTests(SimpleTestCase):
         self.assertAlmostEqual(self.b.price + sum(s["delta"] for s in steps), final)
         self.assertAlmostEqual(steps[-1]["value"], final)
 
-    def test_repeated_same_direction_scenario_contributes_zero(self):
-        steps = waterfall(self.b, [{"type": "DEMAND_UP"}, {"type": "NEW_BUSINESS"}], ["需求", "新產品"])
+    def test_same_direction_scenarios_split_the_credit(self):
+        # 兩個比例一樣(都沒有可靠回測數字、用 0.3)的同方向情境平分那一次調整
+        steps = waterfall(self.b, [{"type": "M_AND_A"}, {"type": "CAPACITY_EXPANSION"}], ["併購", "擴產"])
         self.assertGreater(steps[1]["delta"], 0)
-        self.assertAlmostEqual(steps[2]["delta"], 0.0)
+        self.assertAlmostEqual(steps[1]["delta"], steps[2]["delta"])
+
+    def test_contributions_do_not_depend_on_order(self):
+        a = [{"type": "DEMAND_UP"}, {"type": "MIX_UPGRADE"}, {"type": "COST_UP"}]
+        fwd = waterfall(self.b, a, ["需求", "組合", "成本"])
+        rev = waterfall(self.b, a[::-1], ["成本", "組合", "需求"])
+        for i, j in ((1, 3), (2, 2), (3, 1)):
+            self.assertAlmostEqual(fwd[i]["delta"], rev[j]["delta"])
+
+    def test_sampled_shapley_still_adds_up(self):
+        from apps.calculator.services import thesis_valuation as tv
+        chosen = [{"type": t} for t in ("DEMAND_UP", "MIX_UPGRADE", "COST_UP", "PRICE_UP", "DEMAND_DOWN",
+                                         "COMPETITION", "NEW_BUSINESS", "COST_EFFICIENCY", "RERATING_UP",
+                                         "M_AND_A", "PRICE_DOWN")]
+        self.assertGreater(len(chosen), tv.SHAPLEY_EXACT_MAX)
+        steps = waterfall(self.b, chosen, [c["type"] for c in chosen])
+        final = project_scenarios(self.b, chosen).target_price
+        self.assertAlmostEqual(self.b.price + sum(s["delta"] for s in steps), final)
 
     def test_manual_override_is_its_own_step(self):
         steps = waterfall(self.b, [], [], overrides={"pe": 50.0})
@@ -275,6 +318,97 @@ class ScenarioCheckRuleTests(SimpleTestCase):
         kept, _ = self.check({"type": "EPS_FORECAST", "effect": "up", "quote": "EPS預估將持續成長"},
                              thesis="EPS預估將持續成長，2026年目標價上看1600元")
         self.assertIsNone(kept[0]["figures"].get("eps"))
+
+    # 2026-10-27：v6 prompt 試跑發現模型不照 prompt 做，改由程式擋
+    def test_no_change_quotes_are_dropped(self):
+        for t, effect, quote in (("COST_UP", "down", "有望抵銷關稅影響"), ("DEMAND_DOWN", "down", "AI營收貢獻不大"),
+                                 ("NEW_BUSINESS", "up", "AI，這個長期發展比較不會受到影響的")):
+            _, dropped = self.check({"type": t, "effect": effect, "quote": quote})
+            self.assertEqual(dropped[0]["reason"], "否定句或影響不大，不是變化", quote)
+
+    def test_no_change_words_with_real_change_are_kept(self):
+        for t, effect, quote in (
+                ("COMPETITION", "down", "競爭對手不受此關稅影響，台積電在成本轉嫁方面面臨較大壓力"),
+                ("DEMAND_UP", "up", "AI算力需求持續增長，台積電難以被取代")):
+            kept, _ = self.check({"type": t, "effect": effect, "quote": quote})
+            self.assertEqual(kept[0]["type"], t, quote)
+
+    def test_generalization_is_dropped(self):
+        _, dropped = self.check({"type": "EPS_FORECAST", "effect": "up", "quote": "虧轉盈的股票通常會大漲"})
+        self.assertEqual(dropped[0]["reason"], "泛論，不是這家公司的事")
+
+    def test_fair_value_is_not_undervalued(self):
+        _, dropped = self.check({"type": "RERATING_UP", "effect": "up", "quote": "其估值目前仍處於合理範圍"})
+        self.assertEqual(dropped[0]["reason"], "估值合理不是低估")
+        for quote in ("給予台積電21-23倍的合理本益比區間", "本益成長比小於1，股價高而不貴", "估值其實算蠻便宜的"):
+            kept, _ = self.check({"type": "RERATING_UP", "effect": "up", "quote": quote})
+            self.assertEqual(kept[0]["type"], "RERATING_UP", quote)
+
+    def test_valuation_hope_without_basis_becomes_technical(self):
+        kept, _ = self.check({"type": "RERATING_UP", "effect": "up", "quote": "多元化的佈局有望推升其估值"})
+        self.assertEqual(kept[0]["type"], "TECHNICAL_FLOW")
+
+    def test_quarterly_eps_cannot_set_annual_eps(self):
+        kept, _ = self.check({"type": "EPS_FORECAST", "effect": "up", "quote": "預估今年第一季是6.96美元",
+                              "figures": {"eps": 6.96}})
+        self.assertIsNone(kept[0]["figures"]["eps"])
+        self.assertEqual(kept[0]["figures"]["eps_partial"], 6.96)
+        kept, _ = self.check({"type": "EPS_FORECAST", "effect": "up", "quote": "2026年EPS可達32元",
+                              "figures": {"eps": 32, "year": 2026}})
+        self.assertEqual(kept[0]["figures"]["eps"], 32.0)
+        kept, _ = self.check({"type": "EPS_FORECAST", "effect": "up", "quote": "上半年獲利已達29元以上，預計全年有望突破60元",
+                              "figures": {"eps": 60}})
+        self.assertEqual(kept[0]["figures"]["eps"], 60.0)
+
+    def test_quarterly_eps_not_refilled_from_thesis(self):
+        kept, _ = self.check({"type": "EPS_FORECAST", "effect": "up", "quote": "Q1 EPS上看8元", "figures": {"eps": 8}},
+                             thesis="EPS持續成長，2026年預估32塊")
+        self.assertIsNone(kept[0]["figures"]["eps"])
+
+    def test_recheck_keeps_pro_review_removals(self):
+        from unittest import mock
+        from apps.summaries.services import thesis_scenario as ts
+        eps85 = {"type": "EPS_FORECAST", "quote": "今年85元、明年100元", "figures": {"eps": 85.0}}
+        eps100 = {"type": "EPS_FORECAST", "quote": "今年85元、明年100元", "figures": {"eps": 100.0}}
+        prior = [{**eps85, "reason": "Pro 檢查刪除（F）重複"}, {"type": "", "quote": "x", "reason": ts.UNMAPPED_REASON}]
+        with mock.patch.object(ts, "_postprocess", return_value=([eps85, eps100], [])), \
+                mock.patch.object(ts, "build_context", return_value=""):
+            new = ts.recheck_thesis_scenarios(object(), [], prior_dropped=prior)
+        self.assertEqual([s["figures"]["eps"] for s in new["scenarios"]], [100.0])   # 數字不同的那個不能一起刪
+        self.assertEqual(len(new["dropped"]), 2)
+
+    def test_recheck_reapplies_pro_retype(self):
+        from unittest import mock
+        from apps.summaries.services import thesis_scenario as ts
+
+        class Rec:
+            direction = "bullish"
+        overcap = {"type": "DEMAND_DOWN", "effect": "down", "quote": "運力供給過剩", "chain": [], "figures": {}, "fixes": []}
+        prior = [{**overcap, "new_type": "PRICE_DOWN", "reason": "Pro 檢查改類別（DEMAND_DOWN→PRICE_DOWN）供給過剩壓低運價"}]
+        with mock.patch.object(ts, "_postprocess", return_value=([overcap], [])), \
+                mock.patch.object(ts, "build_context", return_value=""):
+            new = ts.recheck_thesis_scenarios(Rec(), [], prior_dropped=prior)
+        s = new["scenarios"][0]
+        self.assertEqual((s["type"], s["effect"], s["stance"]), ("PRICE_DOWN", "down", "against"))
+        self.assertIn("Pro 改類別 DEMAND_DOWN→PRICE_DOWN", s["fixes"][-1])
+
+    def test_pro_retype_still_passes_program_checks(self):
+        from apps.summaries.services.thesis_scenario import _recheck_retyped, _retype
+        tech = {"type": "TECHNICAL_FLOW", "effect": "up", "quote": "股價有機會挑戰 200-300 元的價位", "figures": {}, "fixes": []}
+        s = _recheck_retyped(_retype(tech, "RERATING_UP", "bullish"))
+        self.assertEqual(s["type"], "TECHNICAL_FLOW")     # 沒有估值依據，不能調本益比
+        self.assertIsNone(_recheck_retyped(_retype(tech, "ANALYST_TARGET", "bullish")))   # 目標價沒有數字
+        ok = {**tech, "quote": "目前本益比只有12倍，低於歷史區間"}
+        self.assertEqual(_recheck_retyped(_retype(ok, "RERATING_UP", "bullish"))["type"], "RERATING_UP")
+
+    def test_ai_judged_fields_override_keywords(self):
+        kept, _ = self.check({"type": "CAPACITY_EXPANSION", "effect": "up", "quote": "計劃擴建數據中心",
+                              "margin_drag": True, "duration": "lasting"})
+        self.assertTrue(kept[0]["margin_drag"])
+        self.assertEqual(kept[0]["duration"], "lasting")
+        kept, _ = self.check({"type": "COST_EFFICIENCY", "effect": "up", "quote": "持續精簡組織",
+                              "chain": ["a", "毛利率"], "cost_kind": "opex"})
+        self.assertEqual(kept[0]["cost_kind"], "opex")
 
 
 class CapacityMarginTests(SimpleTestCase):

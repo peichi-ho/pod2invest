@@ -34,7 +34,13 @@ from typing import Optional
 from .gemini import gemini_generate_with_retry, sanitize_json_text
 from .sentiment_score import find_grounded_stock_topics
 
-PROMPT_VERSION = "v5"
+# 正式使用的版本：計算機讀這個版本、新節目即時補拆也存成這個版本。
+# v6(2026-10-27 起)是兩步做法：Flash 用 v6 prompt 拆 → 程式檢查 → REVIEW_MODEL 逐一判斷留或刪(extract_two_step)。
+# v5 的資料保留在資料庫裡，要比較或退回時改這裡就好。
+PROMPT_VERSION = "v6"
+REVIEW_MODEL = "gemini-3.1-pro-preview"
+REVIEW_VERSION = "r4"
+REVIEW_LOCATION = "global"      # gemini-3.1-pro-preview 只在 Vertex 的 global 區域
 
 # levers：這個情境會動到哪些財務參數、方向(+1/-1)。
 #   revenue_growth 營收成長率 / gross_margin 毛利率 / opex_ratio 營業費用率 /
@@ -148,6 +154,51 @@ PROMPT_TEMPLATE = """你是一位證券分析師，任務是把 Podcast 節目�
 """
 
 
+# v6(2026-10-27)：v5 抽樣 94 句裡 ✗/△ 的情境，
+# 改成在 prompt 裡處理，並把原本靠關鍵字猜的 margin_drag、cost_kind 改由 AI 判斷：
+#   泛論、否定句不列；情境要跟這句論點有關；「估值合理」不是低估；公司本身的問題不是總經；
+#   新增 duration(短期/持續)、margin_drag、cost_kind、unmapped(清單沒有的驅動因素，估計漏拆用)
+_V6_RULES = """11. 泛論和否定句不是情境，不要列：
+    - 泛論：講一整類股票或一般規律，不是 {asset_name} 會發生的事（「虧轉盈的股票通常會大漲」「降息時成長股通常表現好」）
+    - 否定或沒有變化：「不太會受到影響」「難以被超越」「有望抵銷關稅影響」「利潤率不太可能到三成」「AI營收貢獻不大」
+      這類只說某件事不會發生、影響不大，沒有說會往哪個方向變的，不要列。
+12. 情境必須是支持這句論點的理由，或是節目針對這句論點提到的風險。補充段落只用來找依據；
+    段落裡跟這句論點無關的其他話題，不要列。
+13. 估值：「估值合理」「估值不貴」「本益比相對安全」只表示沒有高估，不是低估，不要列成 RERATING_UP；
+    要明說「低估」「便宜」「低於歷史區間/同業」才算。
+14. 總經（MACRO_*）只用在利率、資金、景氣這類大環境因素。公司本身的問題（股價波動大、獲利能力受質疑、
+    經營團隊、高管離職）不是總經，不要用 MACRO_*。總經是透過需求影響公司的（降息刺激汽車銷售），
+    用 DEMAND_UP / DEMAND_DOWN；透過匯率、關稅影響成本的，用 COST_UP。
+15. 擴產和新產品的分法：
+    - 新產品開始量產、出貨（「機器人今年底生產1000台」）是 NEW_BUSINESS，不是 CAPACITY_EXPANSION
+    - 公司為了自己使用而增加資本支出（不是為了賣更多產品或服務），不算擴產，不要列
+    - 政府或客戶給的價格（支付率、費率、報價）調降是 PRICE_DOWN
+16. 每個情境都要填 duration：
+    - "short"：單月、單季、一次性或季節性的變化（「12月營收將月減9-12%」「本季有一次性費用」）
+    - "lasting"：會持續一年以上，或看不出來只是短期的變化
+17. CAPACITY_EXPANSION 要填 margin_drag（其他類型不用填）：
+    - true：要自己投入大量資本支出——蓋新廠、海外設廠、擴建數據中心，折舊會增加、毛利率會被稀釋
+    - false：利用現有或別人的閒置產能、提高稼動率、不需要大幅增加資本支出
+18. COST_EFFICIENCY 要填 cost_kind（其他類型不用填）：
+    - "cogs"：生產成本——良率、原料、製程、生產規模，影響毛利率
+    - "opex"：營業費用——裁員、精簡組織、行銷或研發費用，影響營業費用率
+    - "both"：兩種都有，或看不出來
+19. unmapped：原文有提到具體的驅動因素，但清單裡找不到合適的類別時，列在 unmapped
+    （driver 用一句話描述、quote 照抄原文），不要硬塞進某個類別；沒有就回傳空陣列。
+
+只能輸出合法 JSON，不可包含任何解釋文字或 markdown：
+{{"scenarios": [{{"type": "<代碼>", "effect": "up"|"down", "chain": ["...", "..."], "quote": "<原文片段>", "figures": {{}},
+                 "duration": "short"|"lasting", "margin_drag": true|false, "cost_kind": "cogs"|"opex"|"both"}}],
+ "unmapped": [{{"driver": "...", "quote": "<原文片段>"}}],
+ "no_driver_reason": "<scenarios為空時才填，否則填空字串>"}}
+"""
+_V5_OUTPUT = PROMPT_TEMPLATE[PROMPT_TEMPLATE.index("只能輸出合法 JSON"):]
+PROMPT_TEMPLATE_V6 = PROMPT_TEMPLATE.replace(_V5_OUTPUT, _V6_RULES)
+
+# v7(試過把規則寫在類型旁、加自我檢查)在 41 句上沒有比 v6 好，已刪除，內容見 git 歷史。
+PROMPTS = {"v6": PROMPT_TEMPLATE_V6}
+
+
 def build_type_list() -> str:
     lines = []
     for code, t in SCENARIO_TYPES.items():
@@ -196,7 +247,7 @@ def normalize_text(s: str) -> str:
 # 沒照做，這些改由程式強制。
 # v4：「目標價」從估值字眼拿掉——只有目標價、沒有本益比的改歸 ANALYST_TARGET。
 # 「倍」要有數字(「20倍」)，v4 讓「股價有翻倍潛力」也通過了估值檢查
-_VALUATION_RE = re.compile(r"本益比|P/?E|\d+(?:\.\d+)?\s*倍|低估|高估|估值|合理價|股價淨值比|殖利率")
+_VALUATION_RE = re.compile(r"本益比|本益成長比|PEG|P/?E|\d+(?:\.\d+)?\s*倍|低估|高估|估值|合理價|股價淨值比|殖利率")
 _PRICE_END_RE = re.compile(r"股價|漲幅|跌幅|反彈|拉回")
 # 已經發生的現況(v3 前50筆：「毛利創十年新高」「市佔已達六成」「領頭羊地位」被當成會改善)
 # v5 起也套用到 PRICE_UP(v4 把 Seagate「毛利也是近十年新高」當成漲價)
@@ -223,6 +274,26 @@ _REGULATORY_RE = re.compile(r"反壟斷|反托拉斯|壟斷調查|訴訟|官司|
 _MANAGEMENT_RE = re.compile(r"高管|主管|離職|管理層|接班|內控|執行長")
 # 論點摘要裡的 EPS 數字：「2026年預估32塊」「2027年甚至50塊」；中間不能出現股價、目標價這類字，避免把價位當成 EPS
 _THESIS_EPS_RE = re.compile(r"(20\d{2})\s*年(?:(?!目標價|股價|價位|營收|市值|配息|股利|股息|現金)[^，。；\d]){0,10}?(\d+(?:\.\d+)?)\s*[元塊]")
+# 2026-10-27：v6 prompt 試跑發現，prompt 明寫「不太會受到影響」「AI營收貢獻不大」不要列，模型還是照列，
+# 改由程式擋。否定或沒有變化：只說某件事不會發生、影響不大
+_NO_CHANGE_RE = re.compile(
+    r"不(?:太)?會受(?:到)?.{0,6}(?:影響|衝擊)|不受.{0,6}(?:影響|衝擊)|(?:影響|衝擊)(?:較小|不大|有限)"
+    r"|貢獻(?:不大|有限)|抵銷|難以被|不至於")
+# 同一段原文另外講了真正的變化(「競爭對手不受關稅影響，科林研發成本轉嫁壓力較大」「傳統業務的下滑」)就不算否定句
+_REAL_CHANGE_RE = re.compile(r"壓力|流失|下滑|衰退|減少|增加|增長|成長|提升|上升|下降|漲價|跌價|降價|調漲|調降")
+# 泛論：講一整類股票的一般規律，不是這家公司會發生的事(「虧轉盈的股票通常會大漲」)
+_GENERAL_RE = re.compile(r"(?:的股票|類股|這類公司|這種公司)(?:通常|往往|一般|多半)")
+# 估值合理不是低估：「估值合理」「本益比相對安全」「估值膨脹是正常的」
+_FAIR_VALUE_RE = re.compile(r"合理|不貴|相對安全|正常|膨脹")
+# 有估值依據的不擋：明說便宜、本益成長比小於 1，或給了倍數(「21-23倍的合理本益比」「淨值比1.1至1.5倍」)
+_CHEAP_RE = re.compile(r"低估|便宜|低於|偏低|折價|特價|本益成長比小於|PEG|\d+(?:\.\d+)?\s*倍")
+# 「有望推升估值」「估值大幅增加的關鍵」：只說估值會上去，沒有估值依據
+_VALUATION_HOPE_RE = re.compile(r"(?:推升|提升|增加|拉高).{0,4}估值|估值.{0,6}(?:推升|提升|增加|拉高)")
+_VALUATION_BASIS_RE = re.compile(r"本益比|P/?E|\d+(?:\.\d+)?\s*倍|低估|高估|合理價|股價淨值比|殖利率|便宜|昂貴")
+# 單季、半年的 EPS(「預估今年第一季 EPS 6.96 美元」)不能當成全年 EPS 直接指定，不然近四季 EPS 會被設成單季的數字
+_PARTIAL_PERIOD_RE = re.compile(r"第\s*[一二三四1-4]\s*季|單季|本季|上季|下季|這一季|[Qq]\s*[1-4]|上半年|下半年|每季")
+# 同一句同時講到全年(「上半年已達29元，預計全年有望突破60元」)，AI 抓的通常是全年的數字
+_FULL_YEAR_RE = re.compile(r"全年|整年|全年度")
 _NUMBER_RE = re.compile(r"\d[\d,]*(?:\.\d+)?")
 _CN_NUMBER_RE = re.compile(r"[零〇一二兩三四五六七八九十百千萬]+")
 _CN_DIGITS = {"零": 0, "〇": 0, "一": 1, "二": 2, "兩": 2, "三": 3, "四": 4,
@@ -399,6 +470,12 @@ def apply_checks(scenarios: list, thesis_direction: str, source_text: str,
      12. 目標價標來源(法人/節目)，沒有數字的丟掉
      13. EPS 預估原文沒有數字、但論點摘要寫了「2026年…32塊」時，從論點摘要補(標 figures_source)
      14. 成本下降依原文標 cost_kind：生產成本(良率、原料)只動毛利率，組織成本(裁員、費用)只動費用率
+    2026-10-27(v6 試跑發現 prompt 寫了模型也不照做)：
+     15. 否定句、影響不大(「不太會受到影響」「貢獻不大」「有望抵銷」) → 丟掉
+     16. 泛論(「虧轉盈的股票通常會大漲」) → 丟掉
+     17. 估值偏低的原文只說「合理、相對安全、膨脹是正常的」、也沒有本益比數字 → 丟掉
+     18. 估值情境只說「有望推升估值」、沒有估值依據 → 改成 TECHNICAL_FLOW
+     19. EPS 預估的原文是單季或半年(「第一季」「Q1」「上半年」) → 數字移到 eps_partial，不能直接指定 EPS
     """
     normalized_source = normalize_text(source_text)
     aliases = _company_aliases(asset_name, ticker)
@@ -448,6 +525,21 @@ def apply_checks(scenarios: list, thesis_direction: str, source_text: str,
             if _REGULATORY_RE.search(s["quote"]):
                 s["fixes"].append("FINANCIAL_RISK→REGULATORY_RISK(法規風險)")
                 s["type"] = "REGULATORY_RISK"
+        if s["type"] not in ("TECHNICAL_FLOW", "ANALYST_TARGET") and _NO_CHANGE_RE.search(s["quote"]) \
+                and not _REAL_CHANGE_RE.search(s["quote"]):
+            dropped.append({**s, "reason": "否定句或影響不大，不是變化"})
+            continue
+        if _GENERAL_RE.search(s["quote"]):
+            dropped.append({**s, "reason": "泛論，不是這家公司的事"})
+            continue
+        if s["type"] == "RERATING_UP" and _FAIR_VALUE_RE.search(s["quote"]) \
+                and not _CHEAP_RE.search(s["quote"]) and not (raw.get("figures") or {}).get("pe"):
+            dropped.append({**s, "reason": "估值合理不是低估"})
+            continue
+        if s["type"] in ("RERATING_UP", "RERATING_DOWN") and _VALUATION_HOPE_RE.search(s["quote"]) \
+                and not _VALUATION_BASIS_RE.search(s["quote"]):
+            s["fixes"].append(f"{s['type']}→TECHNICAL_FLOW(只說估值會變，沒有估值依據)")
+            s["type"] = "TECHNICAL_FLOW"
         if s["type"] in _CURRENT_STATE_TYPES and _CURRENT_STATE_RE.search(s["quote"]) \
                 and not _FUTURE_RE.search(s["quote"]):
             dropped.append({**s, "reason": "現況不是未來的變化"})
@@ -467,17 +559,31 @@ def apply_checks(scenarios: list, thesis_direction: str, source_text: str,
 
         s["figures"], removed = verify_figures(s["type"], raw.get("figures"), s["quote"], published_year)
         s["fixes"] += removed
+        if s["type"] == "EPS_FORECAST" and s["figures"].get("eps") and _PARTIAL_PERIOD_RE.search(s["quote"]) \
+                and not _FULL_YEAR_RE.search(s["quote"]):
+            s["figures"]["eps_partial"] = s["figures"].pop("eps")
+            s["figures"]["eps"] = None
+            s["fixes"].append("單季或半年的 EPS，不能當成全年 EPS 直接指定")
         if s["type"] == "ANALYST_TARGET":
             if not s["figures"].get("target_low"):
                 dropped.append({**s, "reason": "目標價沒有數字"})
                 continue
             s["source"] = "analyst" if _ANALYST_RE.search(s["quote"]) else "podcast"
+        # v6 起由 AI 判斷 margin_drag、cost_kind；v5 的 AI 輸出沒有這兩個欄位，用關鍵字推
         if s["type"] == "CAPACITY_EXPANSION":
-            s["margin_drag"] = bool(_MARGIN_DRAG_RE.search(s["quote"] + "".join(s["chain"])))
+            if isinstance(raw.get("margin_drag"), bool):
+                s["margin_drag"] = raw["margin_drag"]
+            else:
+                s["margin_drag"] = bool(_MARGIN_DRAG_RE.search(s["quote"] + "".join(s["chain"])))
         if s["type"] == "COST_EFFICIENCY":
-            blob = s["quote"] + "".join(s["chain"])
-            cogs, opex = bool(_COGS_RE.search(blob)), bool(_OPEX_RE.search(blob))
-            s["cost_kind"] = "cogs" if cogs and not opex else "opex" if opex and not cogs else "both"
+            if raw.get("cost_kind") in ("cogs", "opex", "both"):
+                s["cost_kind"] = raw["cost_kind"]
+            else:
+                blob = s["quote"] + "".join(s["chain"])
+                cogs, opex = bool(_COGS_RE.search(blob)), bool(_OPEX_RE.search(blob))
+                s["cost_kind"] = "cogs" if cogs and not opex else "opex" if opex and not cogs else "both"
+        if raw.get("duration") in ("short", "lasting"):
+            s["duration"] = raw["duration"]
 
         effect = lever_effect(s["type"]) or {"up": 1, "down": -1}.get(s["effect"], 0)
         s["effect"] = {1: "up", -1: "down"}.get(effect, "")
@@ -505,7 +611,7 @@ def _fill_eps_from_thesis(kept: list, thesis: str) -> list:
     out = []
     for s in kept:
         out.append(s)
-        if s["type"] == "EPS_FORECAST" and not s["figures"].get("eps") and pairs:
+        if s["type"] == "EPS_FORECAST" and not s["figures"].get("eps") and not s["figures"].get("eps_partial") and pairs:
             year, eps = pairs.pop(0)
             s["figures"] = {"eps": eps, "year": year}
             s["figures_source"] = "thesis"
@@ -540,7 +646,7 @@ def dedupe_scenarios(scenarios: list) -> list:
     return result
 
 
-def extract_thesis_scenarios(client, model: str, record) -> dict:
+def extract_thesis_scenarios(client, model: str, record, prompt_version: str = PROMPT_VERSION) -> dict:
     """
     對一筆 BacktestingRecord 呼叫 Gemini 拆情境，回傳可以直接存進 ThesisScenarioExtraction 的 dict：
       status：ok(有情境) / no_driver(論點太空泛) / failed(呼叫或解析失敗)
@@ -548,23 +654,26 @@ def extract_thesis_scenarios(client, model: str, record) -> dict:
       dropped：被檢查丟掉的情境跟原因。
     """
     context_text = build_context(record)
-    prompt = PROMPT_TEMPLATE.format(
+    prompt = PROMPTS[prompt_version].format(
         asset_name=record.asset, ticker=record.ticker, direction=record.direction,
         timeframe=record.timeframe_raw or "(未標示)", thesis=record.thesis,
         evidence_quote=record.evidence_quote or "(無)", context_text=context_text,
         type_list=build_type_list(),
     )
     try:
+        # 2.5 Pro 不能關掉思考(thinking_budget=0 會被拒絕)，思考的 token 也算在輸出上限裡，所以放寬
+        is_pro = "pro" in model
         resp = gemini_generate_with_retry(
             client=client, model=model, prompt_text=prompt,
-            temperature=0.0, max_output_tokens=4000, max_tries=3,
+            temperature=0.0, max_output_tokens=16000 if is_pro else 4000, max_tries=3,
+            thinking_budget=-1 if is_pro else 0,
         )
         obj = json.loads(sanitize_json_text(getattr(resp, "text", "") or ""))
         ai_scenarios = obj.get("scenarios") or []
         if not isinstance(ai_scenarios, list):
             raise ValueError("scenarios 不是陣列")
     except Exception as e:
-        return {"status": "failed", "scenarios": [], "ai_scenarios": [], "dropped": [],
+        return {"status": "failed", "scenarios": [], "ai_scenarios": [], "dropped": [], "unmapped": [],
                 "no_driver_reason": "", "error": str(e)[:500]}
 
     scenarios, dropped = _postprocess(record, ai_scenarios, context_text)
@@ -573,6 +682,7 @@ def extract_thesis_scenarios(client, model: str, record) -> dict:
         "scenarios": scenarios,
         "ai_scenarios": ai_scenarios,
         "dropped": dropped,
+        "unmapped": [u for u in (obj.get("unmapped") or []) if isinstance(u, dict)],
         "no_driver_reason": str(obj.get("no_driver_reason") or "")[:500],
         "error": "",
     }
@@ -590,16 +700,255 @@ def _postprocess(record, ai_scenarios: list, context_text: str) -> tuple[list, l
     return dedupe_scenarios(kept), dropped
 
 
-def recheck_thesis_scenarios(record, ai_scenarios: list, topics: Optional[list] = None) -> dict:
+# ── 第二步：用較強的模型逐一檢查 ─────────────────────────────────────────────
+# 2026-10-27：Flash 拆得多(召回高)但常不照規則；3.1 Pro 直接拆時很守規則，卻漏掉一半正確的情境。
+# 改成 Flash 先拆、程式檢查後，再請 Pro 判斷每個情境：預設保留，只有明確違反規則才處理，不新增情境。
+# 版本演進(舊版 prompt 已刪，內容見 git 歷史)：
+#   r1：只能留或刪。41 句上刪掉將近一半，誤刪「持續中的趨勢」和「節目提到的風險」。
+#   r2：把上面兩種寫成「一定要保留」，41 句上問題 9→5、正確的 6/6 都保留；40 句外部樣本正確率 89%(v5 75%)。
+#   r3：r2 的「現金流被當成財務風險」刪太多(自由現金流轉負、融資壓力是真的財務風險)，改窄。
+#   r4(2026-10-28)：Flash 類別分錯、但事件本身成立的(輝達發表新平台被分成需求增加、長榮運力過剩被分成需求放緩)，
+#       r3 只能整個刪掉；r4 可以改成正確的類別(retype)。
+REVIEW_PROMPT_TEMPLATE = """你是一位嚴謹的證券分析師，負責審查另一位分析師從 Podcast 論點拆出來的「情境」。
+這些情境之後會用來試算 {asset_name}（{ticker}）的 營收 → 毛利 → EPS → 股價。
+
+【驗證句】
+方向：{direction}
+論點：{thesis}
+原文引述：{evidence_quote}
+
+【補充段落】
+{context_text}
+
+【情境類型清單（改類別時只能從這裡選，填代碼）】
+{type_list}
+
+【待審查的情境】（i 是編號）
+{scenario_list}
+
+【審查規則】預設保留（keep）。只有「明確」符合下列情況才處理；拿不準就保留。
+刪除（drop）：事件本身不成立
+A. 泛論：講一整類股票或一般規律，不是 {asset_name} 會發生的事（「虧轉盈的股票通常會大漲」）
+B. 否定或沒有變化：只說某件事不會發生、影響不大、不確定（「不太會受影響」「AI營收貢獻不大」「有望抵銷關稅影響」）
+C. 靜態的現況：只描述目前「擁有」的優勢、能力、地位、營收結構，或多年前已完成的事
+   （「具備成本優勢」「卓越的供應鏈整合能力」「AI伺服器營收佔比高」「多年前併購基美」），沒有說接下來會怎麼變
+E. 空泛到沒有具體事件（「長期看好」「值得佈局」「適合波段操作」）
+F. 跟另一個情境重複：同一件事已經由另一個情境表達
+D. 類別錯、而且清單裡也沒有合適的類別，例如
+   - 「有現金流」「現金流穩健」這種正面的現況被當成需求增加；配息率、殖利率高低被當成財務風險
+     （注意：自由現金流轉負、現金流因資本支出縮水、需要發債或增資融資，是真的財務風險，要保留）
+   - 公司自用的資本支出（蓋自家數據中心）被當成擴產
+   - 只說「估值合理」「不貴」「估值膨脹是正常的」被當成估值偏低
+   - 漲價、需求的主體是別家公司，不是 {asset_name}
+   - 只說「透過AI優化」「提升效率」，沒說哪項成本下降，被當成成本下降
+改類別（retype）：事件本身是具體、未來或持續中的變化，只是類別分錯，而且清單裡有明顯更合適的類別，例如
+   - 發表、推出新平台或新產品，被分成需求增加 → NEW_BUSINESS
+   - 運力或產能供給過剩、導致報價下跌，被分成需求放緩 → PRICE_DOWN
+   - 政府或客戶給的價格（支付率、費率）調降，被分成成本上升 → PRICE_DOWN
+   只能改成清單裡的代碼，new_type 必填；方向（利多、利空）會依新類別重算。
+
+【以下一定要保留，不可以用 C 或 E 刪除】
+- 持續中的趨勢：「出貨持續成長」「訂單能見度高」「銷量持續下滑」「虧損持續擴大」「新製程良率改善中」
+  這類描述正在發生、會延續下去的變化，就算是用最近的財報數字來說明，也是情境，要保留。
+  只有像「毛利率提升至接近50%」這種已經到位、沒有延續性的單一結果，才算 C。
+- 節目提到的風險或反方因素：補充段落裡提到的競爭、法規、需求放緩、成本上升等風險，
+  就算驗證句本身沒有提到，也是節目針對這檔股票提到的風險，要保留。
+- 產業或客戶的變化會影響 {asset_name} 的（「主要客戶上調資本支出，帶動供應鏈訂單」），要保留。
+
+不要新增情境。
+
+只能輸出合法 JSON，不可包含任何解釋文字或 markdown：
+{{"verdicts": [{{"i": <編號>, "action": "keep"|"drop"|"retype", "new_type": "<retype 時填代碼，否則填空字串>",
+                "rule": "<drop 時填 A~F，否則填空字串>", "why": "<drop 或 retype 時用一句話說明>"}}]}}
+"""
+REVIEW_PROMPTS = {"r4": REVIEW_PROMPT_TEMPLATE}
+
+REVIEW_DROP_PREFIX = "Pro 檢查刪除"
+REVIEW_RETYPE_PREFIX = "Pro 檢查改類別"
+UNMAPPED_REASON = "沒有對應的類別"
+
+
+def _retype(sc: dict, new_type: str, thesis_direction: str, why: str = "") -> dict:
+    """Pro 判斷類別分錯時改成 new_type：方向、立場依新類別重算，只留新類別該有的數字與標記。"""
+    out = {k: v for k, v in sc.items() if k not in ("margin_drag", "cost_kind", "review_rule", "review_why")}
+    out["type"] = new_type
+    effect = lever_effect(new_type) or {"up": 1, "down": -1}.get(sc.get("effect"), 0)
+    out["effect"] = {1: "up", -1: "down"}.get(effect, "")
+    thesis_sign = {"bullish": 1, "bearish": -1}.get(thesis_direction, 0)
+    out["stance"] = ("support" if effect == thesis_sign else "against") if thesis_sign and effect else (out["effect"] or "unknown")
+    fields = FIGURE_FIELDS.get(new_type, ())
+    out["figures"] = {k: v for k, v in (sc.get("figures") or {}).items() if k in fields}
+    blob = out.get("quote", "") + "".join(out.get("chain") or [])
+    if new_type == "CAPACITY_EXPANSION":
+        out["margin_drag"] = bool(_MARGIN_DRAG_RE.search(blob))
+    if new_type == "COST_EFFICIENCY":
+        cogs, opex = bool(_COGS_RE.search(blob)), bool(_OPEX_RE.search(blob))
+        out["cost_kind"] = "cogs" if cogs and not opex else "opex" if opex and not cogs else "both"
+    out["fixes"] = list(sc.get("fixes") or []) + [f"Pro 改類別 {sc.get('type')}→{new_type}" + (f"：{why}" if why else "")]
+    return out
+
+
+def _recheck_retyped(sc: dict) -> Optional[dict]:
+    """
+    Pro 改類別後，再套一次跟類別有關的程式檢查(apply_checks 是在改類別之前做的)，回傳 None 代表要丟掉。
+    2026-10-28 r4 全部重做後發現：Pro 把「股價有機會挑戰 200 元」從技術面改成估值偏低，原文沒有估值依據，
+    勾了卻會調本益比；也有改成法人目標價卻沒有數字的。
+    """
+    t, quote = sc["type"], sc.get("quote", "")
+    if t not in ("TECHNICAL_FLOW", "ANALYST_TARGET") and _NO_CHANGE_RE.search(quote) and not _REAL_CHANGE_RE.search(quote):
+        return None
+    if _GENERAL_RE.search(quote):
+        return None
+    if t in _CURRENT_STATE_TYPES and _CURRENT_STATE_RE.search(quote) and not _FUTURE_RE.search(quote):
+        return None
+    if t == "RERATING_UP" and _FAIR_VALUE_RE.search(quote) and not _CHEAP_RE.search(quote) and not sc["figures"].get("pe"):
+        return None
+    if t in ("RERATING_UP", "RERATING_DOWN") and (not _VALUATION_RE.search(quote) or
+                                                 (_VALUATION_HOPE_RE.search(quote) and not _VALUATION_BASIS_RE.search(quote))):
+        new_type = "ANALYST_TARGET" if "目標價" in quote else "TECHNICAL_FLOW"
+        sc = {**sc, "type": new_type, "figures": {}, "fixes": sc["fixes"] + [f"{t}→{new_type}(沒有估值依據)"]}
+        t = new_type
+    if t == "ANALYST_TARGET" and not sc["figures"].get("target_low"):
+        return None
+    return sc
+
+
+def review_scenarios(client, model: str, record, scenarios: list, context_text: Optional[str] = None,
+                     review_version: str = "r4") -> dict:
+    """
+    第二步檢查：回傳 {"kept": [...], "removed": [{...情境, "review_rule", "review_why"}],
+    "retyped": [(原本的情境, 改類別後的情境)], "error": ""}。kept 已經包含改過類別的情境。
+    呼叫失敗或回傳格式不對時全部保留(不因為檢查失敗而丟掉情境)。
+    """
+    if not scenarios:
+        return {"kept": [], "removed": [], "retyped": [], "error": ""}
+    context_text = build_context(record) if context_text is None else context_text
+    listing = "\n".join(
+        f"{i}. 類別：{s['type']}（{SCENARIO_TYPES.get(s['type'], {}).get('name', '')}）"
+        f"｜{'利多' if s.get('effect') == 'up' else '利空' if s.get('effect') == 'down' else ''}"
+        f"｜quote：{s['quote']}｜因果鏈：{' → '.join(s.get('chain') or [])}"
+        for i, s in enumerate(scenarios))
+    prompt = REVIEW_PROMPTS[review_version].format(
+        asset_name=record.asset, ticker=record.ticker, direction=record.direction, thesis=record.thesis,
+        evidence_quote=record.evidence_quote or "(無)", context_text=context_text, scenario_list=listing,
+        type_list=build_type_list())
+    is_pro = "pro" in model
+    try:
+        resp = gemini_generate_with_retry(
+            client=client, model=model, prompt_text=prompt, temperature=0.0,
+            max_output_tokens=16000 if is_pro else 4000, max_tries=3, thinking_budget=-1 if is_pro else 0)
+        # Pro 偶爾在 JSON 後面多輸出一段(「Extra data」)，只取第一個完整的 JSON 物件
+        obj, _ = json.JSONDecoder().raw_decode(sanitize_json_text(getattr(resp, "text", "") or ""))
+        verdicts = {int(v["i"]): v for v in obj.get("verdicts") or [] if isinstance(v, dict) and "i" in v}
+    except Exception as e:
+        return {"kept": list(scenarios), "removed": [], "retyped": [], "error": str(e)[:500]}
+    kept, removed, retyped = [], [], []
+    for i, s in enumerate(scenarios):
+        v = verdicts.get(i) or {}
+        action = v.get("action") or ("drop" if v.get("keep") is False else "keep")
+        new_type = str(v.get("new_type") or "")
+        if action == "drop":
+            removed.append({**s, "review_rule": str(v.get("rule") or ""), "review_why": str(v.get("why") or "")})
+        elif action == "retype" and new_type in SCENARIO_TYPES and new_type != s["type"]:
+            new = _retype(s, new_type, record.direction, str(v.get("why") or ""))
+            retyped.append((s, new))       # 紀錄 Pro 的判斷(離線重算照著做)；改完不符合程式檢查的不留
+            checked = _recheck_retyped(new)
+            if checked is not None:
+                kept.append(checked)
+        else:
+            kept.append(s)
+    return {"kept": kept, "removed": removed, "retyped": retyped, "error": ""}
+
+
+def _review_records(rev: dict) -> list:
+    """Pro 的刪除、改類別存進 dropped，離線重算(recheck_thesis_scenarios)時照著重做一次。"""
+    removed = [{**sc, "reason": f"{REVIEW_DROP_PREFIX}（{sc.get('review_rule', '')}）{sc.get('review_why', '')}"}
+               for sc in rev["removed"]]
+    retyped = [{**old, "new_type": new["type"],
+                "reason": f"{REVIEW_RETYPE_PREFIX}（{old['type']}→{new['type']}）{new['fixes'][-1].split('：', 1)[-1] if '：' in new['fixes'][-1] else ''}"}
+               for old, new in rev["retyped"]]
+    return removed + retyped
+
+
+def _is_review_record(d: dict) -> bool:
+    reason = str(d.get("reason", ""))
+    return reason.startswith(REVIEW_DROP_PREFIX) or reason.startswith(REVIEW_RETYPE_PREFIX)
+
+
+def _scenario_key(sc: dict) -> tuple:
+    """比對「重算後的情境」是不是 Pro 處理過的那一個：同一句原文可能拆出兩個不同數字的 EPS 預估，數字也要一樣。"""
+    figures = {k: v for k, v in (sc.get("figures") or {}).items() if v is not None}
+    return sc.get("type"), normalize_text(sc.get("quote", "")), json.dumps(figures, sort_keys=True)
+
+
+def recheck_thesis_scenarios(record, ai_scenarios: list, topics: Optional[list] = None,
+                             prior_dropped: Optional[list] = None) -> dict:
     """
     不呼叫 Gemini，用已經存好的 AI 原始輸出重跑一次程式端檢查——改了檢查規則(例如補上
     中文數字轉換)時用這個重算，不用再花 API 費用、結果也不會因為 AI 重拆而變動。
     回傳的 dict 只有會被檢查影響的欄位(status/scenarios/dropped)。
     topics：同一集的「個股」段落(find_grounded_stock_topics 的結果)，批次重算時同一集
     只查一次再傳進來，不用每一筆驗證句都重查。
+    prior_dropped：這一筆原本存的 dropped。兩步做法(v6 起)的 Pro 檢查結果(刪除、改類別)存在裡面，
+    重算時照著重做，不然離線重算會把 Pro 處理過的情境還原；「沒有對應的類別」(AI 的 unmapped)也原樣保留。
     """
     scenarios, dropped = _postprocess(record, ai_scenarios or [], build_context(record, topics))
-    return {"status": "ok" if scenarios else "no_driver", "scenarios": scenarios, "dropped": dropped}
+    carried = [d for d in (prior_dropped or []) if _is_review_record(d) or d.get("reason") == UNMAPPED_REASON]
+    removed = {_scenario_key(d) for d in carried if str(d.get("reason", "")).startswith(REVIEW_DROP_PREFIX)}
+    retypes = {_scenario_key(d): d for d in carried if str(d.get("reason", "")).startswith(REVIEW_RETYPE_PREFIX)}
+    out = []
+    for sc in scenarios:
+        key = _scenario_key(sc)
+        if key in removed:
+            continue
+        if key in retypes:
+            d = retypes[key]
+            why = d["reason"].split("）", 1)[-1]
+            sc = _recheck_retyped(_retype(sc, d["new_type"], record.direction, why))
+            if sc is None:
+                continue
+        out.append(sc)
+    return {"status": "ok" if out else "no_driver", "scenarios": out, "dropped": dropped + carried}
+
+
+def re_review_extraction(row, review_client, review_model: str, review_version: str = REVIEW_VERSION) -> Optional[dict]:
+    """
+    只重做第二步：用存好的 Flash 原始輸出重跑程式檢查，還原成第一步的情境，再用新版檢查 prompt 重新判斷。
+    不重新呼叫 Flash，所以第一步的結果不變。回傳要更新的欄位(status/scenarios/dropped)；
+    Pro 呼叫失敗回傳 None(維持原本的結果)。
+    """
+    record = row.backtest_record
+    context = build_context(record)
+    first, program_dropped = _postprocess(record, row.ai_scenarios or [], context)
+    unmapped = [d for d in row.dropped if d.get("reason") == UNMAPPED_REASON]
+    rev = review_scenarios(review_client, review_model, record, first, context, review_version=review_version)
+    if rev["error"]:
+        return None
+    return {"status": "ok" if rev["kept"] else "no_driver", "scenarios": rev["kept"],
+            "dropped": program_dropped + _review_records(rev) + unmapped}
+
+
+def extract_two_step(flash_client, flash_model: str, review_client, review_model: str, record,
+                     prompt_version: str = "v6", review_version: str = REVIEW_VERSION) -> dict:
+    """
+    兩步做法(2026-10-27 起)：Flash 用 prompt_version 拆 → 程式檢查 → review_model 逐一判斷留、刪或改類別。
+    41 句問題樣本與 40 句外部樣本驗證過(正確率 v5 75% → 89%，見 out/two_step_fresh_judged.md)。
+    回傳格式同 extract_thesis_scenarios，可直接 save_extraction：
+      scenarios：Pro 留下的(含改過類別的)；dropped：程式丟掉的 + Pro 的刪除與改類別紀錄 + 沒有對應類別的；
+      Pro 檢查失敗時 status=failed(下次批次會整筆重跑)，不存只做了一半的結果。
+    """
+    first = extract_thesis_scenarios(flash_client, flash_model, record, prompt_version=prompt_version)
+    if first["status"] == "failed":
+        return first
+    unmapped = [{"type": "", "quote": str(u.get("quote") or ""), "driver": str(u.get("driver") or ""),
+                 "reason": UNMAPPED_REASON} for u in first.get("unmapped") or []]
+    if not first["scenarios"]:
+        return {**first, "dropped": first["dropped"] + unmapped}
+    rev = review_scenarios(review_client, review_model, record, first["scenarios"], review_version=review_version)
+    if rev["error"]:
+        return {**first, "status": "failed", "scenarios": [], "error": f"review: {rev['error']}"}
+    return {**first, "status": "ok" if rev["kept"] else "no_driver", "scenarios": rev["kept"],
+            "dropped": first["dropped"] + _review_records(rev) + unmapped}
 
 
 def is_extractable_ticker(ticker: Optional[str]) -> bool:
@@ -617,13 +966,13 @@ def financial_sector_tickers() -> set[str]:
     return {t for t, name in rows if name and FINANCIAL_INDUSTRY_PATTERN.search(name)}
 
 
-def save_extraction(record, model: str, result: dict):
+def save_extraction(record, model: str, result: dict, prompt_version: str = PROMPT_VERSION):
     """把一筆驗證句的萃取結果存進 ThesisScenarioExtraction(批次指令與即時補拆共用)。"""
     from apps.summaries.models import ThesisScenarioExtraction
 
     return ThesisScenarioExtraction.objects.using("summariesdb").update_or_create(
         backtest_record_id=record.id,
-        prompt_version=PROMPT_VERSION,
+        prompt_version=prompt_version,
         defaults={
             "summary_id": record.summary_id,
             "ticker": record.ticker,
@@ -639,10 +988,11 @@ def save_extraction(record, model: str, result: dict):
     )[0]
 
 
-MAX_ON_DEMAND_THESES = 5   # 一集一檔最多即時補拆幾句論點，避免單一請求跑太久
+MAX_ON_DEMAND_THESES = 5   # 一集一檔最多即時補拆幾句論點，避免單一請求跑太久(同時跑，約 20~40 秒)
 
 
-def ensure_thesis_extractions(summary_id: int, ticker: str, client=None, model: Optional[str] = None) -> int:
+def ensure_thesis_extractions(summary_id: int, ticker: str, client=None, model: Optional[str] = None,
+                              review_client=None) -> int:
     """
     即時補拆(cache-aside)：這一集這檔股票有驗證句、但還沒有拆好的情境時，當場呼叫 Gemini 拆完並存起來，
     回傳新拆了幾句。批次指令(backfill_thesis_scenarios)只處理跑當下已經存在的驗證句，之後新上架的
@@ -650,8 +1000,11 @@ def ensure_thesis_extractions(summary_id: int, ticker: str, client=None, model: 
     (不會每次打開都重拆，結果才穩定——temperature=0 也不完全穩定)。
 
     只補「拆了也試算得了」的：個股、不是銀行壽險、有財報資料。重複的論點文字只拆一次。
+    v6 起用兩步做法(Flash 拆 → Pro 檢查，每句約 20 秒)，幾句論點同時跑，使用者不用等每一句依序做完。
     """
     import os
+    from concurrent.futures import ThreadPoolExecutor
+    from django.db import connections
     from apps.summaries.models import BacktestingRecord, FinancialReportCache, ThesisScenarioExtraction
     from .gemini import make_client
 
@@ -676,13 +1029,22 @@ def ensure_thesis_extractions(summary_id: int, ticker: str, client=None, model: 
 
     model = model or os.getenv("THESIS_SCENARIO_MODEL", "gemini-2.5-flash")
     client = client or make_client(api_key=os.getenv("GEMINI_API_KEY", ""))
+    review_client = review_client or make_client(api_key=os.getenv("GEMINI_API_KEY", ""), location=REVIEW_LOCATION)
+    model_name = f"{model}+{REVIEW_MODEL}:{REVIEW_VERSION}"
     by_text = {}
     for r in todo:
         by_text.setdefault(r.thesis.strip(), []).append(r)
-    n = 0
-    for group in list(by_text.values())[:MAX_ON_DEMAND_THESES]:
-        result = extract_thesis_scenarios(client, model, group[0])
-        for r in group:
-            save_extraction(r, model, result)
-        n += 1
-    return n
+    groups = list(by_text.values())[:MAX_ON_DEMAND_THESES]
+
+    def work(group):
+        try:
+            result = extract_two_step(client, model, review_client, REVIEW_MODEL, group[0],
+                                      prompt_version=PROMPT_VERSION, review_version=REVIEW_VERSION)
+            for r in group:
+                save_extraction(r, model_name, result)
+        finally:
+            connections["summariesdb"].close()   # 執行緒自己的連線，用完關掉
+        return 1
+
+    with ThreadPoolExecutor(max_workers=len(groups)) as pool:
+        return sum(pool.map(work, groups))
