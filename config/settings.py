@@ -166,6 +166,19 @@ DATABASES = {
     },
 
 }
+# 資料庫連線重用：預設(CONN_MAX_AGE=0)每個請求都會重新連一次遠端 Supabase，實測每次連線要 0.8～1.5 秒
+# (查詢本身只要 0.08～0.16 秒)，單集頁一次要打好幾支 API、每支又會用到 2～3 個資料庫，光連線就要好幾秒。
+# 改成同一條連線保留 DB_CONN_MAX_AGE 秒給之後的請求重用；CONN_HEALTH_CHECKS 在重用前先確認連線還活著，
+# 被 Supabase 中斷的連線會自動重連，不會讓請求失敗。注意：Supabase 的 session 模式連線池(port 5432)
+# 每條保留中的連線都會佔一個名額，同時開的 worker/執行緒很多時要留意上限，必要時調小這個秒數。
+# 本機 runserver 每個請求開一個新執行緒、連線跟著執行緒，重用不到，還會留下一堆沒關的連線佔掉連線池名額，
+# 所以 runserver 預設維持 0(要測可以自己設 DB_CONN_MAX_AGE)；正式環境(gunicorn 等常駐 worker)才會真的重用。
+import sys as _sys
+_default_conn_age = "0" if "runserver" in _sys.argv else "60"
+for _db in DATABASES.values():
+    if _db.get("ENGINE", "").endswith("postgresql"):
+        _db.setdefault("CONN_MAX_AGE", int(os.getenv("DB_CONN_MAX_AGE", _default_conn_age)))
+        _db.setdefault("CONN_HEALTH_CHECKS", True)
 # 資料庫 routing
 DATABASE_ROUTERS = [
     "config.db_routers.EtfRouter",
