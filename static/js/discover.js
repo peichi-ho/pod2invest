@@ -335,7 +335,7 @@ function _thesisBoxHtml(r, { extraCls = '' } = {}) {
   const cfg = _THESIS_RESULT_CFG[r.result] || _THESIS_RESULT_CFG.pending;
   const episodeName = escapeHtml((r.source_filename || '').replace(/\.srt$/i, ''));
   return `
-    <div class="bg-surface-container-lowest rounded-xl border border-outline-variant/20 p-6 ${extraCls}">
+    <div class="bg-surface-container-lowest rounded-xl border border-outline-variant/50 p-6 ${extraCls}">
       <div class="flex items-start justify-between gap-4 mb-3">
         <p class="min-w-0 flex-1 text-sm font-bold text-tertiary-container font-['Epilogue'] leading-snug">${r.thesis ? `「${escapeHtml(r.thesis)}」` : ''}</p>
         <span class="flex-shrink-0 whitespace-nowrap text-[10px] font-bold px-2 py-0.5 rounded-full" style="background:${cfg.bg};color:${cfg.color}">${cfg.label}</span>
