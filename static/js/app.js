@@ -163,12 +163,58 @@ function showPage(page) {
   }
 }
 
+// ── 平滑捲到頂端 ─────────────────────────────────────────────
+// 再點一次「目前所在的分頁」時，頁面內容沒有換，用滑上去的方式回到頂端，不要瞬間跳過去。
+// 不用瀏覽器原生的 scrollTo({ behavior: 'smooth' })：它會跟著作業系統的「顯示 Windows 中的動畫」走，
+// 動畫效果關閉的電腦（這個專案的開發機就是）會整個停用、直接跳過去，所以這裡自己用
+// requestAnimationFrame 畫，時間固定、不受系統設定影響。
+// 使用者在滑的途中自己滾輪／觸控／按鍵／拖捲軸時立刻停手，不跟使用者搶捲動。
+const SCROLL_TOP_RESPECT_REDUCED_MOTION = false;  // true：系統設定「減少動態」時改回瞬間跳轉（無障礙考量）
+let _scrollAnimId = 0;                            // 每次開始／取消都加一，舊的動畫看到 id 變了就自己停
+
+function _cancelScrollAnim() { _scrollAnimId++; }
+
+function _smoothScrollToTop() {
+  const start = window.scrollY;
+  _cancelScrollAnim();
+  if (start <= 0) return;
+  if (SCROLL_TOP_RESPECT_REDUCED_MOTION && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    window.scrollTo(0, 0);
+    return;
+  }
+  const id = _scrollAnimId;
+  const duration = Math.min(700, 300 + start / 20);          // 越長的頁面稍微久一點，上限 0.7 秒
+  const ease = t => 1 - Math.pow(1 - t, 3);                  // ease-out：一開始快、快到頂端時放慢
+  const userEvents = ['wheel', 'touchstart', 'keydown', 'mousedown'];
+  const stop = () => { if (id === _scrollAnimId) _cancelScrollAnim(); };
+  userEvents.forEach(ev => window.addEventListener(ev, stop, { passive: true, once: true }));
+  // 起點用第一個動畫畫面的時間戳，不能用 performance.now()：rAF 給的時間戳是「這一幀開始的時間」，
+  // 可能比呼叫當下還早，算出負的進度，ease 會得到負值，第一步反而往下跳一段。
+  let t0 = null;
+  const step = now => {
+    if (id !== _scrollAnimId) { userEvents.forEach(ev => window.removeEventListener(ev, stop)); return; }
+    if (t0 === null) t0 = now;
+    const t = Math.min(1, Math.max(0, (now - t0) / duration));
+    window.scrollTo(0, Math.round(start * (1 - ease(t))));
+    if (t < 1) requestAnimationFrame(step);
+    else userEvents.forEach(ev => window.removeEventListener(ev, stop));
+  };
+  requestAnimationFrame(step);
+}
+
 // restore：goBack() 帶進來的捲動狀態；一般前進（showPage）不帶，維持從頁面最上面開始。
-function _renderPage(page, restore = null) {
+// opts.smoothTop：這一頁本來就在畫面上（再點一次同一個分頁），用滑上去的方式回頂端；
+//                 換成另一頁時內容整個換掉，沒有「滑」的意義，仍然是瞬間回到頂端。
+function _renderPage(page, restore = null, opts = {}) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-btn').forEach(b => { b.classList.remove('active'); b.classList.add('opacity-60'); });
   document.getElementById('page-' + page).classList.add('active');
-  window.scrollTo(0, 0);
+  if (opts.smoothTop) {
+    _smoothScrollToTop();
+  } else {
+    _cancelScrollAnim();   // 上一個還沒滑完的動畫不能在換頁後繼續把新頁面往上拉
+    window.scrollTo(0, 0);
+  }
 
   const navMap = { discover: 'discover', 'deep-dive': 'discover', rankings: 'rankings', podcaster: 'rankings', calculator: 'calculator', ai: 'ai', profile: 'profile' };
   const navId = 'nav-' + (navMap[page] || page);
@@ -247,10 +293,11 @@ function switchTab(tab) {
   if (tab === _currentTab) {
     // 再點一次目前所在的分頁：回到它的第一層、捲到最上面（跟以前一樣），並清掉這個分頁的記憶。
     // 計算機沒有子頁面，所以這裡不重置它的輸入。
+    const alreadyHere = _activePageId() === tab;   // 本來就停在這個分頁的第一層 → 滑上去；在子頁面 → 換頁，瞬間回去
     delete _tabMemory[tab];
     _pageHistory = [];
     _backOverride = null; _backOverrideOwner = null; _backOverrideArmed = false;
-    _renderPage(tab);
+    _renderPage(tab, null, { smoothTop: alreadyHere });
     return;
   }
 
