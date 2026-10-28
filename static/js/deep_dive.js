@@ -300,6 +300,13 @@ function switchDdMode(mode) {
 async function loadDeepDive(summaryId) {
   // 投資要點可能要等新手版本另外載入（見 renderDdTakeaways），先清掉上一集的內容，不要在等待期間顯示舊資料
   document.getElementById('dd-takeaways').innerHTML = '<p class="text-outline text-sm">載入中...</p>';
+  document.getElementById('dd-viewpoints').innerHTML = '<p class="text-outline text-sm">載入中...</p>';
+  // 彼此不相依的請求一開始就同時送出，不要等單集資料回來才一支接一支打(每支 API 都要連遠端資料庫，
+  // 依序等的話時間會疊加)：驗證句只需要 summaryId、收藏清單跟這一集無關。
+  const backtestingP = fetch(`/api/summaries/${summaryId}/backtesting/`).then(r => r.json());
+  backtestingP.catch(() => {});   // 單集資料載入失敗時，下面不會接上處理；避免主控台出現未處理的錯誤
+  const episodeFavP = _ensureEpisodeFavoritesCache();
+  _ensureFavoritesCache();   // 驗證句卡片上的標的星號會用到，先開始抓
   try {
     const res = await fetch(`/api/summaries/${summaryId}/`);
     const s   = await res.json();
@@ -322,15 +329,15 @@ async function loadDeepDive(summaryId) {
       dateSpan.textContent = ' · ' + s.published_at.slice(0, 10);
       podcasterEl.appendChild(dateSpan);
     }
-    // 集數標題右邊的書籤收藏按鈕（接在標題文字最後面，標題換行時會跟著最後一行）——await 快取才畫，
-    // 不然已收藏的集數會先閃一下未收藏的樣式。await 期間如果使用者已經切到別集，標題已經被
-    // 換掉了，這裡就不要把上一集的按鈕塞進新標題。
-    await _ensureEpisodeFavoritesCache();
-    if (summaryId === currentSummaryId) {
+    // 集數標題右邊的書籤收藏按鈕（接在標題文字最後面，標題換行時會跟著最後一行）——等收藏清單回來才畫，
+    // 不然已收藏的集數會先閃一下未收藏的樣式；但不擋住下面其他內容(之前 await 在這裡，整頁都要多等這支 API)。
+    // 等待期間如果使用者已經切到別集，標題已經被換掉了，就不要把上一集的按鈕塞進新標題。
+    episodeFavP.then(() => {
+      if (summaryId !== currentSummaryId) return;
       // -translate-y-0.5：中文標題字體度量跟 align-middle 的算法對不上，書籤會比文字視覺中心偏低
       // 約 2px（跟 app.js renderAssetNameStar() 的星號同一個問題），實測往上補 2px 最接近置中。
       titleEl.insertAdjacentHTML('beforeend', renderEpisodeBookmarkButton(s.id, 'w-9 h-9 ml-1 align-middle -translate-y-0.5', 'text-2xl'));
-    }
+    });
     document.getElementById('dd-one-sentence').textContent = '"' + s.one_sentence_summary + '"';
 
     // 打開單集頁面自動記一筆觀看紀錄（同一集重複打開後端會 upsert，不會累加重複項目）。
@@ -356,11 +363,10 @@ async function loadDeepDive(summaryId) {
       playerEl.classList.add('hidden');
     }
 
-    // Viewpoint Verification
-    document.getElementById('dd-viewpoints').innerHTML = '<p class="text-outline text-sm">載入中...</p>';
-    fetch(`/api/summaries/${summaryId}/backtesting/`)
-      .then(r => r.json())
+    // Viewpoint Verification(請求在函式開頭就送出了，這裡只等結果)
+    backtestingP
       .then(async records => {
+        if (summaryId !== currentSummaryId) return;
         await _ensureFavoritesCache();
         const statusMap = {
           pending: { label: '待驗證', icon: 'pending',      cls: 'text-outline',   border: 'border-outline-variant', bg: 'bg-surface-container/50' },

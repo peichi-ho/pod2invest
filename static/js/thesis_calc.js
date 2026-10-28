@@ -174,6 +174,7 @@ function thesisSetMonths(raw) {
 
 // 按下「開始試算」：用目前條件重抓一次，結果區才顯示這份
 async function thesisRun() {
+  if (typeof hideSavedSimNotes === 'function') hideSavedSimNotes();
   const btn = document.getElementById('thesis-run');
   btn.disabled = true;
   document.getElementById('thesis-run-hint').textContent = '試算中…';
@@ -182,6 +183,14 @@ async function thesisRun() {
   if (!data) { _thesisRunHint(); return; }
   _thesis.shown = data;
   _thesis.stale = false;
+  // 這次試算的條件(儲存試算紀錄用，見 saved_sims.js)。勾選的情境存「類別＋原文」，不只存編號——
+  // 情境以後可能重新拆解、編號會變，重現時用類別＋原文比對
+  _thesis.shownParams = {
+    score_id: _thesis.scoreId, thesis_id: data.thesis_id, months: data.horizon_months,
+    overrides: { ..._thesis.overrides },
+    checked: (data.checked || []).map(i => data.scenarios[i]).filter(Boolean)
+      .map(s => ({ type: s.type, quote: s.quote, label: s.label })),
+  };
   _thesisRenderResults(data);
   _thesisRunHint();
   document.getElementById('thesis-results').scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -190,6 +199,8 @@ async function thesisRun() {
 function _thesisRunHint() {
   const el = document.getElementById('thesis-run-hint');
   const results = document.getElementById('thesis-results');
+  const save = document.getElementById('thesis-save');
+  if (save) save.classList.toggle('hidden', !_thesis.shown || _thesis.stale);   // 有結果、條件沒再改過才能儲存
   if (!_thesis.shown) {
     el.textContent = '勾選好情境後按「開始試算」；都不勾也可以，代表公司延續目前的成長。';
     results.classList.add('hidden');

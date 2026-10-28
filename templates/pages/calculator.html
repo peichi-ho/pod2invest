@@ -1,8 +1,12 @@
 <!-- ═══════════════════════════════════════════════ PAGE: CALCULATOR ═══ -->
 <div id="page-calculator" class="page pt-24 px-6 max-w-7xl mx-auto pb-8">
-  <section class="mb-6">
-    <h2 id="calc-title" class="font-headline font-extrabold text-3xl text-tertiary-container tracking-tight">投資情境模擬</h2>
-    <p id="calc-subtitle" class="text-on-surface-variant text-sm mt-1">選一個標的，用歷史股價走勢或節目的投資論點，推演它可能走到哪裡</p>
+  <section class="mb-6 flex flex-wrap items-start justify-between gap-3">
+    <div class="min-w-0">
+      <h2 id="calc-title" class="font-headline font-extrabold text-3xl text-tertiary-container tracking-tight">投資情境模擬</h2>
+      <p id="calc-subtitle" class="text-on-surface-variant text-sm mt-1">選一個標的，用歷史股價走勢或節目的投資論點，推演它可能走到哪裡</p>
+    </div>
+    <button type="button" onclick="openSavedSimsList()" class="shrink-0 inline-flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-bold text-secondary border border-secondary/40 bg-surface-container-lowest hover:bg-secondary/10 transition-colors">
+      <span class="material-symbols-outlined text-lg leading-none">history</span>試算紀錄</button>
   </section>
 
   <div class="space-y-6">
@@ -114,7 +118,7 @@
 
           <div class="space-y-2">
             <label class="font-label text-sm font-bold uppercase tracking-widest text-outline">模擬次數</label>
-            <input id="in-nsim" type="number" value="1000" step="100" min="100" max="3000"
+            <input id="in-nsim" type="number" value="1000" step="100" min="100" max="3000" oninput="_simCheckStale()"
               class="w-full px-4 py-3 bg-surface-container-lowest border-none rounded-DEFAULT focus:ring-2 focus:ring-secondary text-tertiary-container font-['Epilogue'] font-semibold"/>
           </div>
         </div>
@@ -123,6 +127,8 @@
           開始模擬
         </button>
         <p id="status-text" class="text-xs text-outline text-center -mt-3"></p>
+        <button type="button" id="btn-save-sim" onclick="openSaveSimDialog('sim')" class="hidden w-full py-2.5 inline-flex items-center justify-center gap-1.5 rounded-full text-sm font-bold text-secondary border border-secondary/40 hover:bg-secondary/10 transition-colors">
+          <span class="material-symbols-outlined text-lg leading-none">bookmark_add</span>儲存這次模擬</button>
 
         
       </div>
@@ -259,6 +265,8 @@
                 <button type="button" id="thesis-run" onclick="thesisRun()"
                   class="w-full py-3.5 bg-tertiary-container hover:opacity-90 active:scale-[0.98] text-white font-label font-bold text-sm uppercase tracking-widest rounded-full transition-all disabled:opacity-40">開始試算</button>
                 <p id="thesis-run-hint" class="text-sm text-outline text-center"></p>
+                <button type="button" id="thesis-save" onclick="openSaveSimDialog('thesis')" class="hidden w-full py-2.5 inline-flex items-center justify-center gap-1.5 rounded-full text-sm font-bold text-secondary border border-secondary/40 hover:bg-secondary/10 transition-colors">
+                  <span class="material-symbols-outlined text-lg leading-none">bookmark_add</span>儲存這次試算</button>
               </div>
             </div>
           </div>

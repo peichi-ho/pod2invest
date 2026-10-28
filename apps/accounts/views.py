@@ -9,7 +9,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 
-from .models import UserProfile, FavoriteAsset, FavoriteEpisode, FavoritePodcast, WatchHistory
+from .models import UserProfile, FavoriteAsset, FavoriteEpisode, FavoritePodcast, WatchHistory, SavedSimulation
 
 
 class CsrfExemptSessionAuthentication(SessionAuthentication):
@@ -353,4 +353,101 @@ class ChangePasswordAPIView(APIView):
         user.set_password(new_password)
         user.save()
         update_session_auth_hash(request, user)  # 改密碼後維持目前 session 登入狀態，不強制登出
+        return Response({'ok': True})
+
+
+# ── 試算紀錄(計算機的股價模擬、論點情境試算) ────────────────────────────────
+
+_MAX_SIM_JSON_CHARS = 20000   # 條件、結果快照的 JSON 上限，避免前端誤傳整份 API 回應進來
+
+
+def _simulation_json(r):
+    return {'id': r.id, 'module': r.module, 'name': r.name, 'params': r.params, 'result': r.result,
+            'created_at': r.created_at.isoformat(), 'updated_at': r.updated_at.isoformat()}
+
+
+def _clean_sim_name(raw):
+    name = str(raw or '').strip()
+    if not name:
+        return None, '請輸入名稱'
+    if len(name) > 80:
+        return None, '名稱最多 80 個字'
+    return name, None
+
+
+class SavedSimulationsAPIView(APIView):
+    """
+    GET：試算紀錄清單(新到舊；?limit= 取前 N 筆、?module=sim|thesis 只看一種)。
+    POST：儲存一筆 {module, name, params, result}；每人最多 SavedSimulation.MAX_PER_USER 筆。
+    """
+    authentication_classes = [CsrfExemptSessionAuthentication]
+
+    def get(self, request):
+        if not request.user.is_authenticated:
+            return Response({}, status=status.HTTP_401_UNAUTHORIZED)
+        qs = SavedSimulation.objects.using('accountsdb').filter(user_id=request.user.id).order_by('-created_at')
+        module = request.query_params.get('module')
+        if module in SavedSimulation.MODULES:
+            qs = qs.filter(module=module)
+        total = qs.count()
+        limit = request.query_params.get('limit')
+        if limit:
+            try:
+                qs = qs[:max(1, int(limit))]
+            except ValueError:
+                pass
+        return Response({'items': [_simulation_json(r) for r in qs], 'total': total,
+                         'max': SavedSimulation.MAX_PER_USER})
+
+    def post(self, request):
+        import json
+        if not request.user.is_authenticated:
+            return Response({}, status=status.HTTP_401_UNAUTHORIZED)
+        module = request.data.get('module')
+        if module not in SavedSimulation.MODULES:
+            return Response({'error': 'module 必須是 sim 或 thesis'}, status=status.HTTP_400_BAD_REQUEST)
+        name, err = _clean_sim_name(request.data.get('name'))
+        if err:
+            return Response({'error': err}, status=status.HTTP_400_BAD_REQUEST)
+        params, result = request.data.get('params'), request.data.get('result') or {}
+        if not isinstance(params, dict) or not isinstance(result, dict):
+            return Response({'error': 'params、result 必須是物件'}, status=status.HTTP_400_BAD_REQUEST)
+        if len(json.dumps(params)) + len(json.dumps(result)) > _MAX_SIM_JSON_CHARS:
+            return Response({'error': '資料太大，無法儲存'}, status=status.HTTP_400_BAD_REQUEST)
+        mine = SavedSimulation.objects.using('accountsdb').filter(user_id=request.user.id)
+        if mine.count() >= SavedSimulation.MAX_PER_USER:
+            return Response({'error': f'試算紀錄最多 {SavedSimulation.MAX_PER_USER} 筆，請先刪除舊的紀錄'},
+                            status=status.HTTP_400_BAD_REQUEST)
+        r = SavedSimulation.objects.using('accountsdb').create(
+            user_id=request.user.id, module=module, name=name, params=params, result=result)
+        return Response(_simulation_json(r), status=status.HTTP_201_CREATED)
+
+
+class SavedSimulationDetailAPIView(APIView):
+    """PATCH：改名 {name}；DELETE：刪除。只能動自己的紀錄。"""
+    authentication_classes = [CsrfExemptSessionAuthentication]
+
+    def _get(self, request, pk):
+        return SavedSimulation.objects.using('accountsdb').filter(user_id=request.user.id, id=pk).first()
+
+    def patch(self, request, pk):
+        if not request.user.is_authenticated:
+            return Response({}, status=status.HTTP_401_UNAUTHORIZED)
+        r = self._get(request, pk)
+        if not r:
+            return Response({'error': '找不到這筆紀錄'}, status=status.HTTP_404_NOT_FOUND)
+        name, err = _clean_sim_name(request.data.get('name'))
+        if err:
+            return Response({'error': err}, status=status.HTTP_400_BAD_REQUEST)
+        r.name = name
+        r.save(using='accountsdb', update_fields=['name', 'updated_at'])
+        return Response(_simulation_json(r))
+
+    def delete(self, request, pk):
+        if not request.user.is_authenticated:
+            return Response({}, status=status.HTTP_401_UNAUTHORIZED)
+        r = self._get(request, pk)
+        if not r:
+            return Response({'error': '找不到這筆紀錄'}, status=status.HTTP_404_NOT_FOUND)
+        r.delete(using='accountsdb')
         return Response({'ok': True})
