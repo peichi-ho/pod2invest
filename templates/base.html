@@ -117,7 +117,8 @@
     // 見 app.js 的 _renderPage()，這個旗標只會影響「即將顯示」的那一頁一次就被清掉。
     if (typeof window !== 'undefined') window._enteredViaBottomNav = true;
     if (typeof showPage === 'function' && document.getElementById('page-' + page)) {
-      showPage(page);
+      // switchTab()（app.js）負責「分頁記憶」：切回來時還原上次停的那一頁與捲動位置，過期才回預設
+      if (typeof switchTab === 'function') switchTab(page); else showPage(page);
     } else {
       window.location.href = '/#' + page;
     }
@@ -199,7 +200,7 @@
     <span class="material-symbols-outlined nav-icon">psychology</span>
     <span class="font-['Manrope'] font-medium text-[10px] uppercase tracking-[0.05em] mt-1">AI Assistant</span>
   </button>
-  <button onclick="if (typeof resetCalculator === 'function') resetCalculator(); navHome('calculator')" id="nav-calculator" class="nav-btn flex flex-col items-center justify-center transition-all opacity-60">
+  <button onclick="navHome('calculator')" id="nav-calculator" class="nav-btn flex flex-col items-center justify-center transition-all opacity-60">
     <span class="material-symbols-outlined nav-icon">calculate</span>
     <span class="font-['Manrope'] font-medium text-[10px] uppercase tracking-[0.05em] mt-1">Calculator</span>
   </button>
@@ -211,12 +212,12 @@
 
 {% block body_scripts %}
 <!-- JS modules -->
-<script src="{% static 'js/app.js' %}?v=29"></script>
+<script src="{% static 'js/app.js' %}?v=30"></script>
 <script src="{% static 'js/discover.js' %}?v=53"></script>
 <script src="{% static 'js/rankings.js' %}?v=22"></script>
 <script src="{% static 'js/deep_dive.js' %}?v=29"></script>
 <script src="{% static 'js/calculator.js' %}?v=49"></script>
-<script src="{% static 'js/ai.js' %}?v=12"></script>
+<script src="{% static 'js/ai.js' %}?v=13"></script>
 <script src="{% static 'js/assets.js' %}?v=23"></script>
 <script src="{% static 'js/profile.js' %}?v=15"></script>
 <script>
@@ -234,6 +235,7 @@
     const wanted = location.hash.replace('#', '');
     const initial = wanted && document.getElementById('page-' + wanted) ? wanted : 'discover';
     showPage(initial);
+    _currentTab = _PAGE_TAB[initial] || 'discover';   // 分頁記憶：這個畫面屬於哪個主分頁（app.js）
     // hash 只是「一次性」的深連結入口，用掉就從網址列清掉——SPA 裡平常切分頁本來就
     // 不會更新 hash，留著的話網址列會一直卡在第一次連進來的那個分頁，之後重新整理
     // 永遠回不去首頁，跟使用者實際在哪一頁對不上。

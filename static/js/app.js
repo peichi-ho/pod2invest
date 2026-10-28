@@ -12,6 +12,20 @@ let _backOverrideArmed = false; // 是否已經真的顯示過 owner 頁一次�
                                  // 偵測到「已經 armed 過、卻又被呼叫」時會把過期的 override 清掉，見下方。
 let _calcBackVisible = true;    // 計算機頁要不要顯示頂部返回鍵，見 _renderPage()／_updateHeaderBack()
 
+// ── 分頁記憶（Tab memory）────────────────────────────────────
+// 底部導覽列的 5 個主分頁各自記住「上次離開時停在哪一頁、捲到哪、這個分頁自己的返回記錄」。
+// 切到別的分頁再切回來：沒過期就原樣還原（包含往下鑽的子頁面，例如排名 → 節目頁）；
+// 離開超過 TAB_MEMORY_TTL_MS、或從沒離開過，就跟以前一樣回到該分頁的預設畫面（第一層、捲到最上面）。
+// 只存在記憶體：重新整理頁面就清空。實作見 switchTab()。
+const TAB_MEMORY_ENABLED = true;             // 出問題時改成 false，整套退回「每次切換都回預設」的舊行為
+const TAB_MEMORY_TTL_MS  = 10 * 60 * 1000;   // 離開超過這麼久就放棄記憶
+const MAIN_TABS = ['discover', 'rankings', 'ai', 'calculator', 'assets'];
+// 子頁面屬於哪個主分頁（跟 _renderPage() 的 navMap 一致，另外 graph 是從計算機點進去的）
+const _PAGE_TAB = { discover: 'discover', 'deep-dive': 'discover', rankings: 'rankings', podcaster: 'rankings',
+                    ai: 'ai', calculator: 'calculator', graph: 'calculator', assets: 'assets' };
+let _currentTab = 'discover';  // 目前這個畫面「屬於」哪個主分頁：最後一次用底部導覽列進去的那個
+const _tabMemory = {};         // tab -> { page, scrollY, tracks, stack, savedAt }
+
 async function loadPodcastImages() {
   try {
     const res = await fetch('/api/summaries/podcast-images/');
@@ -63,13 +77,17 @@ function escapeHtml(str) {
 // 捲動位置，按返回（goBack）回到那一頁時還原，使用者就回到剛剛點擊連結跳轉時的畫面位置，
 // 不是每次都被丟回頁面最上面。全站的頁面切換都走 showPage()／goBack()，所以所有頁面一次到位。
 //   scrollY：整頁的垂直捲動位置
-//   tracks ：頁面內橫向捲動列（[data-scroll-track]，例如首頁「今日市場」「為你推薦」）各自的
-//            scrollLeft——頁面被 display:none 隱藏後瀏覽器會把它們歸零，要自己記著還原。
+//   tracks ：頁面內自己會捲動的區塊各自的 { l: scrollLeft, t: scrollTop }——
+//            [data-scroll-track]：橫向捲動列（例如首頁「今日市場」「為你推薦」）
+//            [data-scroll-keep] ：垂直捲動的內部區塊（例如 AI 助理的對話區、歷史列表）
+//            頁面被 display:none 隱藏後，部分瀏覽器會把它們歸零，要自己記著還原。
+const _SCROLL_PARTS = '[data-scroll-track],[data-scroll-keep]';
+
 function _captureScrollState(pageId) {
   const pageEl = document.getElementById('page-' + pageId);
   return {
     scrollY: window.scrollY,
-    tracks: pageEl ? [...pageEl.querySelectorAll('[data-scroll-track]')].map(el => el.scrollLeft) : [],
+    tracks: pageEl ? [...pageEl.querySelectorAll(_SCROLL_PARTS)].map(el => ({ l: el.scrollLeft, t: el.scrollTop })) : [],
   };
 }
 
@@ -77,11 +95,25 @@ function _restoreScrollState(pageId, state) {
   if (!state) return;
   const pageEl = document.getElementById('page-' + pageId);
   if (pageEl) {
-    pageEl.querySelectorAll('[data-scroll-track]').forEach((el, i) => {
-      if (state.tracks && state.tracks[i] != null) el.scrollLeft = state.tracks[i];
+    pageEl.querySelectorAll(_SCROLL_PARTS).forEach((el, i) => {
+      const s = state.tracks && state.tracks[i];
+      if (s) { el.scrollLeft = s.l; el.scrollTop = s.t; }
     });
   }
   window.scrollTo({ top: state.scrollY, left: 0, behavior: 'instant' });
+
+  // 一顯示就會重抓資料的分頁（例如 Assets），內容高度可能還沒長回來，第一次會被夾在比較短的位置；
+  // 稍後補捲幾次。只在使用者這段時間沒有自己捲動、而且還停在這一頁時才補，不去搶使用者的操作。
+  if (state.scrollY > 0 && Math.abs(window.scrollY - state.scrollY) > 4) {
+    let tries = 0, last = window.scrollY;
+    const timer = setInterval(() => {
+      const stillHere = pageEl && pageEl.classList.contains('active');
+      if (!stillHere || Math.abs(window.scrollY - last) > 4 || ++tries > 6) { clearInterval(timer); return; }
+      window.scrollTo({ top: state.scrollY, left: 0, behavior: 'instant' });
+      last = window.scrollY;
+      if (Math.abs(window.scrollY - state.scrollY) <= 4) clearInterval(timer);
+    }, 250);
+  }
 }
 
 function goBack() {
@@ -162,7 +194,86 @@ function _renderPage(page, restore = null) {
   _restoreScrollState(page, restore);
 }
 
-// ── 頂部橫幅的返回鍵 ──────────────────────────────────────────
+// ── 底部導覽列切換分頁（含分頁記憶）──────────────────────────
+function _activePageId() {
+  const a = document.querySelector('.page.active');
+  return a ? a.id.replace('page-', '') : null;
+}
+
+// 把目前的畫面存成 tab 的記憶（離開 tab 時呼叫）。
+function _saveTabMemory(tab) {
+  const page = _activePageId();
+  if (!page) return;
+  if (page === 'profile') {
+    // Profile 是從右上角頭像進來的暫時頁面，不屬於任何分頁：記成「打開它之前的那一頁」，
+    // 不然切回這個分頁會看到個人頁。showPage() 進 profile 時已經把前一頁（含捲動位置）推進 _pageHistory。
+    const prev = _pageHistory[_pageHistory.length - 1];
+    if (!prev) { delete _tabMemory[tab]; return; }
+    _tabMemory[tab] = { page: prev.page, scrollY: prev.scrollY, tracks: prev.tracks,
+                        stack: _pageHistory.slice(0, -1), override: [null, null, false], savedAt: Date.now() };
+    return;
+  }
+  const s = _captureScrollState(page);
+  _tabMemory[tab] = {
+    page, scrollY: s.scrollY, tracks: s.tracks, stack: _pageHistory.slice(), savedAt: Date.now(),
+    // 跨分頁連結（例如探索頁搜尋 → 個股詳情）留下的「返回目標」也要一起記，
+    // 不然從導覽列離開再回來，在詳情頁按返回就不會回到原本那一頁。
+    override: [_backOverride, _backOverrideOwner, _backOverrideArmed],
+  };
+}
+
+// 取出 tab 的記憶；沒有、已過期、或記的那一頁已經不存在就回 null。取出就清掉，下次離開時再存新的。
+function _takeTabMemory(tab) {
+  const mem = _tabMemory[tab];
+  delete _tabMemory[tab];
+  if (!mem) return null;
+  if (Date.now() - mem.savedAt > TAB_MEMORY_TTL_MS) return null;
+  if (!document.getElementById('page-' + mem.page)) return null;
+  return mem;
+}
+
+// 底部導覽列的入口（見 templates/base.html 的 navHome()）。
+function switchTab(tab) {
+  if (!TAB_MEMORY_ENABLED || !MAIN_TABS.includes(tab)) {
+    // 舊行為：每次都回該分頁的預設畫面。計算機以前是由導覽按鈕在切換前先重置。
+    if (tab === 'calculator' && typeof resetCalculator === 'function') resetCalculator();
+    showPage(tab);
+    return;
+  }
+
+  // 底部導覽列是平行切換，不是往下鑽：返回記錄由各分頁自己保管，不再每點一次就往同一疊推一筆
+  // （以前切幾次分頁，返回鍵就會被一堆舊的分頁記錄弄亂）。
+
+  if (tab === _currentTab) {
+    // 再點一次目前所在的分頁：回到它的第一層、捲到最上面（跟以前一樣），並清掉這個分頁的記憶。
+    // 計算機沒有子頁面，所以這裡不重置它的輸入。
+    delete _tabMemory[tab];
+    _pageHistory = [];
+    _backOverride = null; _backOverrideOwner = null; _backOverrideArmed = false;
+    _renderPage(tab);
+    return;
+  }
+
+  _saveTabMemory(_currentTab);   // 要在清掉「返回目標」之前存，它會跟著記憶一起保存
+  _backOverride = null; _backOverrideOwner = null; _backOverrideArmed = false;
+  const mem = _takeTabMemory(tab);
+  _currentTab = tab;
+
+  if (mem) {
+    _pageHistory = mem.stack;
+    [_backOverride, _backOverrideOwner, _backOverrideArmed] = mem.override || [null, null, false];
+    // 計算機頁的返回鍵規則：直接從導覽列進來不顯示；但還原的是「往下鑽進來的」那一趟就要顯示。
+    window._enteredViaBottomNav = mem.stack.length === 0;
+    _renderPage(mem.page, { scrollY: mem.scrollY, tracks: mem.tracks });
+  } else {
+    _pageHistory = [];
+    // 沒有記憶（第一次、或已經過期）→ 計算機跟以前一樣回到預設輸入
+    if (tab === 'calculator' && typeof resetCalculator === 'function') resetCalculator();
+    _renderPage(tab);
+  }
+}
+
+// ── 頂部橫幅的返回鍵──────────────────────────────────────────
 // 全站只有這一顆返回鍵（templates/base.html 的 #header-back-btn），各頁自己不放。
 // 兩種「頁內子畫面」（Assets 詳情、Discover 的熱門主題篩選結果）不是獨立的 page，
 // 不會經過 _renderPage()，所以它們開關時要自己呼叫 _updateHeaderBack()。
