@@ -434,4 +434,20 @@ async function onProfilePageShow() {
   loadWatchHistory();
   loadSavedEpisodes();
   loadFavoritePodcasts();
+  loadProfileSavedSims();
+}
+
+
+// 個人頁「試算紀錄」：最近 5 筆，開啟會跳到計算機、用當時的條件重新試算(見 saved_sims.js)
+async function loadProfileSavedSims() {
+  const ul = document.getElementById('profile-saved-sims');
+  if (!ul || typeof fetchSavedSims !== 'function') return;
+  try {
+    const data = await fetchSavedSims(5);
+    ul.innerHTML = (data.items || []).length
+      ? data.items.map(it => savedSimRowHtml(it, true)).join('')
+      : '<li class="text-outline text-sm">還沒有試算紀錄。在計算機的試算結果旁按「儲存試算」就會出現在這裡。</li>';
+  } catch (e) {
+    ul.innerHTML = '<li class="text-outline text-sm">試算紀錄載入失敗</li>';
+  }
 }
