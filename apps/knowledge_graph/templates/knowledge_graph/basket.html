@@ -107,7 +107,6 @@
     </div>
 
     <div class="flex flex-wrap gap-x-5 gap-y-1 text-[13px] text-on-surface-variant mb-5 bg-surface-container-low border border-outline-variant/30 rounded-lg px-4 py-2.5">
-      <span><b class="text-on-surface">提及次數</b>：在所選時間窗口內被提及的總次數</span>
       <span><b class="text-on-surface">Podcast 數</b>：提及該標的的不同 Podcast 數量</span>
       <span><b class="text-on-surface">財務驗證</b>：財報檢查通過的項目數</span>
     </div>
@@ -375,6 +374,33 @@ function fVerifyDots(layer2) {
   return dots;
 }
 
+// 路徑上相鄰兩家公司之間的箭頭：供應鏈上游「A ← B」＝B 供應 A，下游「A → B」＝A 供應 B，其他關係沒有方向
+function pathArrow(strategy) {
+  return { supply_upstream: "←", supply_downstream: "→" }[strategy] || "—";
+}
+
+// 間接標的 = 跟查詢標的之間隔了別家公司（路徑超過一步）
+function isIndirect(c) {
+  return (c.hops || 1) > 1;
+}
+
+// 「聯發科 ← 台積電 ← 帆宣」：查詢標的淺青、中間公司灰、標的本身深色
+function pathChipsHtml(c) {
+  const path = c.path && c.path.length ? c.path : [lastData.seed, c.node];
+  const arrow = `<span class="text-outline text-sm">${pathArrow(lastData.strategy)}</span>`;
+  return path.map((n, i) => {
+    const cls = i === 0 ? "bg-[#e1f2f5] text-secondary"
+      : (i === path.length - 1 ? "bg-tertiary-container text-on-tertiary font-semibold" : "bg-surface-container text-on-surface-variant");
+    return (i > 0 ? arrow : "") + `<span class="text-[13px] px-2.5 py-0.5 rounded-full ${cls}">${esc(n)}</span>`;
+  }).join("");
+}
+
+// 間接標的的次數、集數是整條路徑累計的，在數字下面補一行小字，跟財務驗證的圓點同一列
+function indirectNoteHtml(c) {
+  return isIndirect(c)
+    ? `<div class="h-4 mt-1.5 flex items-center justify-center text-xs text-outline">(間接提及)</div>` : "";
+}
+
 function cardHtml(c, idx) {
   const layer2 = c.layer2;
   const ticker = layer2 && layer2.ticker ? layer2.ticker : "";
@@ -383,7 +409,11 @@ function cardHtml(c, idx) {
   const combinedLabel = layer2 && layer2.combined_label;
 
   const rawReasons = (c.path_reasons || []).flatMap(seg => seg.reasons || []);
-  const bulletReasons = rawReasons.slice(0, 2);
+  // 間接標的：路徑每一段各取一條，才看得到「標的怎麼接到查詢標的」；直接標的維持前兩條
+  const bulletReasons = isIndirect(c)
+    ? (c.path_reasons || []).map(seg => (seg.reasons || [])[0]).filter(Boolean).slice(0, 3)
+    : rawReasons.slice(0, 2);
+  const indirect = isIndirect(c);
 
   return `
   <div class="bg-surface-container-lowest border border-outline-variant/40 @container rounded-xl p-5 flex flex-col hover:border-tertiary-container/50 transition-colors cursor-pointer" onclick="openDetail(${idx})">
@@ -393,21 +423,22 @@ function cardHtml(c, idx) {
       ${ticker && combinedLabel ? `<span class="hidden @[360px]:block w-px h-5 bg-outline-variant"></span>` : ""}
       ${combinedLabel ? `<span class="text-sm px-3 py-1 rounded-full bg-[#fdf0dc] text-[#8d4f00] font-bold whitespace-nowrap">${esc(combinedLabel)}</span>` : ""}
     </div>
-    <div class="font-headline font-extrabold text-2xl text-on-surface mb-4">${esc(c.node)}</div>
+    <div class="font-headline font-extrabold text-2xl text-on-surface ${indirect ? "mb-3" : "mb-4"}">${esc(c.node)}</div>
+    ${indirect ? `
+      <div class="flex items-center gap-1.5 flex-wrap mb-4">
+        <span class="text-xs text-on-surface-variant mr-0.5">間接相連</span>${pathChipsHtml(c)}
+      </div>` : ""}
 
-    <div class="grid grid-cols-3 text-center rounded-2xl bg-[#f0f5f5] py-4 px-1 mb-4">
+    <div class="grid grid-cols-2 text-center rounded-2xl bg-[#f0f5f5] py-4 px-1 mb-4">
       <div class="px-0.5">
-        <div class="text-sm text-on-surface-variant">提及次數</div>
-        <div class="text-base sm:text-lg font-bold text-on-surface mt-1 whitespace-nowrap">${c.mention_count ?? 0} 次</div>
-      </div>
-      <div class="px-0.5 border-l border-outline-variant/50">
         <div class="text-sm text-on-surface-variant">Podcast 數</div>
         <div class="text-base sm:text-lg font-bold text-on-surface mt-1 whitespace-nowrap">${c.source_diversity ?? 0} 個</div>
+        ${indirectNoteHtml(c)}
       </div>
       <div class="px-0.5 border-l border-outline-variant/50">
         <div class="text-sm text-on-surface-variant">財務驗證</div>
         <div class="text-base sm:text-lg font-bold text-on-surface mt-1 whitespace-nowrap">${esc(fLabel)}</div>
-        <div class="flex gap-1.5 justify-center mt-1.5">${fVerifyDots(layer2)}</div>
+        <div class="h-4 mt-1.5 flex gap-1.5 items-center justify-center">${fVerifyDots(layer2)}</div>
       </div>
     </div>
 
@@ -427,6 +458,66 @@ function cardHtml(c, idx) {
   </div>`;
 }
 
+// 詳情面板「每一段關係的理由與出處」：一條原始提及 = 一句理由 + 它出自哪一集（可點，新分頁開該集摘要）
+const SEG_VISIBLE_ROWS = 5;
+
+function segmentRowHtml(r) {
+  const title = [r.show_name, r.episode_title].filter(Boolean).join(" · ") || "（來源不詳）";
+  const episode = r.summary_id
+    ? `<a href="/?open_summary=${Number(r.summary_id)}" target="_blank" rel="noopener" title="${escAttr(title)}" class="flex items-center gap-1.5 text-sm text-secondary hover:opacity-80 min-w-0">
+         <span class="material-symbols-outlined text-base flex-shrink-0">headphones</span>
+         <span class="truncate underline underline-offset-2">${esc(title)}</span>
+         <span class="material-symbols-outlined text-sm flex-shrink-0">open_in_new</span>
+       </a>`
+    : `<div class="flex items-center gap-1.5 text-sm text-outline min-w-0" title="摘要庫裡沒有這一集">
+         <span class="material-symbols-outlined text-base flex-shrink-0">headphones</span>
+         <span class="truncate">${esc(title)}</span>
+       </div>`;
+  return `
+    <div class="py-3 border-t border-outline-variant/30 first:border-t-0 first:pt-0">
+      <div class="text-base text-on-surface leading-snug mb-1">${esc(r.reason || "（無描述）")}</div>
+      ${episode}
+      <div class="text-xs text-outline mt-0.5 pl-6">${esc(r.summary_date || "")}</div>
+    </div>`;
+}
+
+function connectionsHtml(c) {
+  const segs = (c.path_reasons || []).filter(seg => (seg.rows || []).length);
+  if (!segs.length) return "";
+  const arrow = pathArrow(lastData.strategy);
+  const blocks = segs.map((seg, si) => {
+    const rows = seg.rows;
+    const hidden = rows.slice(SEG_VISIBLE_ROWS);
+    const capNote = seg.mention_count > rows.length
+      ? `<div class="text-xs text-outline mt-2">共 ${seg.mention_count} 次，這裡列出最近 ${rows.length} 筆</div>` : "";
+    return `
+      <div class="border border-outline-variant/40 rounded-2xl p-4 mb-3">
+        <div class="flex items-center justify-between gap-2 flex-wrap mb-3">
+          <span class="text-sm px-3 py-0.5 rounded-full bg-[#e1f2f5] text-secondary font-semibold">${esc(seg.from)} ${arrow} ${esc(seg.to)}</span>
+          <span class="text-sm text-on-surface-variant whitespace-nowrap">${seg.mention_count} 次 · ${seg.source_diversity} 集</span>
+        </div>
+        ${rows.slice(0, SEG_VISIBLE_ROWS).map(segmentRowHtml).join("")}
+        ${hidden.length ? `
+          <div id="seg-more-${si}" class="hidden">${hidden.map(segmentRowHtml).join("")}</div>
+          <button type="button" onclick="toggleSegMore(${si}, ${hidden.length})" class="mt-1 text-sm text-secondary font-semibold flex items-center gap-1">
+            <span id="seg-more-label-${si}">展開其餘 ${hidden.length} 筆</span>
+            <span id="seg-more-icon-${si}" class="material-symbols-outlined text-base">expand_more</span>
+          </button>` : ""}
+        ${capNote}
+      </div>`;
+  }).join("");
+  return `
+    <div class="font-headline font-bold text-base text-on-surface mb-1">每一段關係的理由與出處</div>
+    <div class="text-xs text-on-surface-variant mb-3">集數可點擊，會在新分頁開啟該集摘要</div>
+    ${blocks}`;
+}
+
+function toggleSegMore(si, n) {
+  const open = document.getElementById("seg-more-" + si).classList.toggle("hidden") === false;
+  document.getElementById("seg-more-label-" + si).textContent = open ? "收合" : `展開其餘 ${n} 筆`;
+  document.getElementById("seg-more-icon-" + si).textContent = open ? "expand_less" : "expand_more";
+}
+
 const CHECK_DISPLAY_ORDER = [
   "營業利益為正", "營收年增為正",
   "EPS年增為正", "EPS環比增加",
@@ -439,17 +530,6 @@ function openDetail(idx) {
   const c = lastData.basket[idx];
   const layer2 = c.layer2;
   const ticker = layer2 && layer2.ticker ? layer2.ticker : "-";
-  const path = c.path && c.path.length ? c.path : [lastData.seed, c.node];
-
-  const pathHtml = path.map((n, i) => {
-    const cls = i === 0 ? "bg-secondary-container text-on-secondary-container"
-      : (i === path.length - 1 ? "bg-primary-container/20 text-on-primary-container font-semibold" : "bg-surface-container text-on-surface-variant");
-    return (i > 0 ? '<span class="text-outline-variant text-sm">→</span>' : "") +
-      `<span class="text-[13px] px-2 py-0.5 rounded-md ${cls}">${esc(n)}</span>`;
-  }).join(" ");
-
-  const segments = (c.path_reasons || []).filter(seg => (seg.reasons || []).length);
-  const totalRaw = segments.reduce((sum, seg) => sum + seg.reasons.length, 0);
 
   let financeSection = "";
   if (!layer2 || layer2.status === "unavailable") {
@@ -512,38 +592,29 @@ function openDetail(idx) {
     <div class="font-headline font-extrabold text-2xl text-on-surface mb-2">${esc(c.node)}</div>
     <span class="inline-block text-[13px] px-2.5 py-0.5 rounded-full bg-secondary-container text-on-secondary-container font-medium mb-4">${relationLabel(lastData.strategy)}</span>
 
-    <div class="grid grid-cols-3 gap-2 text-center border-y border-outline-variant/30 py-3 mb-4">
-      <div>
-        <div class="text-xs text-on-surface-variant">提及次數</div>
-        <div class="text-lg font-bold text-on-surface mt-0.5">${c.mention_count ?? 0} 次</div>
-      </div>
+    <div class="grid grid-cols-2 gap-2 text-center border-y border-outline-variant/30 py-3 mb-4">
       <div>
         <div class="text-xs text-on-surface-variant">Podcast 數</div>
         <div class="text-lg font-bold text-on-surface mt-0.5">${c.source_diversity ?? 0} 個</div>
+        ${indirectNoteHtml(c)}
       </div>
       <div>
         <div class="text-xs text-on-surface-variant">財務驗證</div>
         <div class="text-lg font-bold text-on-surface mt-0.5">${layer2 && layer2.f_score_max ? `${layer2.f_score}/${layer2.f_score_max}` : "無法評估"}</div>
-        <div class="flex gap-1 justify-center mt-1">${fVerifyDots(layer2)}</div>
+        <div class="h-4 mt-1.5 flex gap-1 items-center justify-center">${fVerifyDots(layer2)}</div>
       </div>
     </div>
 
     <div class="text-sm font-semibold text-on-surface-variant mb-1.5">路徑</div>
-    <div class="flex items-center flex-wrap gap-1 mb-4">${pathHtml}</div>
+    <div class="flex items-center flex-wrap gap-1.5 mb-4">${pathChipsHtml(c)}</div>
 
     <div class="text-sm font-semibold text-on-surface-variant mb-1.5">被提及的主要理由</div>
     <div class="text-base text-on-surface leading-relaxed mb-2">${esc(c.synthesized_reason || "查無具體描述，僅圖譜路徑相連")}</div>
-    ${totalRaw ? `
-      <div class="text-sm text-secondary font-semibold cursor-pointer mb-4" onclick="toggleRawReasons()">查看更多理由（${totalRaw} 項） <span class="material-symbols-outlined text-base align-middle">expand_more</span></div>
-      <div id="raw-reasons" class="hidden text-sm text-on-surface-variant leading-relaxed mb-4 bg-surface-container-low rounded-lg p-3 space-y-2">
-        ${segments.map(seg => `
-          <div>
-            <div class="font-medium text-on-surface-variant mb-0.5">${esc(seg.from)} → ${esc(seg.to)}</div>
-            ${seg.reasons.map(r => `<div>・${esc(r)}</div>`).join("")}
-          </div>
-        `).join("")}
-      </div>
-    ` : `<div class="mb-4"></div>`}
+    <div class="mb-5"></div>
+
+    ${connectionsHtml(c)}
+
+    <div class="mb-3"></div>
 
     ${financeSection}
 
@@ -694,10 +765,6 @@ function rewardSectionHtml(layer2) {
         ${valuationFeatureCardHtml(layer2)}
       </div>
     </div>`;
-}
-
-function toggleRawReasons() {
-  document.getElementById("raw-reasons").classList.toggle("hidden");
 }
 
 function toggleCheckExplanations() {
