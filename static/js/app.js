@@ -692,8 +692,8 @@ function renderHeaderAvatar() {
   el.innerHTML = _userProfile.avatar_base64
     ? `<img src="${_userProfile.avatar_base64}" alt="${escapeHtml(_userProfile.username || '')}" class="w-full h-full object-cover"/>`
     : initial
-      ? initialAvatarHtml(initial, 'text-lg')
-      : `<div class="w-full h-full flex items-center justify-center" style="background:#113236"><span class="material-symbols-outlined text-white text-2xl" style="font-variation-settings:'FILL' 1">person</span></div>`;
+      ? initialAvatarHtml(initial, 'text-xl')
+      : `<div class="w-full h-full flex items-center justify-center" style="background:#113236"><span class="material-symbols-outlined text-white text-[28px]" style="font-variation-settings:'FILL' 1">person</span></div>`;
 }
 
 // ── 搜尋框的清除（✕）按鈕 ─────────────────────────────────────
