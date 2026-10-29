@@ -195,26 +195,90 @@ function _prefScore(summary, prefs) {
 // ── Data loading ──────────────────────────────────────────────
 let _userPrefs = null;
 
-async function loadDiscoverData() {
+// fetch 本身沒有逾時：資料庫連線卡住時，使用者會一直看著「載入中」或空白，也不知道是壞了還是還在載。
+// 所以推薦內容自己設逾時、慢的時候出提示、失敗時給重試按鈕。
+const _DISCOVER_TIMEOUT_MS   = 20000;  // 超過就當作失敗，顯示重試
+const _DISCOVER_SLOW_HINT_MS = 8000;   // 超過就先提示「比較久」
+const _PREFS_GRACE_MS        = 1500;   // 摘要先到時，最多再等偏好設定這麼久；沒等到就先畫，之後再重排
+let _discoverRunId = 0;
+
+async function _fetchJson(url, timeoutMs) {
+  const ctrl  = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const [summaryRes, prefRes] = await Promise.all([
-      fetch('/api/summaries/?limit=100'),
-      fetch('/api/accounts/preferences/'),
-    ]);
-    const all = await summaryRes.json();
-    _userPrefs = prefRes.ok ? await prefRes.json() : null;
+    const res = await fetch(url, { signal: ctrl.signal });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function _setRecommendedHtml(html) {
+  const el = document.getElementById('recommended-cards');
+  if (el) el.innerHTML = html;
+}
+
+function _renderRecommendedError() {
+  _setRecommendedHtml(`
+    <div class="flex items-center gap-4 py-6 px-2">
+      <p class="text-outline text-sm">推薦內容載入失敗</p>
+      <button type="button" onclick="loadDiscoverData()"
+        class="px-4 py-1.5 border border-secondary text-secondary rounded-full font-label text-sm font-bold tracking-widest hover:bg-secondary hover:text-white transition-colors">重試</button>
+    </div>`);
+}
+
+async function loadDiscoverData() {
+  const runId = ++_discoverRunId;               // 按「重試」後，舊請求晚回來不能蓋掉新的畫面
+  const stale = () => runId !== _discoverRunId;
+
+  _setRecommendedHtml('<p class="text-outline text-sm">載入中...</p>');
+  const slowTimer = setTimeout(() => {
+    if (!stale()) _setRecommendedHtml('<p class="text-outline text-sm">載入比較久，請稍候…</p>');
+  }, _DISCOVER_SLOW_HINT_MS);
+
+  // 偏好設定不擋畫面：訪客是 401、登入者的 accounts 資料庫慢或掛掉時，推薦內容照樣要出得來。
+  const prefsPromise = _fetchJson('/api/accounts/preferences/', _DISCOVER_TIMEOUT_MS)
+    .catch(() => null)
+    .then(p => { if (!stale()) _userPrefs = p; return p; });
+
+  try {
+    const all = await _fetchJson('/api/summaries/?limit=100', _DISCOVER_TIMEOUT_MS);
+    clearTimeout(slowTimer);
+    if (stale()) return;
 
     _discoverCache = dedupeByEpisode(all);
+    loadContinueReading();
 
     // sort by preference score if user has completed onboarding
-    const hasPrefs = _userPrefs && Object.keys(_userPrefs).length > 0;
-    const sorted = hasPrefs
-      ? [..._discoverCache].sort((a, b) => _prefScore(b, _userPrefs) - _prefScore(a, _userPrefs))
-      : _discoverCache;
+    const draw = prefs => {
+      const hasPrefs = prefs && Object.keys(prefs).length > 0;
+      const sorted = hasPrefs
+        ? [..._discoverCache].sort((a, b) => _prefScore(b, prefs) - _prefScore(a, prefs))
+        : _discoverCache;
+      renderRecommended(sorted.slice(0, 10));
+    };
 
+    // 偏好通常早就回來了；還沒回來就先用原順序畫，回來之後如果有偏好再重排。
+    const early = await Promise.race([
+      prefsPromise,
+      new Promise(resolve => setTimeout(() => resolve(undefined), _PREFS_GRACE_MS)),
+    ]);
+    if (stale()) return;
+    if (early === undefined) {
+      draw(null);
+      prefsPromise.then(p => { if (!stale() && p && Object.keys(p).length > 0) draw(p); });
+    } else {
+      draw(early);
+    }
+  } catch (e) {
+    clearTimeout(slowTimer);
+    if (stale()) return;
+    console.error('loadDiscoverData failed', e);
+    _renderRecommendedError();
+    // 「繼續閱讀」卡片的初始文字也是「載入中...」，不能因為推薦失敗就一直卡著。
     loadContinueReading();
-    renderRecommended(sorted.slice(0, 10));
-  } catch(e) { console.error('loadDiscoverData failed', e); }
+  }
 }
 
 // ── Weekly Signals ─────────────────────────────────────────────
@@ -271,7 +335,7 @@ function _thesisBoxHtml(r, { extraCls = '' } = {}) {
   const cfg = _THESIS_RESULT_CFG[r.result] || _THESIS_RESULT_CFG.pending;
   const episodeName = escapeHtml((r.source_filename || '').replace(/\.srt$/i, ''));
   return `
-    <div class="bg-surface-container-lowest rounded-xl border border-outline-variant/20 p-6 ${extraCls}">
+    <div class="bg-surface-container-lowest rounded-xl border border-outline-variant/50 p-6 ${extraCls}">
       <div class="flex items-start justify-between gap-4 mb-3">
         <p class="min-w-0 flex-1 text-sm font-bold text-tertiary-container font-['Epilogue'] leading-snug">${r.thesis ? `「${escapeHtml(r.thesis)}」` : ''}</p>
         <span class="flex-shrink-0 whitespace-nowrap text-[10px] font-bold px-2 py-0.5 rounded-full" style="background:${cfg.bg};color:${cfg.color}">${cfg.label}</span>

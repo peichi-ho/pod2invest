@@ -33,7 +33,12 @@ def substitute_candidates(seed: str, end_date: date, window_days: int) -> list[d
             "score": meta["weight"],
             "hops": 1,
             "path": [seed, name],
-            "path_reasons": [{"from": seed, "to": name, "reasons": meta["reasons"]}],
+            "path_reasons": [{
+                "from": seed, "to": name, "reasons": meta["reasons"],
+                "mention_count": meta["weight"],
+                "source_diversity": len(meta["podcast_sources"]),
+                "rows": meta.get("rows", []),
+            }],
             "mention_count": meta["weight"],
             "source_diversity": len(meta["podcast_sources"]),
             "reasons": meta["reasons"],
