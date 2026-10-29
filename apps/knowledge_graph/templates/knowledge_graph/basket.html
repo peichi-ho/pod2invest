@@ -347,8 +347,43 @@ function render(data) {
   } else {
     grid.className = "grid grid-cols-1 md:grid-cols-2 gap-4";
     grid.innerHTML = data.basket.map((c, i) => cardHtml(c, i)).join("");
+    loadAssetScores(data);
   }
   document.getElementById("results").classList.remove("hidden");
+}
+
+// 「Podcast 看法」分數：Basket 結果畫好後另外算（要跑 LLM 判斷），不拖慢原本的搜尋。
+// 只反映窗口期間節目的觀點，回測跟之後的漲跌沒有關係，不能當成預測。
+let _scoreReq = 0;
+const KG_SCORE_COLORS = { "偏多": "#2e7d32", "偏空": "#c62828", "中性": "#6b6b6b", "無資料": "#6b6b6b" };
+
+async function loadAssetScores(data) {
+  const req = ++_scoreReq;
+  const params = new URLSearchParams({ end_date: data.end_date, window_days: data.window_days });
+  data.basket.forEach(c => params.append("node", c.node));
+  let scores = null;
+  try {
+    const res = await fetch("/api/knowledge-graph/asset-scores/?" + params);
+    if (res.ok) scores = (await res.json()).scores;
+  } catch (e) { /* 下面統一顯示無法計算 */ }
+  if (req !== _scoreReq) return;  // 使用者已經發起新的搜尋
+  data.basket.forEach((c, i) => {
+    const el = document.getElementById(`kg-score-${i}`);
+    if (el) el.innerHTML = kgScoreHtml(scores && scores[c.node], data.window_days);
+  });
+}
+
+function kgScoreHtml(s, windowDays) {
+  if (!s) return `<span class="text-[11px] text-on-surface-variant">無法計算</span>`;
+  const reasonLines = (title, reasons) =>
+    reasons.length ? [title, ...reasons.map(r => `・${r.reason}`)] : [];
+  const tip = [
+    ...reasonLines("利多：", s.bullish_reasons || []),
+    ...reasonLines("利空：", s.bearish_reasons || []),
+  ].join("\n") || "這段期間沒有判斷出利多或利空的理由";
+  return `
+    <div class="text-[10px] text-on-surface-variant">近 ${esc(windowDays)} 天 Podcast 看法</div>
+    <div class="text-sm font-bold cursor-help" style="color:${KG_SCORE_COLORS[s.label] || "#6b6b6b"}" title="${escAttr(tip)}">${s.score == null ? "—" : esc(s.score)}</div>`;
 }
 
 function pickSuggestion(name) {
@@ -399,7 +434,13 @@ function cardHtml(c, idx) {
       </div>
       ${combinedLabel ? `<span class="text-[11px] px-2 py-0.5 rounded-full bg-[#fdf0dc] text-[#8d4f00] font-semibold whitespace-nowrap">${esc(combinedLabel)}</span>` : ""}
     </div>
-    <div class="font-headline font-bold text-base text-on-surface mb-1.5">${esc(c.node)}</div>
+    <div class="flex items-start justify-between gap-3 mb-1.5">
+      <div class="font-headline font-bold text-base text-on-surface">${esc(c.node)}</div>
+      <div id="kg-score-${idx}" class="text-right leading-tight flex-shrink-0">
+        <div class="text-[10px] text-on-surface-variant">Podcast 看法</div>
+        <div class="text-[11px] text-on-surface-variant">計算中…</div>
+      </div>
+    </div>
     <span class="inline-block text-[11px] px-2.5 py-0.5 rounded-full bg-secondary-container text-on-secondary-container font-medium mb-3">${relationLabel(lastData.strategy)}</span>
 
     <div class="grid grid-cols-3 gap-2 text-center border-t border-b border-outline-variant/30 py-3 mb-3">

@@ -785,6 +785,49 @@ def basket_stream_api(request):
     return response
 
 
+def asset_scores_api(request):
+    """
+    Basket 卡片上的「Podcast 看法」分數（見 services/asset_kg_score.py）。
+    Basket 結果出來後由前端另外呼叫，不拖慢原本的搜尋。
+
+    Query params:
+      - node        : 必填，可重複，知識圖譜節點名稱（最多 20 個）
+      - end_date    : 選填，YYYY-MM-DD，預設今天
+      - window_days : 選填，預設 30
+    """
+    import datetime as _dt
+    from .services.asset_kg_score import compute_asset_scores
+
+    nodes = list(dict.fromkeys(n.strip() for n in request.GET.getlist("node") if n.strip()))
+    if not nodes:
+        return JsonResponse({"error": "需提供 node"}, status=400)
+    if len(nodes) > 20:
+        return JsonResponse({"error": "node 最多 20 個"}, status=400)
+    try:
+        window_days = int(request.GET.get("window_days", "30"))
+    except ValueError:
+        return JsonResponse({"error": "window_days 須為整數"}, status=400)
+    if not 1 <= window_days <= 365:
+        return JsonResponse({"error": "window_days 須介於 1~365"}, status=400)
+    end_date_str = request.GET.get("end_date", "").strip()
+    try:
+        end_date = (
+            _dt.datetime.strptime(end_date_str, "%Y-%m-%d").date()
+            if end_date_str else _dt.date.today()
+        )
+    except ValueError:
+        return JsonResponse({"error": "end_date 格式須為 YYYY-MM-DD"}, status=400)
+
+    try:
+        scores = compute_asset_scores(nodes, end_date, window_days)
+    except Exception as e:
+        return JsonResponse({"error": str(e)}, status=500)
+    return JsonResponse(
+        {"end_date": end_date.isoformat(), "window_days": window_days, "scores": scores},
+        json_dumps_params={"ensure_ascii": False},
+    )
+
+
 @csrf_exempt
 def generate_graph_from_episode(request):
     """
