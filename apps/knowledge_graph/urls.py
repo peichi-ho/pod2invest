@@ -31,5 +31,6 @@ urlpatterns = [
     path("basket-data/",                  views.basket_api),
     path("basket-stream-data/",           views.basket_stream_api),
     path("basket-purposes/",              views.basket_purposes_api),
+    path("asset-scores/",                 views.asset_scores_api),
     path("seed-suggest/",                 views.seed_suggest_api),
 ]

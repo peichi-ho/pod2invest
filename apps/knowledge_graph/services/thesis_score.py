@@ -36,6 +36,21 @@ apps/knowledge_graph/services/thesis_score.py
     用判斷結果取代 B1 的方向推估；unrelated 的證據貢獻為 0，熱門股不會因為
     相關新聞多就被灌分。LLM 呼叫失敗時退回 B1 / legacy，不讓分數變空。
 
+非公司標的（B6）：
+    標的在知識圖譜裡找不到公司節點時（指數、商品、匯率、總經，或圖譜沒收錄的小型股），
+    原本只能得到「證據 0 + 說話者加減分」。現在分兩種：
+    - 有籃子定義的指數（台股加權、櫃買、S&P 500、道瓊、那斯達克、費半）與原油
+      （見 thesis_baskets.py）：指數漲跌來自成分股，所以不判斷「成分股證據跟這句大盤
+      驗證句有沒有關係」（大盤驗證句多半在講籌碼、總經，成分股的產業證據幾乎都會被
+      判成無關），而是先判斷每條證據對「該成分股本身」是利多還是利空，得到每家公司
+      這段期間的狀況 s_i =（利多 − 利空）/（利多 + 利空 + K），一定落在 [-1, 1]；
+      再依指數權重加權（分母是全部成分股權重，沒有證據的公司算 0），最後跟驗證句
+      方向（看多 +1 / 看空 -1）相乘。連線再多，單一公司也只能貢獻自己的權重，
+      不會讓分數無限沖高。
+    - 其他（黃金、白銀、比特幣、匯率、總經、圖譜沒收錄的公司）：只用說話者準確率，
+      分數跟原本一樣，結果多標 mode="speaker_only" 與原因，前端可以分開顯示。
+    標的找得到公司節點時完全走原本流程（mode="company"），不受影響。
+
 說話者準確率（B5）：
     說出這句話的講者自己的歷史準確率，跟「同一時間點全體講者的平均準確率」
     比較，換算成加減分直接加到 raw 上（比平均準往上、比平均差往下，跟證據
@@ -75,6 +90,7 @@ from apps.summaries.services.backtesting import (
     _rule_based_ticker,
     resolve_ticker,
 )
+from apps.knowledge_graph.services.thesis_baskets import Basket, basket_for
 
 # 見 _build_asset_alias_index() 的說明：這兩個 map 解析出來的 ticker，
 # 拿來幫知識圖譜 node 分組時需要額外做嚴格比對，不能直接信任子字串比對。
@@ -101,7 +117,10 @@ def _is_exact_index_match(name: str, ticker: str) -> bool:
     return False
 
 
-# relation_type → 量級（不帶符號，符號改由 polarity × 方向決定，見 B1）
+# relation_type → 量級（不帶符號，符號由 LLM 判斷（B4／B6）或 polarity × 方向（B1）決定）。
+# 這組數值是設計上的假設：讓知識圖譜的關係類型直接影響證據份量（競爭替代 > 供應 > 共同受影響），
+# 不是由資料調出來的——2026-10 以 240 筆有回測結果的驗證句測試時，量級在 5~30 之間
+# 調整看不出一致差異。公司模式（B4）與籃子模式（B6）共用同一組，維持一致。
 MAGNITUDES = {
     "Supply": 15,
     "Co-impact": 10,
@@ -129,7 +148,9 @@ DIRECTION_SIGN = {"bullish": 1, "bearish": -1}
 
 WINDOW_DAYS = 7        # 往前抓幾天（含當天）
 FALLBACK_WINDOW_DAYS = 14  # WINDOW_DAYS 內完全沒有可用連線時，放寬再查一次的天數
-SIGMOID_SCALE = 100.0  # 越小分數對 raw 越敏感，越大越平緩
+# 越小分數對 raw 越敏感，越大越平緩。原本 100 時八成分數擠在 47~56，
+# 一條強支持證據（raw +15）只有 54 分，看不出差異；30 時一條 62、兩條 73、四條 88。
+SIGMOID_SCALE = 30.0
 
 # 講者可信度：樣本數太少（冷啟動）時準確率還不可靠，視為中性
 CREDIBILITY_MIN_SAMPLE = 5
@@ -153,6 +174,19 @@ SPEAKER_FULL_SCALE_GAP = 0.25
 SPEAKER_MIN_SAMPLE = CREDIBILITY_MIN_SAMPLE
 # 收縮強度：樣本數 n 時只採信 n/(n+K) 的偏離量，n=10 時採信一半
 SPEAKER_SHRINK_K = 10
+
+# B6：籃子模式
+# 每家成分股的狀況 s_i =（利多 − 利空）/（利多 + 利空 + K），K 越大證據少時越保守：
+# 利多／利空以「一條強烈的 Supply 證據」為 1 單位，其他關係類型依 MAGNITUDES 換算
+# （Co-impact 0.67、Substitution 1.33）。K=2 時 1 條強 Supply 利多 0.33、3 條 0.60、
+# 10 條 0.83，連線再多也不會超過 1
+BASKET_COMPANY_SHRINK = 2.0
+BASKET_MAGNITUDE_UNIT = 15.0  # = MAGNITUDES["Supply"]
+# 指數訊號（[-1, 1]）× 驗證句方向 × BASKET_MAX_RAW = 籃子的證據 raw；
+# 60 時整個指數都強烈利多 ≈ 88 分（SIGMOID_SCALE=30），跟公司模式四條強支持相當
+BASKET_MAX_RAW = 60.0
+# 每家成分股最多取幾個事實送 LLM 判斷（依被幾集節目提到排序），控制單次判斷的長度
+BASKET_FACTS_PER_COMPANY = 8
 
 
 def fetch_related_links(
@@ -223,6 +257,10 @@ class AssetAliasIndex:
     norm_to_nodes: dict[str, list[str]]
     # {正規化別名: ticker}，別名來自 TickerMap 的 asset_name / zh_name / ticker 三欄
     ticker_map_norm_index: dict[str, str]
+
+    @property
+    def all_nodes(self) -> set[str]:
+        return {n for names in self.norm_to_nodes.values() for n in names}
 
 
 def _build_ticker_map_norm_index() -> dict[str, str]:
@@ -649,6 +687,218 @@ class SpeakerHistory:
         return info
 
 
+def _speaker_info(speaker_history: Optional["SpeakerHistory"], podcaster: Optional[str],
+                  ticker: Optional[str], start_time: date) -> dict:
+    if speaker_history is None:
+        return {"podcaster": podcaster, "scope": None, "sample": 0, "accuracy": None,
+                "baseline": None, "adjustment": 0.0}
+    return speaker_history.adjustment(podcaster, ticker, start_time)
+
+
+# ──────────────────────────────────────────────
+# B6：非公司標的（籃子模式 / 只用說話者）
+# ──────────────────────────────────────────────
+
+def _non_company_reason(asset: str) -> str:
+    """只用說話者時，標記為什麼沒有產業證據（給前端／統計用）。"""
+    t = resolve_ticker(asset) or ""
+    if t in set(COMMODITY_TICKER_MAP.values()) or t.endswith(("=F", "=X", "-USD")):
+        return "商品或匯率，知識圖譜沒有對應的產業證據"
+    if t.startswith("^") or t in set(INDEX_TICKER_MAP.values()):
+        return "指數，尚未定義成分股籃子"
+    if not t:
+        return "總經或泛稱標的，知識圖譜沒有對應的產業證據"
+    return "知識圖譜沒有收錄這家公司"
+
+
+def _speaker_only_result(asset: str, speaker: dict) -> dict:
+    raw = speaker["adjustment"]
+    return {
+        "mode": "speaker_only",
+        "unscored_reason": _non_company_reason(asset),
+        "score": round(_sigmoid_score(raw), 1),
+        "raw": round(raw, 1),
+        "evidence_raw": 0.0,
+        "speaker": speaker,
+        "link_count": 0,
+        "fact_count": 0,
+        "window_days": None,
+        "facts": [],
+    }
+
+
+def _constituent_nodes(c, alias_index: AssetAliasIndex) -> list[str]:
+    nodes = set(alias_index.ticker_to_nodes.get(c.ticker, []))
+    for name in c.names:
+        nodes.update(alias_index.norm_to_nodes.get(_normalize_node_name(name), []))
+    return sorted(nodes)
+
+
+def _basket_facts(links: list[dict]) -> list[tuple[str, str, list[dict]]]:
+    """
+    籃子模式的去重：同一個 (鄰居, 關係) 視為一個事實，不做 LLM 兩兩比對聚類——
+    籃子動輒十幾家公司、上百條連線，兩兩比對的呼叫次數會爆量。
+    依「被幾集節目提到」排序，只取前 BASKET_FACTS_PER_COMPANY 個。
+    """
+    groups: dict[tuple, list[dict]] = defaultdict(list)
+    for link in links:
+        groups[(link["neighbor"], link["relation_type"])].append(link)
+    ranked = sorted(
+        groups.items(),
+        key=lambda kv: (-len({l["podcast_source"] for l in kv[1]}), -max(l["summary_date"] for l in kv[1]).toordinal()),
+    )
+    return [(nb, rt, sorted(ls, key=lambda l: l["summary_date"], reverse=True))
+            for (nb, rt), ls in ranked[:BASKET_FACTS_PER_COMPANY]]
+
+
+_IMPACT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "judgments": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "index": {"type": "integer"},
+                    "impact": {"type": "string", "enum": ["positive", "negative", "neutral"]},
+                    "strength": {"type": "string", "enum": list(STRENGTH_WEIGHT)},
+                    "note": {"type": "string"},
+                },
+                "required": ["index", "impact", "strength"],
+            },
+        },
+    },
+    "required": ["judgments"],
+}
+
+_IMPACT_PROMPT = """你是產業分析師。下面每一條是財經 Podcast 在某段期間提到的公司關係，
+開頭方括號是「被評估的公司」。請判斷每一條內容對「方括號裡那家公司」的營運或股價是：
+- positive：利多（拿到訂單、需求增加、產品受惠、競爭對手失利…）
+- negative：利空（訂單被搶、成本上升、需求下滑、受政策衝擊…）
+- neutral：只是描述既有的合作或供應關係、看不出好壞
+strength：影響直接且明確填 strong，需要推論或影響間接填 weak。
+note：一句話說明理由（20 字內）。只根據內容判斷，不要加入自己對市場的看法。
+
+{evidence}
+"""
+
+# 證據對「某家公司」是利多或利空，跟驗證句無關，同一批次內可以重複使用：
+# 同一週好幾句大盤驗證句會用到同一批成分股證據，不用每句都重新判斷。
+_IMPACT_CACHE: dict[tuple, dict] = {}
+
+
+def _judge_company_impact(items: list[tuple[str, str]]) -> list[Optional[dict]]:
+    """
+    items：[(快取 key 字串, 給 LLM 看的描述)]。
+    回傳與 items 等長的清單，每項是 {"impact", "strength", "note"} 或 None（判斷失敗）。
+    """
+    todo = [(i, key, desc) for i, (key, desc) in enumerate(items) if key not in _IMPACT_CACHE]
+    if todo:
+        evidence = "\n".join(f"{n}. {desc}" for n, (_, _, desc) in enumerate(todo))
+        try:
+            raw = _call_gemini_with_retry(
+                _IMPACT_PROMPT.format(evidence=evidence), response_schema=_IMPACT_SCHEMA,
+                model=THESIS_JUDGE_MODEL, max_output_tokens=8192,
+            )
+            for it in json.loads(raw).get("judgments", []):
+                n = it.get("index")
+                if isinstance(n, int) and 0 <= n < len(todo) and it.get("impact"):
+                    _IMPACT_CACHE[todo[n][1]] = it
+        except Exception as e:
+            print(f"  ⚠️ 成分股利多／利空判斷失敗：{e}")
+    return [_IMPACT_CACHE.get(key) for key, _ in items]
+
+
+def _compute_basket_score(
+    asset: str, basket_key: str, basket: Basket, start_time: date, direction: Optional[str],
+    exclude_podcast_source, alias_index: AssetAliasIndex, thesis: str, speaker: dict,
+) -> dict:
+    total_weight = sum(c.weight for c in basket.constituents)
+
+    def collect(window_days):
+        per_company = []
+        for c in basket.constituents:
+            nodes = _constituent_nodes(c, alias_index)
+            links = fetch_related_links(
+                c.names[0], start_time, exclude_podcast_source,
+                window_days=window_days, asset_aliases=nodes,
+            ) if nodes else []
+            per_company.append((c, _basket_facts(links), len(links)))
+        return per_company
+
+    window_days = WINDOW_DAYS
+    per_company = collect(window_days)
+    if not any(facts for _, facts, _ in per_company):
+        window_days = FALLBACK_WINDOW_DAYS
+        per_company = collect(window_days)
+
+    flat = [(c, nb, rt, ls) for c, facts, _ in per_company for nb, rt, ls in facts]
+    items = []
+    for c, nb, rt, ls in flat:
+        desc = f"[{c.names[0]}] " + _describe_cluster(c.names[0], nb, rt, ls)
+        items.append(((c.ticker, nb, rt, ls[0].get("reason", "")), desc))
+    impacts = _judge_company_impact(items)
+
+    pos: dict[str, float] = defaultdict(float)
+    neg: dict[str, float] = defaultdict(float)
+    facts = []
+    for (c, neighbor, relation_type, cluster_links), impact in zip(flat, impacts):
+        size = len({l["podcast_source"] for l in cluster_links})
+        amount = 0.0
+        if impact and impact["impact"] in ("positive", "negative"):
+            amount = (
+                MAGNITUDES.get(relation_type, 0) / BASKET_MAGNITUDE_UNIT
+                * STRENGTH_WEIGHT.get(impact.get("strength"), STRENGTH_WEIGHT["weak"])
+                * (1 + math.log(size))
+            )
+            (pos if impact["impact"] == "positive" else neg)[c.ticker] += amount
+        facts.append({
+            "constituent": c.names[0],
+            "neighbor": neighbor,
+            "relation_type": relation_type,
+            "reason": cluster_links[0].get("reason", ""),
+            "repeat_count": size,
+            "direction_mode": "basket",
+            "stance": impact.get("impact") if impact else None,
+            "strength": impact.get("strength") if impact else None,
+            "judge_note": impact.get("note", "") if impact else "",
+            "contribution": round(amount if impact and impact["impact"] == "positive" else -amount, 2),
+        })
+
+    components = []
+    weighted = 0.0
+    for c, _, link_count in per_company:
+        p, n = pos[c.ticker], neg[c.ticker]
+        state = (p - n) / (p + n + BASKET_COMPANY_SHRINK)
+        weighted += c.weight * c.sign * state
+        components.append({
+            "name": c.names[0], "weight": c.weight, "sign": c.sign, "link_count": link_count,
+            "positive": round(p, 2), "negative": round(n, 2), "state": round(state, 3),
+        })
+    signal = weighted / total_weight
+    evidence_raw = DIRECTION_SIGN.get(direction, 0) * signal * BASKET_MAX_RAW
+    raw = evidence_raw + speaker["adjustment"]
+    with_evidence = sum(c.weight for c in basket.constituents if pos[c.ticker] or neg[c.ticker])
+
+    return {
+        "mode": "basket",
+        "basket": {
+            "key": basket_key, "label": basket.label,
+            "signal": round(signal, 3),
+            "coverage": round(with_evidence / total_weight, 3),  # 參考用：有利多／利空證據的權重占比
+            "components": components,
+        },
+        "score": round(_sigmoid_score(raw), 1),
+        "raw": round(raw, 1),
+        "evidence_raw": round(evidence_raw, 1),
+        "speaker": speaker,
+        "link_count": sum(n for _, _, n in per_company),
+        "fact_count": len(facts),
+        "window_days": window_days,
+        "facts": facts,
+    }
+
+
 def compute_kg_score(
     asset: str,
     start_time: date,
@@ -693,6 +943,18 @@ def compute_kg_score(
     if alias_index is None:
         alias_index = _build_asset_alias_index()
     asset_aliases = _resolve_asset_aliases(asset, alias_index)
+
+    # ── B6：知識圖譜裡沒有這個標的的公司節點 → 籃子模式或只用說話者 ──
+    # 找得到節點的標的完全走下面原本的流程，不受影響。
+    if not alias_index.all_nodes.intersection(asset_aliases):
+        speaker = _speaker_info(speaker_history, podcaster, ticker, start_time)
+        found = basket_for(asset, resolve_ticker(asset))
+        if found:
+            return _compute_basket_score(
+                asset, found[0], found[1], start_time, direction, exclude_podcast_source,
+                alias_index, thesis, speaker,
+            )
+        return _speaker_only_result(asset, speaker)
 
     # 先查 WINDOW_DAYS；完全沒有可用連線（已排除同一集自己的連線）時才放寬到
     # FALLBACK_WINDOW_DAYS。冷門股常常前 7 天剛好沒有別集提到，不代表沒有相關討論，
@@ -782,17 +1044,13 @@ def compute_kg_score(
     evidence_raw = raw
 
     # ── B5：說話者本身的歷史準確率 ──
-    speaker = (
-        speaker_history.adjustment(podcaster, ticker, start_time)
-        if speaker_history is not None
-        else {"podcaster": podcaster, "scope": None, "sample": 0, "accuracy": None,
-              "baseline": None, "adjustment": 0.0}
-    )
+    speaker = _speaker_info(speaker_history, podcaster, ticker, start_time)
     raw += speaker["adjustment"]
 
     score = _sigmoid_score(raw)
 
     return {
+        "mode": "company",
         "score": round(score, 1),
         "raw": round(raw, 1),
         "evidence_raw": round(evidence_raw, 1),
@@ -1077,14 +1335,19 @@ def debug_sample(limit: int = 5):
         sp = result["speaker"]
         print(f"\n[{rec.asset}] {rec.direction} @ {rec.start_time}")
         print(f"  thesis: {rec.thesis[:50]}")
-        print(f"  score={result['score']}  raw={result['raw']}（證據 {result['evidence_raw']}）  "
+        print(f"  mode={result['mode']}  score={result['score']}  raw={result['raw']}（證據 {result['evidence_raw']}）  "
               f"link_count={result['link_count']}  fact_count={result['fact_count']}  "
-              f"window={result['window_days']}d")
+              f"window={result['window_days']}d  {result.get('unscored_reason', '')}")
         print(f"  speaker={sp['podcaster']}  scope={sp['scope']}  sample={sp['sample']}  "
               f"accuracy={sp['accuracy']}  baseline={sp['baseline']}  adjustment={sp['adjustment']}")
+        if result["mode"] == "basket":
+            b = result["basket"]
+            print(f"  basket={b['label']}  signal={b['signal']}  coverage={b['coverage']}")
         for f in result["facts"]:
-            nd = "?" if f["neighbor_direction"] is None else f"{f['neighbor_direction']:+.2f}"
-            print(f"    {f['neighbor']:15s} {f['relation_type']:12s} "
+            nd = f.get("neighbor_direction")
+            nd = "?" if nd is None else f"{nd:+.2f}"
+            who = f"[{f['constituent']}] " if f.get("constituent") else ""
+            print(f"    {who}{f['neighbor']:15s} {f['relation_type']:12s} "
                   f"repeat={f['repeat_count']}  neighbor_dir={nd}  mode={f['direction_mode']:7s}  "
                   f"stance={f['stance']}/{f['strength']}  "
-                  f"credibility={f['credibility']}  contribution={f['contribution']}  {f['judge_note']}")
+                  f"credibility={f.get('credibility', '-')}  contribution={f['contribution']}  {f['judge_note']}")
