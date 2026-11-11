@@ -192,6 +192,29 @@ function _prefScore(summary, prefs) {
   return score;
 }
 
+// ── 推薦多樣化：每個節目最多出現幾集 ───────────────────────────
+// 大部分單集的偏好分數是同分（例如都只有 0.9），同分時會照「最新上架」排，
+// 某個節目剛好一次上了好幾集，前 10 名就會被它佔滿。所以排好分數之後，
+// 依序挑，同一個節目挑到上限就跳過；節目數不夠湊滿時，再用被跳過的補。
+const _REC_COUNT           = 10;
+const _REC_MAX_PER_SHOW    = 3;
+
+function _diversifyByShow(sortedList, count = _REC_COUNT, maxPerShow = _REC_MAX_PER_SHOW) {
+  const picked = [], skipped = [], perShow = {};
+  for (const s of sortedList) {
+    if (picked.length >= count) break;
+    const show = s.podcaster || s.source_filename || '';
+    if ((perShow[show] || 0) < maxPerShow) {
+      perShow[show] = (perShow[show] || 0) + 1;
+      picked.push(s);
+    } else {
+      skipped.push(s);
+    }
+  }
+  // 節目種類太少、湊不滿時，依原本排序補上被跳過的
+  return picked.concat(skipped.slice(0, count - picked.length));
+}
+
 // ── Data loading ──────────────────────────────────────────────
 let _userPrefs = null;
 
@@ -256,7 +279,7 @@ async function loadDiscoverData() {
       const sorted = hasPrefs
         ? [..._discoverCache].sort((a, b) => _prefScore(b, prefs) - _prefScore(a, prefs))
         : _discoverCache;
-      renderRecommended(sorted.slice(0, 10));
+      renderRecommended(_diversifyByShow(sorted));
     };
 
     // 偏好通常早就回來了；還沒回來就先用原順序畫，回來之後如果有偏好再重排。
