@@ -210,7 +210,13 @@ class ThesisValuationAPIView(APIView):
             return Response(payload)
 
         thesis_id = _parse_float(request.query_params.get("thesis_id"))
-        current = next((r for r in theses if r.id == thesis_id), theses[0])
+        current = next((r for r in theses if r.id == thesis_id), None)
+        if current is None:
+            # 從單集摘要某張可驗證句卡片點進來：預設選同一句論點(論點依文字去重過，所以用文字對回去)
+            backtest_id = _parse_float(request.query_params.get("backtest_id"))
+            text = next((r.backtest_record.thesis.strip() for r in rows if r.backtest_record_id == backtest_id), None)
+            current = next((r for r in theses if r.backtest_record.thesis.strip() == text), None) if text else None
+        current = current or theses[0]
         scenarios = [_scenario_view(s, i) for i, s in enumerate(current.scenarios)]
         payload.update(thesis_id=current.id, scenarios=scenarios,
                        no_driver_reason=current.no_driver_reason if current.status == "no_driver" else "")
