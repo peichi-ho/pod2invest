@@ -48,7 +48,9 @@ function showCalcModule(m) {
     btn.classList.toggle('text-on-surface-variant', !on);
   });
   _thesisFilterEpisodes(m === 'thesis');
-  if (m === 'thesis' && _thesisPendingScore && String(_thesis.scoreId) !== String(_thesisPendingScore)) {
+  // 同一集也要重新載入的情況：從摘要另一張可驗證句卡片點進來，要換成那一句論點
+  const preferNew = _thesisPreferred && _thesisPreferred.scoreId === String(_thesisPendingScore);
+  if (m === 'thesis' && _thesisPendingScore && (String(_thesis.scoreId) !== String(_thesisPendingScore) || preferNew)) {
     loadThesisValuation(_thesisPendingScore);
   }
 }
@@ -58,8 +60,9 @@ function _thesisFilterEpisodes(on) {
   // 切回股價模擬就恢復完整清單。深連結補進來、還不知道有沒有情境的集(沒有 has_calc 欄位)照樣列出。
   const sel = document.getElementById('in-episode');
   if (!sel || typeof episodes === 'undefined' || !episodes.length) return;
-  const list = on ? episodes.filter(e => e.has_calc !== false) : episodes;
+  // 目前選的這一集就算沒有可試算的情境也留在清單裡：不要偷偷換成別集，改在下方提示使用者自己換(見 loadThesisValuation)
   const current = sel.value;
+  const list = on ? episodes.filter(e => e.has_calc !== false || String(e.score_id) === String(current)) : episodes;
   sel.innerHTML = list.map(e =>
     `<option value="${e.score_id}">${e.published_at || '未知日期'}　${e.asset_name}(${e.ticker})　${e.podcaster || ''}</option>`
   ).join('');
@@ -90,10 +93,33 @@ function onCalcEpisodeChanged(scoreId) {
   if (_calcModule === 'thesis') loadThesisValuation(scoreId);
 }
 
+// 從單集摘要某一張可驗證句卡片點「試算」進來時，記住那一句(backtest id)，
+// 打開這一集的論點情境試算時預設選同一句論點；只套用一次，之後換集或從別處進來就回到第一句。
+let _thesisPreferred = null;   // { scoreId, backtestId }
+function setThesisPreferredBacktest(scoreId, backtestId) {
+  _thesisPreferred = backtestId != null ? { scoreId: String(scoreId), backtestId: String(backtestId) } : null;
+}
+
 function loadThesisValuation(scoreId) {
   _thesis.scoreId = scoreId;
   _thesis.thesisId = null;
+  _thesis.backtestId = (_thesisPreferred && _thesisPreferred.scoreId === String(scoreId))
+    ? _thesisPreferred.backtestId : null;
+  _thesisPreferred = null;
   _thesis.checked = new Set();
+  // 這一集沒有拆出任何論點情境：不呼叫後端(後端會當場用 AI 拆，舊集數白等 20～40 秒)，直接請使用者換一集
+  const ep = (typeof episodes !== 'undefined') ? episodes.find(e => String(e.score_id) === String(scoreId)) : null;
+  if (ep && ep.has_thesis === false) {
+    clearTimeout(_thesis.timer);
+    _thesis.seq++;   // 上一集還在路上的回應回來時不要蓋掉這個提示
+    _thesis.data = null;
+    _thesis.shown = null;
+    clearTimeout(_thesis.slowTimer);
+    ['thesis-body', 'thesis-text', 'thesis-results'].forEach(id => document.getElementById(id).classList.add('hidden'));
+    document.getElementById('thesis-select').classList.add('hidden');
+    _thesisSetStatus('這一集對這檔標的沒有拆解出論點情境，無法做論點情境試算，請從上方改選其他集數。');
+    return;
+  }
   _thesis.overrides = {};
   _thesis.months = null;
   _thesis.data = null;
@@ -220,6 +246,7 @@ function _thesisFetch(delay, immediate) {
     const mySeq = ++_thesis.seq;
     const params = new URLSearchParams({ score_id: _thesis.scoreId });
     if (_thesis.thesisId) params.set('thesis_id', _thesis.thesisId);
+    else if (_thesis.backtestId) params.set('backtest_id', _thesis.backtestId);
     if (_thesis.checked.size) params.set('checked', [..._thesis.checked].join(','));
     if (_thesis.months) params.set('months', _thesis.months);
     Object.entries(_thesis.overrides).forEach(([k, v]) => params.set(k, v));

@@ -386,7 +386,7 @@ async function loadDeepDive(summaryId) {
                </button>`
             : '';
           const calcBtn = (ticker && r.result === 'pending')
-            ? `<button onclick="goToCalculatorWithStock('${ticker.replace(/'/g, "\\'")}', '${endDate}', ${s.episode_id != null ? s.episode_id : 'null'})"
+            ? `<button onclick="goToCalculatorWithStock('${ticker.replace(/'/g, "\\'")}', '${endDate}', ${s.episode_id != null ? s.episode_id : 'null'}, ${r.id != null ? r.id : 'null'})"
                  class="flex items-center gap-1 px-3 py-1 rounded-full bg-tertiary-container/20 border border-tertiary-container/40 text-tertiary-container text-xs font-bold hover:bg-tertiary-container/30 transition-colors">
                  <span class="material-symbols-outlined text-xs" style="font-variation-settings:'FILL' 1">calculate</span>試算
                </button>`

@@ -307,6 +307,9 @@ async function _applyPendingCalcTarget() {
   }
   if (match) {
     document.getElementById('in-episode').value = match.score_id;
+    if (typeof setThesisPreferredBacktest === 'function') {
+      setThesisPreferredBacktest(match.score_id, target.backtestId);
+    }
   }
   onEpisodeChange();
 }
@@ -355,7 +358,17 @@ function onEpisodeChange() {
 
   const sourceLink = document.getElementById('episode-source-link');
   if (ep.summary_id) {
-    sourceLink.href = '/?open_summary=' + ep.summary_id;
+    sourceLink.href = '/?open_summary=' + ep.summary_id;   // 保留網址：右鍵／Ctrl 點可以在新分頁開
+    // 一般點擊不重新載入整個網站，改在站內打開單集；按頂部返回鍵回到計算機，
+    // 選的集數、股價模擬／論點情境試算哪一個分頁都還在(計算機頁的畫面沒有被清掉)
+    sourceLink.onclick = (e) => {
+      if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      e.preventDefault();
+      if (window.IS_AUTHENTICATED !== false) {   // 未登入時 openDeepDive 只會跳登入提示，不要留下返回目標
+        _backOverride = 'calculator'; _backOverrideOwner = 'deep-dive'; _backOverrideArmed = false;
+      }
+      openDeepDive(ep.summary_id);
+    };
     sourceLink.classList.remove('hidden');
   } else {
     sourceLink.classList.add('hidden');
@@ -2103,8 +2116,10 @@ function resetCalculator() {
 // 模式，並記下目標episode/ticker，等節目清單載入完成後自動選中對應那一集(見loadEpisodes)。
 let _pendingCalcTarget = null;
 
-function goToCalculatorWithStock(stockName, endDate, originEpisodeId) {
-  _pendingCalcTarget = { ticker: stockName, episodeId: originEpisodeId != null ? originEpisodeId : null };
+// backtestId：從單集摘要哪一張可驗證句卡片點進來的；論點情境試算會預設打開同一句論點
+function goToCalculatorWithStock(stockName, endDate, originEpisodeId, backtestId) {
+  _pendingCalcTarget = { ticker: stockName, episodeId: originEpisodeId != null ? originEpisodeId : null,
+                         backtestId: backtestId != null ? backtestId : null };
   showPage('calculator');
   if (typeof showCalcModule === 'function') showCalcModule('sim');
   setMode('episode');
