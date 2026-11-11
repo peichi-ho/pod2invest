@@ -66,6 +66,14 @@
     </div>
   </section>
 
+  <section class="space-y-6">
+    <div class="flex justify-between items-end">
+      <h3 class="font-['Epilogue'] font-bold text-2xl text-tertiary-container">試算紀錄</h3>
+      <button onclick="openSavedSimsList()" class="text-secondary font-bold text-sm hover:underline">查看全部</button>
+    </div>
+    <ul id="profile-saved-sims" class="space-y-2"><li class="text-outline text-sm">載入中...</li></ul>
+  </section>
+
   <section class="space-y-6 pb-12">
     <h3 class="font-['Epilogue'] font-bold text-2xl text-tertiary-container">設定</h3>
     <form method="post" action="/logout/">

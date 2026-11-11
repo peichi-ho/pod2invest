@@ -4,6 +4,7 @@ from .views import (
     FavoriteEpisodesAPIView, FavoriteEpisodeToggleAPIView,
     FavoritePodcastsAPIView, FavoritePodcastToggleAPIView,
     WatchHistoryAPIView, ProfileAPIView, AvatarAPIView, ChangePasswordAPIView,
+    SavedSimulationsAPIView, SavedSimulationDetailAPIView,
 )
 
 urlpatterns = [
@@ -18,4 +19,6 @@ urlpatterns = [
     path('profile/', ProfileAPIView.as_view(), name='profile'),
     path('avatar/', AvatarAPIView.as_view(), name='avatar'),
     path('change-password/', ChangePasswordAPIView.as_view(), name='change-password'),
+    path('simulations/', SavedSimulationsAPIView.as_view(), name='saved-simulations'),
+    path('simulations/<int:pk>/', SavedSimulationDetailAPIView.as_view(), name='saved-simulation-detail'),
 ]

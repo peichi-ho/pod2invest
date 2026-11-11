@@ -26,24 +26,77 @@ const B_SOURCE_TEXT_URL = '/api/calculator/bootstrap-path-preview/source-text/';
 let mode = 'manual';
 let episodes = [];
 let lastResult = null;
+let lastSimParams = null;   // 最近一次成功模擬的條件(儲存試算紀錄用)
 let sourceTextRequestSeq = 0;  // 避免快速切換節目時，舊的source-text回應蓋掉新選的那一集
 
 function setMode(m) {
+  if (m !== mode) _simResetResult();   // 換輸入方式等於換標的，上一個結果不再對應
   mode = m;
   document.getElementById('mode-btn-manual').classList.toggle('active', m === 'manual');
   document.getElementById('mode-btn-episode').classList.toggle('active', m === 'episode');
   document.getElementById('panel-manual').classList.toggle('hidden', m !== 'manual');
   document.getElementById('panel-episode').classList.toggle('hidden', m !== 'episode');
+  if (typeof onCalcModeChanged === 'function') onCalcModeChanged(m);   // 論點情境試算只在從節目挑選時可用
 }
 
 function syncFromSlider(key) {
   document.getElementById('in-' + key).value = document.getElementById('slider-' + key).value;
   document.getElementById('lbl-' + key).textContent = document.getElementById('slider-' + key).value;
+  _simCheckStale();
 }
 function syncFromInput(key) {
   const v = document.getElementById('in-' + key).value;
   document.getElementById('slider-' + key).value = v;
   document.getElementById('lbl-' + key).textContent = v;
+  _simCheckStale();
+}
+
+// ── 模擬結果跟目前條件的關係(做法同論點情境試算) ──
+// 換標的(換一集、換股票、切換輸入方式)：上一個結果整個清掉，避免看到別檔股票的圖；
+// 同一個標的只改了參數：結果變淡、提示重新模擬，「儲存這次模擬」先隱藏，免得存到跟畫面對不上的條件。
+// 投入金額只影響下方的金額換算、不用重跑模擬，不算改條件。
+function _simCurrentConditions() {
+  return {
+    mode,
+    inputText: mode === 'manual' ? document.getElementById('in-ticker').value.trim() : null,
+    score_id: mode === 'episode' ? document.getElementById('in-episode').value : null,
+    months: Number(document.getElementById('in-months').value),
+    risk: Number(document.getElementById('in-risk').value),
+    macro: Number(document.getElementById('in-macro').value),
+    nsim: Number(document.getElementById('in-nsim').value),
+  };
+}
+
+function _simResetResult() {
+  lastResult = null;
+  lastSimParams = null;
+  const panel = document.getElementById('result-panel');
+  panel.classList.add('hidden');
+  panel.classList.remove('opacity-40');
+  const placeholderEl = document.getElementById('calc-placeholder');
+  placeholderEl.classList.remove('hidden');
+  placeholderEl.hidden = false;
+  { const ms = document.getElementById('money-stats'); if (ms) { ms.classList.add('hidden'); ms.hidden = true; } }
+  { const sb = document.getElementById('btn-save-sim'); if (sb) sb.classList.add('hidden'); }
+  const st = document.getElementById('status-text');
+  st.textContent = '';
+  st.classList.remove('text-[#a16207]', 'font-bold');
+  if (typeof hideSavedSimNotes === 'function') hideSavedSimNotes();
+}
+
+function _simCheckStale() {
+  if (!lastSimParams) return;
+  const c = _simCurrentConditions();
+  const p = lastSimParams;
+  const stale = c.mode !== p.mode || c.months !== p.months || c.risk !== p.risk || c.macro !== p.macro || c.nsim !== p.nsim
+    || (c.mode === 'manual' ? c.inputText !== p.inputText : String(c.score_id) !== String(p.score_id));
+  document.getElementById('result-panel').classList.toggle('opacity-40', stale);
+  { const ms = document.getElementById('money-stats'); if (ms) ms.classList.toggle('opacity-40', stale); }
+  { const sb = document.getElementById('btn-save-sim'); if (sb) sb.classList.toggle('hidden', stale); }
+  const st = document.getElementById('status-text');
+  st.textContent = stale ? '條件已經改變，按「開始模擬」更新結果' : '';
+  st.classList.toggle('text-[#a16207]', stale);
+  st.classList.toggle('font-bold', stale);
 }
 // 風險程度(低/中/高)、市場立場(看空/中立/看多)這兩組用三顆按鈕取代滑桿+數字框，
 // 底層數值(0/0.5/1、-1/0/1)還是寫進同一個in-risk/in-macro(改成hidden input)，
@@ -53,6 +106,7 @@ function setScoreButton(key, value) {
   document.querySelectorAll('#btns-' + key + ' button').forEach(btn => {
     btn.classList.toggle('active', parseFloat(btn.dataset.value) === value);
   });
+  _simCheckStale();
 }
 // 跟三顆按鈕(低/中/高、看空/中立/看多)用同一套文字，純文字顯示(例如選集數後的說明列)
 // 也統一改用這兩個函式，不要再直接印0.5、-1這種原始數字給使用者看。
@@ -86,6 +140,7 @@ function _closeTickerSearch() {
   _tickerSearchItems = []; _tickerSearchActive = -1;
 }
 function onTickerSearchInput() {
+  _simCheckStale();   // 改了股票代號：上一個結果變淡、提示重新模擬
   const q = document.getElementById('in-ticker').value.trim();
   clearTimeout(_tickerSearchTimer);
   document.getElementById('ticker-picked').classList.add('hidden');
@@ -201,6 +256,8 @@ async function loadEpisodes() {
     sel.innerHTML = episodes.map(e =>
       `<option value="${e.score_id}">${e.published_at || '未知日期'}　${e.asset_name}(${e.ticker})　${e.podcaster || ''}</option>`
     ).join('');
+    if (typeof _thesisFilterEpisodes === 'function' && typeof _calcModule !== 'undefined')
+      _thesisFilterEpisodes(_calcModule === 'thesis');
     if (_pendingCalcTarget) {
       _applyPendingCalcTarget();
     } else if (episodes.length) {
@@ -290,6 +347,7 @@ function renderEpisodeInfo(ep) {
 }
 
 function onEpisodeChange() {
+  _simResetResult();   // 換一集：上一集的模擬圖不能留著
   const scoreId = document.getElementById('in-episode').value;
   const ep = episodes.find(e => String(e.score_id) === String(scoreId));
   if (!ep) return;
@@ -315,6 +373,7 @@ function onEpisodeChange() {
 
   document.getElementById('episode-rationale').textContent = ep.rationale || '(無)';
   loadSourceText(scoreId);
+  if (typeof onCalcEpisodeChanged === 'function') onCalcEpisodeChanged(scoreId);
 }
 
 // 「AI實際讀到的完整輸入」原本是一整坨純文字，改成：每個【標題】一張卡片，
@@ -359,6 +418,8 @@ async function loadSourceText(scoreId) {
 }
 
 async function runSimulation() {
+  if (typeof hideSavedSimNotes === 'function') hideSavedSimNotes();
+  { const sb = document.getElementById('btn-save-sim'); if (sb) sb.classList.add('hidden'); }
   const months = document.getElementById('in-months').value;
   const risk = document.getElementById('in-risk').value;
   const macro = document.getElementById('in-macro').value;
@@ -367,6 +428,9 @@ async function runSimulation() {
   const statusEl = document.getElementById('status-text');
   const panel = document.getElementById('result-panel');
   const placeholder = document.getElementById('calc-placeholder');
+  statusEl.classList.remove('text-[#a16207]', 'font-bold');
+  panel.classList.remove('opacity-40');
+  { const ms = document.getElementById('money-stats'); if (ms) ms.classList.remove('opacity-40'); }
   statusEl.textContent = '跑模擬中...(要抓歷史股價+跑模擬，可能要幾秒)';
   panel.classList.add('hidden');
   { const ms = document.getElementById('money-stats'); if (ms) { ms.classList.add('hidden'); ms.hidden = true; } }
@@ -391,7 +455,15 @@ async function runSimulation() {
     }
     statusEl.textContent = '';
     lastResult = data;
+    // 這次模擬實際用的條件(儲存試算紀錄用，見 saved_sims.js)：存檔時用這份，不用畫面上之後又改過的值
+    lastSimParams = {
+      mode, ticker: data.ticker || null, score_id: mode === 'episode' ? params.get('score_id') : null,
+      // 解析後輸入框可能從「台積電」變成「2330.TW」，記解析後的文字，之後輸入框又被改才算換股票
+      inputText: mode === 'manual' ? document.getElementById('in-ticker').value.trim() : null,
+      months: Number(months), risk: Number(risk), macro: Number(macro), nsim: Number(nsim),
+    };
     renderResult(data);
+    { const sb = document.getElementById('btn-save-sim'); if (sb) sb.classList.remove('hidden'); }
     placeholder.classList.add('hidden');
     placeholder.hidden = true; // space-y-6只認原生hidden屬性，不認class="hidden"，
     // 只加class的話space-y-6還是會把它當成「存在」的前一個手足元素，在它跟
@@ -2010,7 +2082,7 @@ function resetCalculator() {
 
   // B方案(歷史拔靴模擬)區塊重置回預設狀態
   setMode('manual');
-  document.getElementById('in-ticker').value = '2330.TW';
+  document.getElementById('in-ticker').value = '';
   { const pk = document.getElementById('ticker-picked'); if (pk) pk.classList.add('hidden'); }
   document.getElementById('in-months').value = 12;
   document.getElementById('slider-months').value = 12;
@@ -2034,6 +2106,7 @@ let _pendingCalcTarget = null;
 function goToCalculatorWithStock(stockName, endDate, originEpisodeId) {
   _pendingCalcTarget = { ticker: stockName, episodeId: originEpisodeId != null ? originEpisodeId : null };
   showPage('calculator');
+  if (typeof showCalcModule === 'function') showCalcModule('sim');
   setMode('episode');
   _applyPendingCalcTarget();
 }

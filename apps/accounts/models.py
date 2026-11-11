@@ -87,3 +87,28 @@ class WatchHistory(models.Model):
         app_label = 'accounts'
         db_table = 'watch_history'
         unique_together = ('user_id', 'summary_id')
+
+
+class SavedSimulation(models.Model):
+    """
+    使用者儲存的試算紀錄(計算機的「股價模擬」與「論點情境試算」)。存的是「條件」(params)，
+    打開時用同樣的條件重新試算，才能重現；另外存一份當時的結果快照(result)，清單上直接顯示，
+    資料更新後重算結果不同時也能對照。條件用 JSON 存，以後模擬器加參數不用改表。
+    跟其他收藏一樣用 user_id 一般欄位，另外在 migration 用 RunSQL 補上對 auth_user 的外鍵。
+    """
+    MODULE_SIM = 'sim'          # 股價模擬
+    MODULE_THESIS = 'thesis'    # 論點情境試算
+    MODULES = (MODULE_SIM, MODULE_THESIS)
+    MAX_PER_USER = 50
+
+    user_id = models.IntegerField(db_index=True)
+    module = models.CharField(max_length=10)
+    name = models.CharField(max_length=80)
+    params = models.JSONField(default=dict)
+    result = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        app_label = 'accounts'
+        db_table = 'saved_simulation'

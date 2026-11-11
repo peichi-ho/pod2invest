@@ -384,6 +384,9 @@ async function loadConversations() {
       list.innerHTML = '<p class="text-outline text-xs text-center py-6">尚無對話記錄</p>';
       return;
     }
+    // 每次進 AI 頁都會重抓並整個重畫列表，重畫前先記下捲動位置、畫完設回去，
+    // 不然切分頁回來時（見 app.js 的分頁記憶）歷史列表會被捲回最上面。
+    const keepTop = list.scrollTop;
     list.innerHTML = '';
     for (const group of data.data) {
       const label = document.createElement('p');
@@ -406,6 +409,7 @@ async function loadConversations() {
         list.appendChild(row);
       }
     }
+    list.scrollTop = keepTop;
   } catch {
     list.innerHTML = '<p class="text-outline text-xs text-center py-6">載入失敗</p>';
   }

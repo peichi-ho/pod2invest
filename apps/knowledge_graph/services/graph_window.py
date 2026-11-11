@@ -70,12 +70,13 @@ def build_weighted_graph(links: list[dict], directed: bool = True):
           "weight": int,
           "reasons": list[str],
           "podcast_sources": set[str],   # 提及來源的集數數量 = source 多樣性
+          "rows": list[dict],            # 每一筆原始提及：{reason, podcast_source, summary_date}
       }
     """
     import igraph as ig
 
     edge_agg: dict[tuple[str, str], dict] = defaultdict(
-        lambda: {"weight": 0, "reasons": [], "podcast_sources": set()}
+        lambda: {"weight": 0, "reasons": [], "podcast_sources": set(), "rows": []}
     )
 
     for lk in links:
@@ -86,6 +87,12 @@ def build_weighted_graph(links: list[dict], directed: bool = True):
             entry["reasons"].append(lk["reason"])
         if lk["podcast_source"]:
             entry["podcast_sources"].add(lk["podcast_source"])
+        # 保留每一筆原始提及（理由 + 出自哪一集 + 哪一天），給前端「每一段關係的理由與出處」用
+        entry["rows"].append({
+            "reason": lk["reason"],
+            "podcast_source": lk["podcast_source"],
+            "summary_date": str(lk["summary_date"])[:10],
+        })
 
     all_nodes = sorted({n for pair in edge_agg for n in pair})
     idx = {n: i for i, n in enumerate(all_nodes)}

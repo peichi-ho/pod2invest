@@ -320,6 +320,46 @@ def synthesize_reason(candidate: dict, seed: str, window_days: int) -> str:
 
 # ── 5. 產業標籤 ──────────────────────────────────────────────────────────
 
+# 每一段關係最多帶多少筆原始提及（新到舊）給前端；該段的總次數另外有 mention_count，不受這個上限影響
+_MAX_ROWS_PER_SEGMENT = 50
+
+
+def attach_episode_links(candidates: list[dict]) -> None:
+    """
+    最終 basket 確定後，替路徑每一段的每筆原始提及補上「對得到的單集摘要」資訊：
+    summary_id（前端連到單集摘要頁用）、show_name、episode_title。
+    摘要庫裡沒有的集數 summary_id 為 None，前端只顯示文字、不給連結。
+    只對最終 basket（數量很少）做，不對所有候選逐一查資料庫。
+    """
+    # 延遲匯入：views 本身會匯入 services，頂層互相匯入會循環
+    from apps.knowledge_graph.views import resolve_sources_to_summaries
+
+    for c in candidates:
+        for seg in c.get("path_reasons", []):
+            rows = sorted(seg.get("rows", []), key=lambda r: r["summary_date"], reverse=True)
+            seg["rows"] = rows[:_MAX_ROWS_PER_SEGMENT]
+
+    sources = {
+        row["podcast_source"]
+        for c in candidates for seg in c.get("path_reasons", []) for row in seg["rows"]
+    }
+    resolved = resolve_sources_to_summaries(sources)
+
+    for c in candidates:
+        for seg in c.get("path_reasons", []):
+            for row in seg["rows"]:
+                source = row["podcast_source"]
+                rec = resolved.get(source)
+                title = rec["source_filename"] if rec else source
+                # podcast_source 通常是「節目名 - 集數標題」，扣掉集數標題剩下的就是節目名
+                show = ""
+                if rec and source.endswith(title) and len(source) > len(title):
+                    show = source[: -len(title)].rstrip(" -").strip()
+                row["summary_id"] = rec["id"] if rec else None
+                row["show_name"] = show
+                row["episode_title"] = title
+
+
 def _get_industries(node_names: list[str]) -> dict[str, str]:
     if not node_names:
         return {}
@@ -442,5 +482,7 @@ def select_basket(
         funnel.append({"stage": f"財務體質篩選（{risk_tier}）", "count": len(candidates)})
         if reporter:
             reporter.stage_done("financial_screen")
+
+    attach_episode_links(candidates)
 
     return {"basket": candidates, "funnel": funnel}

@@ -1,10 +1,10 @@
 <!-- ═══════════════════════════════════════════════ PAGE: AI ASSISTANT ═══ -->
-<div id="page-ai" class="page fixed inset-x-0" style="top: 64px; bottom: 72px; z-index: 10;">
+<div id="page-ai" class="page fixed inset-x-0" style="top: var(--header-h, 72px); bottom: 72px; z-index: 10;">
 
   <!-- ── Left Sidebar (absolute overlay) ────────────────── -->
   <div id="ai-sidebar" class="absolute left-0 top-0 bottom-0 z-20 flex flex-col bg-[#f0ede4] border-r border-outline-variant/20 transition-all duration-300 overflow-hidden" style="width: 240px;">
     <div class="flex items-center justify-between px-4 py-4 border-b border-outline-variant/20 flex-shrink-0">
-      <span class="font-['Epilogue'] font-bold text-tertiary-container text-sm ai-sidebar-label">AI 投資助理</span>
+      <span class="font-['Epilogue'] font-bold text-tertiary-container text-xl ai-sidebar-label">AI 投資助理</span>
       <button onclick="toggleAiSidebar()" class="w-8 h-8 flex items-center justify-center rounded-full hover:bg-surface-container transition-colors flex-shrink-0">
         <span class="material-symbols-outlined text-outline text-base" id="ai-sidebar-toggle-icon">menu_open</span>
       </button>
@@ -15,7 +15,7 @@
         <span class="ai-sidebar-label">新對話</span>
       </button>
     </div>
-    <div id="ai-history-list" class="flex-1 overflow-y-auto px-2 py-1 space-y-0.5">
+    <div id="ai-history-list" data-scroll-keep class="flex-1 overflow-y-auto px-2 py-1 space-y-0.5">
       <p class="text-outline text-xs text-center py-6 ai-sidebar-label">載入中...</p>
     </div>
   </div>
@@ -25,7 +25,7 @@
   <div id="ai-main" class="w-full h-full flex flex-col" style="padding-left: 240px; padding-right: 0;">
 
     <!-- Messages -->
-    <div id="chat-messages" class="flex-1 overflow-y-auto flex flex-col py-6 px-4 gap-4 w-full max-w-3xl mx-auto">
+    <div id="chat-messages" data-scroll-keep class="flex-1 overflow-y-auto flex flex-col py-6 px-4 gap-4 w-full max-w-3xl mx-auto">
       <div id="chat-empty-state" class="flex-1 flex flex-col items-center justify-center">
         <p class="text-outline text-sm">載入中...</p>
       </div>

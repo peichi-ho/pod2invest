@@ -23,10 +23,12 @@ ticker 解析在這裡獨立重新實作，不沿用 apps.summaries 那一套規
 """
 from __future__ import annotations
 
+import calendar
 import re
 from datetime import date, timedelta
 
 import requests
+from django.utils import timezone
 
 from apps.knowledge_graph.models import FinancialMetricsCache
 
@@ -199,7 +201,8 @@ def _nearest_disclosure_date(earnings_dates, period_end: date) -> date | None:
         return None
 
 
-def _fetch_yfinance_periods(ticker: str) -> list[dict]:
+def _fetch_yfinance_periods(ticker: str, skip_period_ends: set[date] | None = None) -> list[dict]:
+    """skip_period_ends：快取裡已經有的期末日，直接略過（補抓時只要新的期別，也省掉每期一次的價格查詢）。"""
     import yfinance as yf
 
     t = yf.Ticker(ticker)
@@ -218,6 +221,8 @@ def _fetch_yfinance_periods(ticker: str) -> list[dict]:
     periods = []
     for period_end_ts in bs.columns:
         period_end = period_end_ts.date()
+        if skip_period_ends and period_end in skip_period_ends:
+            continue
         fields = _extract_yf_period(bs, inc, cf, period_end_ts)
         if fields.get("revenue") is None:
             continue  # 連最基本的營收欄位都沒有，這期真的抓不到，跳過
@@ -289,7 +294,9 @@ def _pivot_finmind_statement(rows: list[dict]) -> dict[date, dict[str, float]]:
     return by_period
 
 
-def _fetch_finmind_periods(ticker: str, start_date: date, end_date: date) -> list[dict]:
+def _fetch_finmind_periods(
+    ticker: str, start_date: date, end_date: date, skip_period_ends: set[date] | None = None,
+) -> list[dict]:
     stock_id = _finmind_stock_id(ticker)
     if not stock_id:
         return []  # 非台股，FinMind 一定沒有，不用浪費呼叫
@@ -306,6 +313,8 @@ def _fetch_finmind_periods(ticker: str, start_date: date, end_date: date) -> lis
 
     periods = []
     for period_end, bs_row in bs.items():
+        if skip_period_ends and period_end in skip_period_ends:
+            continue
         inc_row = inc.get(period_end, {})
         cf_row = cf.get(period_end, {})
         if not inc_row:
@@ -381,6 +390,7 @@ def _load_cached(ticker: str) -> list[dict]:
             "operating_income": r.operating_income, "net_income": r.net_income,
             "operating_cash_flow": r.operating_cash_flow, "shares_outstanding": r.shares_outstanding,
             "eps": r.eps, "price_at_period_end": r.price_at_period_end,
+            "fetched_at": r.fetched_at,
         })
     out.sort(key=lambda p: p["fiscal_period_end"], reverse=True)
     return out
@@ -405,6 +415,73 @@ def _save_cache(ticker: str, periods: list[dict]) -> None:
     ]
     if rows:
         FinancialMetricsCache.objects.using("knowledge_graphdb").bulk_create(rows, ignore_conflicts=True)
+
+
+# ── 快取過期：依法定公告期限判斷「該有新一季卻沒有」，補抓 ────────────────────────
+
+# 同一檔在這段時間內最多試一次補抓。外部來源（Yahoo / FinMind）常常晚幾天甚至幾週才收錄
+# 新一季，沒有這個間隔的話，每次查詢都會重打一次外部 API。
+_REFRESH_RETRY_AFTER = timedelta(hours=24)
+
+
+def _next_period_end(period_end: date) -> date:
+    """下一季的期末日（該月月底）。"""
+    month_index = period_end.month - 1 + 3
+    year = period_end.year + month_index // 12
+    month = month_index % 12 + 1
+    return date(year, month, calendar.monthrange(year, month)[1])
+
+
+def _expects_newer_quarter(latest_period_end: date, as_of_date: date) -> bool:
+    """
+    依法定公告期限推算：以這檔自己最新一期為基準，下一季到 as_of_date 為止是否「應該已經公布」。
+
+    不用日曆季（3/6/9/12 月底）判斷：季末不在這四個月底的公司（例如輝達是 1/4/7/10 月底）
+    在某些月份會被誤判成缺資料，白白去抓。以這檔自己的季度節奏往後推一季就沒有這個問題。
+    公告天數沿用 _assumed_disclosure_lag_days（45 天／年報 90 天），對美股只是近似。
+    """
+    next_end = _next_period_end(latest_period_end)
+    return next_end + timedelta(days=_assumed_disclosure_lag_days(next_end)) <= as_of_date
+
+
+def _refresh_due(cached: list[dict]) -> bool:
+    """上次嘗試抓這檔（不管有沒有抓到新資料）已經超過 _REFRESH_RETRY_AFTER。"""
+    last = max((p["fetched_at"] for p in cached if p.get("fetched_at")), default=None)
+    return last is None or timezone.now() - last >= _REFRESH_RETRY_AFTER
+
+
+def _needs_refresh(cached: list[dict], usable: list[dict], as_of_date: date) -> bool:
+    latest = usable[0]["fiscal_period_end"]
+    if any(p["fiscal_period_end"] > latest for p in cached):
+        # 更新的期別快取裡早就有了，只是公告日還沒到 as_of_date（例如查過去的截止日），重抓不會多出東西
+        return False
+    return _expects_newer_quarter(latest, as_of_date) and _refresh_due(cached)
+
+
+def _refresh_missing_quarter(ticker: str, cached: list[dict], as_of_date: date) -> None:
+    """
+    快取最新一期之後、依法定期限應該已有新一季卻沒有時，補抓：先 yfinance；台股如果
+    yfinance 仍沒有那一季（Yahoo 對台股常常晚收錄），再試 FinMind。
+
+    只新增快取裡沒有的期別，不覆蓋既有資料。兩邊都沒有新資料時，把這檔的 fetched_at 更新成
+    現在，讓同一檔在 _REFRESH_RETRY_AFTER 內不會每次查詢都重打（外部 API 連線失敗也會被當成
+    「沒有新資料」，所以失敗後最多晚一天才會再試）。
+    """
+    known = {p["fiscal_period_end"] for p in cached}
+    newest_known = max(known)
+
+    new_periods = _fetch_yfinance_periods(ticker, skip_period_ends=known)
+    if not any(p["fiscal_period_end"] > newest_known for p in new_periods) and _finmind_stock_id(ticker):
+        start = as_of_date - timedelta(days=4 * 365 + 1)
+        known_now = known | {p["fiscal_period_end"] for p in new_periods}
+        new_periods += _fetch_finmind_periods(ticker, start, as_of_date, skip_period_ends=known_now)
+
+    if new_periods:
+        _save_cache(ticker, new_periods)
+    else:
+        FinancialMetricsCache.objects.using("knowledge_graphdb").filter(ticker=ticker).update(
+            fetched_at=timezone.now()
+        )
 
 
 # ── 主入口 ───────────────────────────────────────────────────────────────
@@ -442,6 +519,18 @@ def get_financial_history(ticker: str, as_of_date: date) -> dict:
     """
     cached = _load_cached(ticker)
     usable = [p for p in cached if p["disclosure_date"] and p["disclosure_date"] <= as_of_date]
+
+    # 快取裡已經有可用的期別，不代表它就是 as_of_date 前最新的：依法定公告期限，最新一期之後
+    # 應該已經有新一季卻沒有（快取是之前抓的），就補抓一次，不然會一直用舊一季。
+    if usable and _needs_refresh(cached, usable, as_of_date):
+        try:
+            _refresh_missing_quarter(ticker, cached, as_of_date)
+        except Exception as e:
+            # 補抓失敗就維持用快取裡的資料，舊一季比整個財務驗證失敗好
+            print(f"⚠️ {ticker} 補抓新一季財報失敗，沿用快取：{e}")
+        else:
+            cached = _load_cached(ticker)
+            usable = [p for p in cached if p["disclosure_date"] and p["disclosure_date"] <= as_of_date]
 
     if not usable:
         fresh = _fetch_yfinance_periods(ticker)
