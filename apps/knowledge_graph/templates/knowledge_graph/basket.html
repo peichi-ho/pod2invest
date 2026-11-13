@@ -277,6 +277,23 @@ function pickSeedSuggestion(name) {
   } catch (e) { /* 查不到就維持帶過來的名稱 */ }
 })();
 
+// 頂部返回鍵（#header-back-btn 在 base.html 的橫幅裡，預設隱藏）：這頁是獨立頁面，沒有載入 app.js，
+// 沒有 onHeaderBack()／_updateHeaderBack()，要自己顯示、自己接。
+//   - 從個股詳情頁的「探索相關標的」過來（網址帶 symbol）→ 回到那支標的的詳情頁
+//   - 其他進來的方式（個股資料查詢列表上的切換鈕、直接輸入網址）→ 回到個股資料查詢列表
+// 詳情頁的畫面狀態在記憶體裡，換頁就沒了，所以不能用 history.back()（會回到首頁），
+// 而是用首頁的深連結 ?open_asset= 重新打開（見 base.html 的啟動程式）。
+function onHeaderBack() {
+  const params = new URLSearchParams(location.search);
+  const symbol = (params.get("symbol") || "").trim();
+  if (!symbol) { window.location.href = "/#assets"; return; }
+  const back = new URLSearchParams({ open_asset: symbol });
+  if (params.get("category")) back.set("asset_category", params.get("category"));
+  if (params.get("seed")) back.set("asset_name", params.get("seed"));
+  window.location.href = "/?" + back;
+}
+document.getElementById("header-back-btn")?.classList.remove("hidden");
+
 document.addEventListener("click", (e) => {
   const dd = document.getElementById("seed-dropdown");
   const inp = document.getElementById("seed-input");

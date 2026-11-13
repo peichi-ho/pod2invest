@@ -404,10 +404,14 @@ function openAssetDetail(indexOrAsset) {
 
 // 詳情頁右上角「探索相關標的」：跳到「探索投資機會」頁，並把目前這支標的帶過去填進「查詢標的」。
 // 名稱和代號都帶：探索頁查詢要用圖譜裡的節點名，名稱不一定對得上，探索頁會再用代號找出正確的節點名。
+// 分類（台股／ETF）也一起帶：探索頁的返回鍵要靠 名稱＋代號＋分類 回到這支標的的詳情頁
+// （詳情頁的畫面狀態在記憶體裡，換頁就沒了，見 basket.html 的 onHeaderBack() 跟 base.html 的 ?open_asset=）。
 function openRelatedAssetsExplore() {
   if (!_assetDetailSymbol) return;
   const name = document.getElementById('asset-detail-name').textContent.trim();
-  const params = new URLSearchParams({ seed: name || _assetDetailSymbol, symbol: _assetDetailSymbol });
+  const params = new URLSearchParams({
+    seed: name || _assetDetailSymbol, symbol: _assetDetailSymbol, category: _assetDetailCategory || _assetsCategory,
+  });
   window.location.href = '/api/knowledge-graph/basket/?' + params;
 }
 
