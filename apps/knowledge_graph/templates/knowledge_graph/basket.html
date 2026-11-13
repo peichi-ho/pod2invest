@@ -256,6 +256,27 @@ function pickSeedSuggestion(name) {
   closeSeedDropdown();
 }
 
+// 從「查看個股資訊」詳情頁的「探索相關標的」按鈕跳過來時，網址會帶 ?seed=名稱&symbol=代號：
+// 先把名稱填進「查詢標的」；名稱不一定等於圖譜裡的節點名（查詢要用節點名才對得到），
+// 所以再用代號問搜尋建議，找到代號完全相同的標的就換成它的節點名。
+// 只填入、不自動查詢：關係類型、投資類型還要讓使用者確認。
+(async function prefillSeedFromUrl() {
+  const params = new URLSearchParams(location.search);
+  const seed = (params.get("seed") || "").trim();
+  const symbol = (params.get("symbol") || "").trim();
+  if (!seed && !symbol) return;
+  const inp = document.getElementById("seed-input");
+  inp.value = seed || symbol;
+  if (!symbol) return;
+  const filled = inp.value;
+  try {
+    const res = await fetch("/api/knowledge-graph/seed-suggest/?q=" + encodeURIComponent(symbol));
+    if (!res.ok) return;
+    const hit = ((await res.json()).suggestions || []).find(s => String(s.code).toLowerCase() === symbol.toLowerCase());
+    if (hit && inp.value === filled) inp.value = hit.name;     // 使用者已經改過輸入框就不要蓋掉
+  } catch (e) { /* 查不到就維持帶過來的名稱 */ }
+})();
+
 document.addEventListener("click", (e) => {
   const dd = document.getElementById("seed-dropdown");
   const inp = document.getElementById("seed-input");

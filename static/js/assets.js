@@ -402,6 +402,15 @@ function openAssetDetail(indexOrAsset) {
   _updateHeaderBack(); // 詳情頁是頁內子畫面，不會經過 _renderPage()，要自己通知頂部返回鍵
 }
 
+// 詳情頁右上角「探索相關標的」：跳到「探索投資機會」頁，並把目前這支標的帶過去填進「查詢標的」。
+// 名稱和代號都帶：探索頁查詢要用圖譜裡的節點名，名稱不一定對得上，探索頁會再用代號找出正確的節點名。
+function openRelatedAssetsExplore() {
+  if (!_assetDetailSymbol) return;
+  const name = document.getElementById('asset-detail-name').textContent.trim();
+  const params = new URLSearchParams({ seed: name || _assetDetailSymbol, symbol: _assetDetailSymbol });
+  window.location.href = '/api/knowledge-graph/basket/?' + params;
+}
+
 function closeAssetDetail() {
   document.getElementById('assets-detail-view').classList.add('hidden');
   document.getElementById('assets-list-view').classList.remove('hidden');
