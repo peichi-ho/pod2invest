@@ -49,6 +49,19 @@ class ToolResult:
     ok: bool
     data: Any
     error: Optional[str] = None
+    # 技術細節（例外類型與訊息），只給後台／開發模式顯示用，不會送進 LLM（見 Orchestrator.answer）
+    detail: Optional[str] = None
+
+
+class PodcastSearchUnavailable(Exception):
+    """Podcast 知識庫「檢索本身壞了」（向量模型載不進來、資料庫連不上…）。
+    跟「查了但沒有相關內容」（回傳空清單）是兩回事：前者要讓使用者知道這次回答沒有參考節目內容，
+    不然助理會在完全沒有資料的情況下回答，看起來就只是變笨。str(e) 是給使用者／LLM 看的通用說明，
+    原始例外在 __cause__、reason 放技術細節。"""
+
+    def __init__(self, message: str = "Podcast 知識庫目前無法檢索", reason: str = ""):
+        super().__init__(message)
+        self.reason = reason
 
 
 # =============================================================================
@@ -500,8 +513,10 @@ def search_podcast_transcript(
         ]
 
     except Exception as e:
-        logger.warning(f"pgvector search failed: {e}")
-        return []
+        # 不能再回傳 []：那跟「查了但沒有相關內容」分不出來，助理會在沒有任何資料的情況下照常回答。
+        # 完整錯誤（含 traceback）記在後台，使用者端由 Orchestrator.answer 加上提醒。
+        logger.exception("podcast search failed")
+        raise PodcastSearchUnavailable(reason=f"{type(e).__name__}: {e}") from e
 
 
 def get_realtime_stock_data(ticker: str) -> StockData:
@@ -752,6 +767,25 @@ def _with_reference_episodes(answer: str, source_ids: List[int], tool_results: L
     return answer + "\n\n**參考集數**\n" + "\n".join(lines)
 
 
+_RETRIEVAL_FAILURE_NOTICE = (
+    "**⚠️ 提醒**：Podcast 知識庫目前無法檢索，以上回答沒有參考節目內容，僅供參考；請稍後再試一次。"
+)
+
+
+def _with_retrieval_failure_notice(answer: str, tool_results: List[ToolResult]) -> str:
+    """Podcast 檢索失敗（不是「沒找到」）時，在回答結尾固定補一句提醒，不靠 LLM 自己記得說。
+    開發模式（DEBUG）再多附上原始錯誤，方便本機排查；正式環境不顯示技術細節。"""
+    failed = [r for r in tool_results if r.tool_name == "search_podcast_transcript" and not r.ok]
+    if not failed:
+        return answer
+    notice = _RETRIEVAL_FAILURE_NOTICE
+    if getattr(settings, "DEBUG", False):
+        detail = next((r.detail for r in failed if r.detail), "")
+        if detail:
+            notice += f"\n（開發模式才會顯示的原因：{detail}）"
+    return f"{answer}\n\n{notice}" if answer else notice
+
+
 class Orchestrator:
     def __init__(
         self,
@@ -854,6 +888,10 @@ class Orchestrator:
             try:
                 data = tool.run(**args)
                 results.append(ToolResult(tool_name=tool.name, ok=True, data=data))
+            except PodcastSearchUnavailable as e:
+                # error 是通用說明（會給 LLM 看）；原始錯誤放 detail，只給後台／開發模式用，
+                # 不然 LLM 可能把「Could not import module…」之類的內部訊息照念給使用者
+                results.append(ToolResult(tool_name=tool.name, ok=False, data=None, error=str(e), detail=e.reason))
             except Exception as e:
                 results.append(ToolResult(tool_name=tool.name, ok=False, data=None, error=str(e)))
 
@@ -895,7 +933,10 @@ class Orchestrator:
             return self._parse_followup(raw)
 
         tool_results = self.run_tools(actions, user_mode=user_mode)
-        tool_context = {"user_input": user_input, "tool_results": [asdict(r) for r in tool_results]}
+        tool_context = {
+            "user_input": user_input,
+            "tool_results": [{k: v for k, v in asdict(r).items() if k != "detail"} for r in tool_results],
+        }
 
         system = """
         你是一位專業的財經助理，請一律使用繁體中文回答。
@@ -961,6 +1002,7 @@ class Orchestrator:
         result = self._parse_followup(raw)
         answer = _drop_unknown_episode_links(result["answer"], _known_episode_ids(tool_results, history))
         result["answer"] = _with_reference_episodes(answer, source_ids, tool_results)
+        result["answer"] = _with_retrieval_failure_notice(result["answer"], tool_results)
         return result
 
     @staticmethod
