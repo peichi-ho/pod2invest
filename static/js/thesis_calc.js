@@ -625,8 +625,10 @@ function _thesisResultHtml(d) {
     steps.push(['試算價格', `預估營收 × ${multipleLabel} ÷ 股數`, _tNum(p.target_price, 2)]);
   }
   const anyChanged = growthChanged || marginChanges.length || riskChanged || multipleChanged || !!L.eps_override;
+  // grow + content-center：左右方塊等高時，這個方塊如果比較矮，多出來的高度由每一列平均分掉（列變高、分隔線均分），
+  // 列裡的內容在列內垂直置中（content-center；文字還是照原本的基線對齊），不會全部堆在最底下
   const stepRows = steps.map(([k, how, v]) => `
-    <div class="grid grid-cols-[5.5rem_minmax(0,1fr)_auto] gap-3 items-baseline py-1.5 border-t border-outline-variant/15 first:border-t-0">
+    <div class="grow grid grid-cols-[5.5rem_minmax(0,1fr)_auto] gap-3 items-baseline content-center py-1.5 border-t border-outline-variant/15 first:border-t-0">
       <span class="text-sm font-bold text-outline">${k}</span>
       <span class="text-xs text-outline leading-relaxed">${how}</span>
       <span class="text-sm font-bold text-tertiary-container text-right whitespace-nowrap">${v}</span>
@@ -653,12 +655,12 @@ function _thesisResultHtml(d) {
         <div class="font-['Epilogue'] text-2xl font-bold ${_tReturnColor(p.implied_return)}">${_tPct(p.implied_return, true)}</div>
       </div>
     </div>
-    <div>
+    <div class="flex flex-col flex-1">
       <div class="flex items-baseline justify-between gap-2 mb-1">
         <div class="text-xs text-outline font-bold uppercase tracking-widest">計算過程</div>
         ${anyChanged ? '<div class="text-xs text-secondary font-bold">● 跟預設（都不勾）不同的數字</div>' : ''}
       </div>
-      ${stepRows}
+      <div class="flex flex-col flex-1">${stepRows}</div>
     </div>
     ${(marginNote || growthNote || notes) ? `<ul class="text-xs text-outline space-y-0.5 pt-2 border-t border-outline-variant/15">${growthNote}${marginNote}${notes}</ul>` : ''}
     ${targets.length ? `<div class="text-xs text-outline pt-2 border-t border-outline-variant/15">節目提到的價位（僅供對照）：${targets.join('、')}</div>` : ''}`;
@@ -667,10 +669,16 @@ function _thesisResultHtml(d) {
 function _thesisBaselineHtml(d) {
   const b = d.baseline;
   const h = b.history || {};
-  const tile = (label, value, sub) => `<div class="bg-surface-container rounded-lg px-4 py-3 min-w-0">
+  // 方塊內容左右置中，上下分三塊各自固定在同一個位置（同一排的方塊會被拉成一樣高，所以有沒有備註都一樣）：
+  //   標籤：貼著上緣
+  //   數字：標籤下面固定空 9.3px，落在方塊中段（原本沒有備註的方塊數字所在的位置）
+  //   備註：維持原本的位置（數字的文字框下緣往回拉 7.3px，跟數字的文字框有一小段重疊，但實際字形不會碰到）。
+  //         用負邊距而不是絕對定位，這樣備註萬一換行（手機窄欄位）時方塊會往下長高，不會蓋到數字。
+  // 備註（近四季、5 年中位數…）比標籤再小一點，才分得出主從。
+  const tile = (label, value, sub) => `<div class="bg-surface-container rounded-lg px-4 py-3 min-w-0 text-center">
       <div class="text-xs text-outline font-bold">${label}</div>
-      <div class="text-lg font-bold text-tertiary-container font-['Epilogue'] tabular-nums">${value}</div>
-      ${sub ? `<div class="text-xs text-outline mt-0.5">${sub}</div>` : ''}
+      <div class="mt-[9.3px] text-lg font-bold text-tertiary-container font-['Epilogue'] tabular-nums">${value}</div>
+      ${sub ? `<div class="-mt-[7.3px] text-[11px] text-outline">${sub}</div>` : ''}
     </div>`;
   const tiles = [
     tile('財報截至', _escHtml(b.ttm_end || '—'), '近四季'),
@@ -694,8 +702,9 @@ function _thesisWaterfallHtml(d) {
   const pos = v => Math.max(0, Math.min(100, v / hi * 100));
 
   // 寬螢幕：名稱｜長條｜數字 三欄；手機：名稱與數字一行、長條另起一行佔滿寬度
+  // grow：左右方塊等高時，這個方塊如果比較矮，多出來的高度由每一列平均分掉；列裡的內容本來就是 items-center 垂直置中
   const row = (label, sub, left, width, color, valueText, deltaText, deltaColor) => `
-    <div class="grid grid-cols-[minmax(0,1fr)_auto] sm:grid-cols-[minmax(0,8rem)_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 py-1">
+    <div class="grow grid grid-cols-[minmax(0,1fr)_auto] sm:grid-cols-[minmax(0,8rem)_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 py-1">
       <div class="min-w-0 order-1">
         <div class="text-sm font-bold text-tertiary-container truncate" title="${_escHtml(label)}">${_escHtml(label)}</div>
         ${sub ? `<div class="text-[11px] text-outline leading-tight">${_escHtml(sub)}</div>` : ''}
@@ -732,7 +741,7 @@ function _thesisWaterfallHtml(d) {
       <h5 class="text-xs text-outline font-bold uppercase tracking-widest flex items-center gap-1">試算價格怎麼來的${_tInfo('waterfall')}</h5>
       <span class="text-xs text-outline">每一步相對前一步的變化</span>
     </div>
-    <div class="space-y-1">${rows.join('')}</div>`;
+    <div class="flex flex-col gap-1 flex-1">${rows.join('')}</div>`;
 }
 
 _thesisMountInfo();

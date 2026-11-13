@@ -274,9 +274,12 @@
 
         <!-- 結果：按「開始試算」後才顯示 -->
         <div id="thesis-results" class="hidden space-y-4 transition-opacity">
-          <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
-            <div id="thesis-result" class="bg-surface-container-lowest rounded-xl px-6 py-6 space-y-5 min-w-0"></div>
-            <div id="thesis-waterfall" class="bg-surface-container-lowest rounded-xl px-6 py-6 space-y-4 min-w-0"></div>
+          <!-- 左右兩個方塊等高（grid 預設就是拉伸對齊）。內容比較少的那個方塊，多出來的高度由裡面的「列」
+               平均分掉（見 thesis_calc.js 的 _thesisResultHtml／_thesisWaterfallHtml：列區塊 flex-1、每列 grow），
+               不會全部堆在最底下變成一大片空白。所以方塊內部用 flex 直向排列，不用 space-y。 -->
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div id="thesis-result" class="bg-surface-container-lowest rounded-xl px-6 py-6 flex flex-col gap-5 min-w-0"></div>
+            <div id="thesis-waterfall" class="bg-surface-container-lowest rounded-xl px-6 py-6 flex flex-col gap-4 min-w-0"></div>
           </div>
           <div id="thesis-baseline" class="bg-surface-container-lowest rounded-xl px-6 py-5 space-y-3"></div>
         </div>
