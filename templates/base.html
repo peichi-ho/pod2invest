@@ -87,10 +87,235 @@
   .nav-btn { color: #286671; }
   .nav-btn.active { color: #113236; font-weight: bold; transform: scale(1.1); opacity: 1 !important; }
   .nav-btn.active .nav-icon { font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+
+  /* ── 啟動畫面：進入系統時的大 logo，點擊後才進入；點頂端 logo 可以再回到這個畫面 ──────────
+     要不要在「一進來」就顯示由 <head> 裡的小 script 決定（會在 <html> 加上 .splash-active 跟 .splash-lock），
+     沒有 JS 或存取 sessionStorage 失敗時就不顯示，不會把使用者擋在門外。動畫分四段：
+       1. 進場（.splash-ready）：長條依序長高、字母逐個浮現、最後淡入提示文字
+       2. 等待：長條輕輕起伏、提示文字呼吸
+       3. 點擊（.is-leaving）：logo 往前放大淡出，墨綠畫面像光圈一樣縮向點擊位置，露出系統
+       4. 回來（.is-returning，點頂端 logo）：3 的反向——光圈從 logo 位置長大蓋住系統，logo 從遠處縮回中央。
+          只是蓋一層畫面上去，系統本身（目前頁面、捲動位置、輸入的文字、各分頁的記憶）完全不動。
+          回來時用 .splash-instant 跳過進場動畫，直接是「等待」的樣子。
+     --cx／--cy 是動畫的圓心（點擊位置或頂端 logo 的位置），由 base.html 裡的 inline script 設定。
+     .splash-lock 只在「一進來」時才加：把頁面鎖住不能捲動。回來時不能加——overflow:hidden 會讓
+     Windows 的捲軸消失、頁面變寬重新排版，可能動到使用者原本捲到的位置，所以回來時改由 script 攔截捲動。 */
+  #splash { display: none; position: fixed; inset: 0; z-index: 200; flex-direction: column; align-items: center; justify-content: center;
+    overflow: hidden; background: #113236; cursor: pointer; outline: none; user-select: none; -webkit-tap-highlight-color: transparent;
+    touch-action: none; overscroll-behavior: none;
+    clip-path: circle(150% at var(--cx, 50%) var(--cy, 50%)); }
+  html.splash-active #splash { display: flex; }
+  html.splash-lock, html.splash-lock body { overflow: hidden; }
+  /* 回來時頁面的捲軸還在（見上面 .splash-lock 的說明），在墨綠畫面旁邊會露出一條淺色捲軸；
+     把它染成跟畫面同色。scrollbar-color 只改顏色、不改寬度，所以不會讓頁面重新排版。 */
+  html.splash-active:not(.splash-lock) { scrollbar-color: #2f6a72 #113236; }
+  #splash::before { content: ''; position: absolute; inset: 0; animation: splash-glow 6s ease-in-out infinite alternate;
+    background: radial-gradient(60% 50% at 50% 46%, rgba(217,127,18,.22), transparent 70%), radial-gradient(90% 70% at 50% 100%, rgba(40,102,113,.5), transparent 70%); }
+  .splash-center { position: relative; display: flex; flex-direction: column; align-items: center; padding: 0 1.5rem; }
+  .splash-mark { display: flex; align-items: flex-end; gap: clamp(.35rem, 1.2vw, .6rem); height: clamp(3rem, 9vw, 5.5rem); margin-bottom: clamp(1.25rem, 3.5vw, 2.25rem); }
+  .splash-bar { width: clamp(.6rem, 1.8vw, 1.05rem); height: var(--h); transform-origin: bottom; transform: scaleY(0); }
+  .splash-bar > i { display: block; height: 100%; border-radius: 9999px; background: #d97f12; transform-origin: bottom; }
+  .splash-word { font-family: 'Epilogue', sans-serif; font-weight: 800; font-size: clamp(2.75rem, 12.5vw, 9rem); line-height: 1; letter-spacing: -0.03em; color: #fcf9f0; white-space: nowrap; }
+  .splash-letter { display: inline-block; opacity: 0; transform: translateY(.45em); filter: blur(12px); }
+  .splash-letter--accent { color: #d97f12; }
+  .splash-hint { display: flex; align-items: center; gap: .75rem; margin-top: clamp(2rem, 6vw, 3.5rem); opacity: 0;
+    font-family: 'Manrope', sans-serif; font-size: .9rem; font-weight: 600; letter-spacing: .28em; color: rgba(252,249,240,.72); }
+  .splash-dot { width: .5rem; height: .5rem; border-radius: 9999px; background: #d97f12; animation: splash-ping 1.8s ease-out infinite; }
+
+  #splash.splash-ready .splash-bar { animation: splash-bar-rise .75s cubic-bezier(.2,.9,.3,1.25) forwards; animation-delay: calc(var(--i) * 90ms); }
+  #splash.splash-ready .splash-bar > i { animation: splash-bar-breathe 1.7s ease-in-out infinite alternate; animation-delay: calc(1s + var(--i) * 140ms); }
+  #splash.splash-ready .splash-letter { animation: splash-letter-in .85s cubic-bezier(.2,.8,.2,1) forwards; animation-delay: calc(.45s + var(--i) * 60ms); }
+  #splash.splash-ready .splash-hint { animation-name: splash-fade-in, splash-hint-pulse; animation-duration: .8s, 2.4s; animation-delay: 1.7s, 2.5s;
+    animation-timing-function: ease, ease-in-out; animation-iteration-count: 1, infinite; animation-fill-mode: forwards, none; }
+
+  /* 回來時直接是「等待」的樣子：元素被 display:none 藏起來再顯示時，CSS 動畫會從頭重跑，
+     所以要把進場動畫（長條長高、字母浮現、提示淡入）關掉，直接給最終狀態；起伏／呼吸這類循環動畫照常。 */
+  #splash.splash-instant .splash-bar { animation: none; transform: none; }
+  #splash.splash-instant .splash-letter { animation: none; opacity: 1; transform: none; filter: none; }
+  #splash.splash-instant .splash-hint { opacity: 1; animation: splash-hint-pulse 2.4s ease-in-out infinite; }
+
+  #splash.is-leaving { pointer-events: none; will-change: clip-path; animation: splash-reveal .95s cubic-bezier(.65,0,.25,1) .12s forwards; }
+  #splash.is-leaving .splash-center { animation: splash-dive .65s cubic-bezier(.55,0,.9,.45) forwards; }
+  /* 反向：時間軸整個鏡射（離開時光圈在 [.12s, 1.07s]、logo 在 [0, .65s]；回來時光圈在 [0, .95s]、logo 在 [.30s, .95s]
+     ——兩個在 .95s 同時結束，script 就看光圈的 animationend 收尾），緩動曲線也換成鏡射的版本 */
+  #splash.is-returning { pointer-events: none; will-change: clip-path; animation: splash-reveal-back .95s cubic-bezier(.75,0,.35,1) both; }
+  #splash.is-returning .splash-center { animation: splash-dive-back .65s cubic-bezier(.1,.55,.45,1) .3s both; }
+
+  @keyframes splash-glow { from { transform: scale(1); opacity: .85; } to { transform: scale(1.08); opacity: 1; } }
+  @keyframes splash-bar-rise { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+  @keyframes splash-bar-breathe { from { transform: scaleY(1); } to { transform: scaleY(.62); } }
+  @keyframes splash-letter-in { to { opacity: 1; transform: none; filter: blur(0); } }
+  @keyframes splash-fade-in { to { opacity: 1; } }
+  @keyframes splash-hint-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .4; } }
+  @keyframes splash-ping { to { box-shadow: 0 0 0 .9rem rgba(217,127,18,0); } }
+  @keyframes splash-reveal { from { clip-path: circle(150% at var(--cx, 50%) var(--cy, 50%)); } to { clip-path: circle(0% at var(--cx, 50%) var(--cy, 50%)); } }
+  @keyframes splash-dive { 0% { transform: scale(1); opacity: 1; filter: blur(0); } 20% { transform: scale(1.06); opacity: 1; filter: blur(0); } 100% { transform: scale(1.9); opacity: 0; filter: blur(10px); } }
+  @keyframes splash-fade { to { opacity: 0; } }
+  @keyframes splash-reveal-back { from { clip-path: circle(0% at var(--cx, 50%) var(--cy, 50%)); } to { clip-path: circle(150% at var(--cx, 50%) var(--cy, 50%)); } }
+  @keyframes splash-dive-back { 0% { transform: scale(1.9); opacity: 0; filter: blur(10px); } 80% { transform: scale(1.06); opacity: 1; filter: blur(0); } 100% { transform: scale(1); opacity: 1; filter: blur(0); } }
+  @keyframes splash-unfade { from { opacity: 0; } }
+
+  /* 系統設定「減少動態效果」的使用者：全部直接顯示，進入／回來時只做簡單淡出／淡入，沒有放大／光圈 */
+  @media (prefers-reduced-motion: reduce) {
+    #splash::before, .splash-dot, #splash .splash-bar > i { animation: none !important; }
+    #splash .splash-bar { animation: none !important; transform: none !important; }
+    #splash .splash-letter { animation: none !important; opacity: 1 !important; transform: none !important; filter: none !important; }
+    #splash .splash-hint { animation: none !important; opacity: 1 !important; }
+    #splash.is-leaving { animation: splash-fade .25s ease forwards !important; }
+    #splash.is-leaving .splash-center { animation: none !important; }
+    #splash.is-returning { animation: splash-unfade .25s ease both !important; }
+    #splash.is-returning .splash-center { animation: none !important; }
+  }
 </style>
+<script>
+  /* 啟動畫面「一進來」只在同一個瀏覽器分頁（session）第一次進入時出現；網址加 ?splash 可以強制再看一次。
+     （進來之後隨時可以點頂端 logo 再看一次，見 <body> 裡的 inline script。）
+     這段要放在 <head>、第一次繪製之前執行，使用者才不會先看到系統畫面再閃出啟動畫面。 */
+  (function () {
+    try {
+      if (/[?&]splash(=|&|$)/.test(location.search) || !sessionStorage.getItem('pod2invest-splash-seen')) {
+        document.documentElement.classList.add('splash-active', 'splash-lock');
+      }
+    } catch (e) {}
+  })();
+</script>
 {% block extra_head %}{% endblock %}
 </head>
 <body class="bg-surface text-on-surface pb-28">
+
+<!-- 啟動畫面：大 logo，點擊（或按 Enter／空白鍵）才進入系統。樣式見上方 <style>，
+     沒有正式 logo 圖檔，先用字標＋長條圖小圖形；之後要換成正式 logo，只要換掉 .splash-center 裡面的內容。 -->
+<div id="splash" role="button" tabindex="0" aria-label="進入 Pod2Invest">
+  <div class="splash-center" aria-hidden="true">
+    <div class="splash-mark">
+      <span class="splash-bar" style="--i:0;--h:38%"><i></i></span>
+      <span class="splash-bar" style="--i:1;--h:58%"><i></i></span>
+      <span class="splash-bar" style="--i:2;--h:46%"><i></i></span>
+      <span class="splash-bar" style="--i:3;--h:78%"><i></i></span>
+      <span class="splash-bar" style="--i:4;--h:100%"><i></i></span>
+    </div>
+    <div class="splash-word">
+      <span class="splash-letter" style="--i:0">P</span><span class="splash-letter" style="--i:1">o</span><span class="splash-letter" style="--i:2">d</span><span class="splash-letter splash-letter--accent" style="--i:3">2</span><span class="splash-letter" style="--i:4">I</span><span class="splash-letter" style="--i:5">n</span><span class="splash-letter" style="--i:6">v</span><span class="splash-letter" style="--i:7">e</span><span class="splash-letter" style="--i:8">s</span><span class="splash-letter" style="--i:9">t</span>
+    </div>
+    <div class="splash-hint"><span class="splash-dot"></span>點擊任意處進入</div>
+  </div>
+</div>
+<script>
+  /* 啟動畫面的互動。直接寫在這裡（不放進另外的 .js 檔）是因為要在頁面其他 script 載入前就能點，
+     而且就算其他檔案載入失敗，使用者也不會被卡在啟動畫面。
+
+     啟動畫面元素會一直留在 DOM 裡，只靠 <html> 上的 .splash-active 決定顯不顯示，這樣才能重複進出：
+       hidden    看不到（系統在操作中）
+       returning 點了頂端 logo，反向動畫播放中（光圈從 logo 長大蓋住系統）
+       idle      停在啟動畫面，等使用者點擊進入
+       leaving   點擊後，進入動畫播放中
+     重點是「只動畫面」：這個覆蓋層不會呼叫 showPage()／switchTab()、不重新整理、不清任何東西，
+     所以目前頁面、捲動位置、輸入框文字、app.js 裡的 _tabMemory／_pageHistory 這些記憶都原封不動。 */
+  (function () {
+    var splash = document.getElementById('splash');
+    if (!splash) return;
+    var root = document.documentElement;
+    var state = root.classList.contains('splash-active') ? 'idle' : 'hidden';
+    var locked = [], prevFocus = null, timer = null;
+
+    // 字型（Epilogue 800）載好才開始進場動畫，不然字母浮現的過程中會看到字型從預設字型換成 Epilogue。
+    // 最多等 1.5 秒，網路慢或字型載入失敗也一定會開始。只有「一進來」要等，回來時直接是等待的樣子。
+    if (state === 'idle') {
+      var ready = function () { splash.classList.add('splash-ready'); };
+      var readyTimer = setTimeout(ready, 1500);
+      if (document.fonts && document.fonts.load) {
+        document.fonts.load('800 1em Epilogue', 'Pod2Invest').then(function () { clearTimeout(readyTimer); ready(); }, ready);
+      } else { clearTimeout(readyTimer); ready(); }
+    }
+
+    function setOrigin(x, y) {
+      splash.style.setProperty('--cx', x + 'px');
+      splash.style.setProperty('--cy', y + 'px');
+    }
+
+    // 啟動畫面還在的時候，後面的系統不能被 Tab 鍵聚焦／被螢幕閱讀器讀到。一進來時其他內容要等 DOM 解析完
+    // 才存在，所以等 DOMContentLoaded 再處理；只還原自己設的，不動別人設的 inert。
+    // 同時記下原本焦點在哪（例如搜尋框），離開時還回去——元素變成 inert 時焦點會消失。
+    function lockPage() {
+      if (state === 'hidden') return;
+      if (document.activeElement && document.activeElement !== document.body && document.activeElement !== splash) prevFocus = document.activeElement;
+      Array.prototype.forEach.call(document.body.children, function (el) {
+        if (el === splash || el.tagName === 'SCRIPT' || el.inert) return;
+        el.inert = true; locked.push(el);
+      });
+      splash.focus({ preventScroll: true });
+    }
+    function unlockPage() {
+      locked.forEach(function (el) { el.inert = false; });
+      locked = [];
+      if (prevFocus && document.contains(prevFocus) && typeof prevFocus.focus === 'function') prevFocus.focus({ preventScroll: true });
+      prevFocus = null;
+    }
+    if (state === 'idle') {
+      if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', lockPage); else lockPage();
+    }
+
+    // 離開：進入動畫跑完（或減少動態時的淡出結束）才收起來。分頁在背景時動畫不一定會跑，所以另有保底計時器。
+    function finish() {
+      if (state !== 'leaving') return;
+      clearTimeout(timer);
+      state = 'hidden';
+      splash.classList.remove('is-leaving');
+      root.classList.remove('splash-active', 'splash-lock');
+      unlockPage();
+    }
+    // 回來：反向動畫跑完，回到「等待」。
+    function settle() {
+      if (state !== 'returning') return;
+      clearTimeout(timer);
+      state = 'idle';
+      splash.classList.remove('is-returning');
+      splash.focus({ preventScroll: true });
+    }
+
+    function enter(x, y) {
+      if (state !== 'idle') return;
+      state = 'leaving';
+      // 一點下去就記為「這個分頁看過了」，動畫跑到一半重新整理也不會再出現
+      try { sessionStorage.setItem('pod2invest-splash-seen', '1'); } catch (e) {}
+      setOrigin(x, y);
+      splash.classList.add('is-leaving');
+      clearTimeout(timer); timer = setTimeout(finish, 1700);
+    }
+
+    // 頂端 logo 的入口（見 <header>）。fromEl 是被點的 logo，反向動畫的光圈就從它的位置長出來。
+    window.replaySplash = function (fromEl, ev) {
+      // 不讓這次點擊往上傳給頁面其他的「點到外面就關掉」處理（例如搜尋下拉選單），系統的畫面狀態才完全不動
+      if (ev) ev.stopPropagation();
+      if (state !== 'hidden') return;
+      var r = fromEl && fromEl.getBoundingClientRect();
+      setOrigin(r ? r.left + r.width / 2 : innerWidth / 2, r ? r.top + r.height / 2 : innerHeight / 2);
+      state = 'returning';
+      splash.classList.remove('is-leaving');
+      splash.classList.add('splash-ready', 'splash-instant', 'is-returning');
+      root.classList.add('splash-active');   // 注意：這裡不加 splash-lock，原因見 <style> 開頭的說明
+      lockPage();
+      clearTimeout(timer); timer = setTimeout(settle, 1700);
+    };
+
+    splash.addEventListener('animationend', function (e) {
+      if (e.target !== splash || e.pseudoElement) return;
+      if (state === 'leaving') finish(); else if (state === 'returning') settle();
+    });
+    splash.addEventListener('click', function (e) { e.stopPropagation(); enter(e.clientX, e.clientY); });
+
+    // 啟動畫面在的時候不讓頁面被捲動（回來時沒有鎖 overflow，所以要自己攔），使用者離開時的捲動位置才會原樣留著
+    function blockScroll(e) { if (state !== 'hidden') e.preventDefault(); }
+    splash.addEventListener('wheel', blockScroll, { passive: false });
+    splash.addEventListener('touchmove', blockScroll, { passive: false });
+    document.addEventListener('keydown', function (e) {
+      if (state === 'hidden') return;
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); enter(innerWidth / 2, innerHeight / 2); }
+      else if (/^(Arrow(Up|Down)|Page(Up|Down)|Home|End)$/.test(e.key)) e.preventDefault();
+    }, true);
+  })();
+</script>
+
 <script>window.IS_AUTHENTICATED = {{ request.user.is_authenticated|yesno:"true,false" }};</script>
 
 <!-- Top Navigation -->
@@ -104,7 +329,12 @@
       <span class="material-symbols-outlined text-xl">arrow_back_ios</span>返回
     </button>
   </div>
-  <h1 class="font-['Epilogue'] font-bold tracking-[-0.02em] text-[28px] text-[#113236] absolute left-1/2 -translate-x-1/2">Pod2Invest</h1>
+  <!-- 點 logo 會播放啟動畫面的反向動畫、回到大 logo 畫面（只有畫面，系統狀態不動），見 replaySplash()。
+       「2」用品牌橘色，跟啟動畫面的字標一致。 -->
+  <h1 class="font-['Epilogue'] font-bold tracking-[-0.02em] text-[28px] text-[#113236] absolute left-1/2 -translate-x-1/2">
+    <button type="button" onclick="window.replaySplash && replaySplash(this, event)" aria-label="Pod2Invest，回到啟動畫面" title="回到啟動畫面"
+      class="rounded-md hover:opacity-80 active:scale-95 transition-all focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-secondary">Pod<span class="text-on-primary-container">2</span>Invest</button>
+  </h1>
   <button onclick="openProfilePage()" class="w-12 h-12 rounded-full overflow-hidden bg-surface-container-highest hover:opacity-80 transition-opacity">
     <div id="header-avatar-inner" class="w-full h-full flex items-center justify-center" style="background:#113236"><span class="material-symbols-outlined text-white text-[28px]" style="font-variation-settings:'FILL' 1">person</span></div>
   </button>
@@ -216,14 +446,14 @@
 {% block body_scripts %}
 <!-- JS modules -->
 <script src="{% static 'js/app.js' %}?v=34"></script>
-<script src="{% static 'js/discover.js' %}?v=55"></script>
+<script src="{% static 'js/discover.js' %}?v=56"></script>
 <script src="{% static 'js/rankings.js' %}?v=22"></script>
 <script src="{% static 'js/deep_dive.js' %}?v=30"></script>
 <script src="{% static 'js/calculator.js' %}?v=59"></script>
-<script src="{% static 'js/thesis_calc.js' %}?v=22"></script>
+<script src="{% static 'js/thesis_calc.js' %}?v=26"></script>
 <script src="{% static 'js/saved_sims.js' %}?v=1"></script>
 <script src="{% static 'js/ai.js' %}?v=13"></script>
-<script src="{% static 'js/assets.js' %}?v=23"></script>
+<script src="{% static 'js/assets.js' %}?v=25"></script>
 <script src="{% static 'js/profile.js' %}?v=16"></script>
 <script>
   {# 從 basket.html 等獨立頁面連回來時可帶 #assets 之類的 hash，指定要打開哪個分頁 #}
@@ -235,6 +465,21 @@
     const openSummary = params.get('open_summary');
     if (openSummary && document.getElementById('page-deep-dive') && typeof openDeepDive === 'function') {
       openDeepDive(parseInt(openSummary, 10));
+      return;
+    }
+    // 從探索投資機會頁（basket.html，獨立頁面）按返回鍵回來時帶 ?open_asset=<代號>，
+    // 另外可帶 asset_category（tw_stock／tw_etf）、asset_name：直接重新打開那支標的的詳情頁，
+    // 回到使用者剛剛離開的個股頁。跟 #hash 一樣是一次性入口，用掉就從網址列清掉。
+    const openAsset = params.get('open_asset');
+    if (openAsset && document.getElementById('page-assets') && typeof openAssetDetail === 'function') {
+      showPage('assets');
+      _currentTab = _PAGE_TAB.assets || 'assets';
+      openAssetDetail({
+        symbol: openAsset,
+        category: params.get('asset_category') || undefined,
+        name: params.get('asset_name') || openAsset,
+      });
+      history.replaceState(null, '', location.pathname);
       return;
     }
     const wanted = location.hash.replace('#', '');

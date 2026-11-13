@@ -19,15 +19,16 @@
 {% block pages %}
 <div class="max-w-6xl mx-auto px-6 pt-24 pb-10">
 
-  <!-- 標題 -->
+  <!-- 標題：字級、副標、右上角切換鈕的大小都跟「個股資料查詢」頁（templates/pages/assets.html）一樣，
+       兩頁來回切換時標題區不會忽大忽小 -->
   <div class="flex items-start justify-between gap-4 mb-8">
     <div>
-      <h1 id="page-title" class="font-headline font-extrabold text-3xl text-tertiary-container tracking-tight">探索投資機會</h1>
-      <p class="text-on-surface-variant text-base mt-1">從 Podcast 討論與財務數據中，發掘值得關注的標的</p>
+      <h1 id="page-title" class="font-['Epilogue'] text-[40px] leading-none font-bold tracking-tight text-tertiary-container mb-2">探索投資機會</h1>
+      <p class="text-secondary font-medium">從 Podcast 討論與財務數據中，發掘值得關注的標的</p>
     </div>
     <div class="flex-shrink-0 flex gap-1 bg-surface-container-high rounded-full p-1">
-      <button onclick="window.location.href='/#assets'" class="px-4 py-2 rounded-full font-label text-sm font-bold transition-all text-secondary hover:bg-surface-container-highest whitespace-nowrap">查看個股資訊</button>
-      <button class="px-4 py-2 rounded-full font-label text-sm font-bold transition-all bg-tertiary-container text-white whitespace-nowrap">探索相關標的</button>
+      <button onclick="window.location.href='/#assets'" class="px-4 py-2 rounded-full font-label text-xs font-bold transition-all text-secondary hover:bg-surface-container-highest whitespace-nowrap">查看個股資訊</button>
+      <button class="px-4 py-2 rounded-full font-label text-xs font-bold transition-all bg-tertiary-container text-white whitespace-nowrap">探索相關標的</button>
     </div>
   </div>
 
@@ -254,6 +255,44 @@ function pickSeedSuggestion(name) {
   document.getElementById("seed-input").value = name;
   closeSeedDropdown();
 }
+
+// 從「查看個股資訊」詳情頁的「探索相關標的」按鈕跳過來時，網址會帶 ?seed=名稱&symbol=代號：
+// 先把名稱填進「查詢標的」；名稱不一定等於圖譜裡的節點名（查詢要用節點名才對得到），
+// 所以再用代號問搜尋建議，找到代號完全相同的標的就換成它的節點名。
+// 只填入、不自動查詢：關係類型、投資類型還要讓使用者確認。
+(async function prefillSeedFromUrl() {
+  const params = new URLSearchParams(location.search);
+  const seed = (params.get("seed") || "").trim();
+  const symbol = (params.get("symbol") || "").trim();
+  if (!seed && !symbol) return;
+  const inp = document.getElementById("seed-input");
+  inp.value = seed || symbol;
+  if (!symbol) return;
+  const filled = inp.value;
+  try {
+    const res = await fetch("/api/knowledge-graph/seed-suggest/?q=" + encodeURIComponent(symbol));
+    if (!res.ok) return;
+    const hit = ((await res.json()).suggestions || []).find(s => String(s.code).toLowerCase() === symbol.toLowerCase());
+    if (hit && inp.value === filled) inp.value = hit.name;     // 使用者已經改過輸入框就不要蓋掉
+  } catch (e) { /* 查不到就維持帶過來的名稱 */ }
+})();
+
+// 頂部返回鍵（#header-back-btn 在 base.html 的橫幅裡，預設隱藏）：這頁是獨立頁面，沒有載入 app.js，
+// 沒有 onHeaderBack()／_updateHeaderBack()，要自己顯示、自己接。
+//   - 從個股詳情頁的「探索相關標的」過來（網址帶 symbol）→ 回到那支標的的詳情頁
+//   - 其他進來的方式（個股資料查詢列表上的切換鈕、直接輸入網址）→ 回到個股資料查詢列表
+// 詳情頁的畫面狀態在記憶體裡，換頁就沒了，所以不能用 history.back()（會回到首頁），
+// 而是用首頁的深連結 ?open_asset= 重新打開（見 base.html 的啟動程式）。
+function onHeaderBack() {
+  const params = new URLSearchParams(location.search);
+  const symbol = (params.get("symbol") || "").trim();
+  if (!symbol) { window.location.href = "/#assets"; return; }
+  const back = new URLSearchParams({ open_asset: symbol });
+  if (params.get("category")) back.set("asset_category", params.get("category"));
+  if (params.get("seed")) back.set("asset_name", params.get("seed"));
+  window.location.href = "/?" + back;
+}
+document.getElementById("header-back-btn")?.classList.remove("hidden");
 
 document.addEventListener("click", (e) => {
   const dd = document.getElementById("seed-dropdown");

@@ -17,6 +17,8 @@ google-genai
 
 # --- AI assisstant ---
 yfinance
+# 檢索的關鍵字（BM25）混合排序。沒裝時程式只記一行警告、檢索退成純向量排序，結果會變差（見 ai_assistant.py 的 _hybrid_rerank）
+rank-bm25
 
 # --- Podcast processing ---
 feedparser==6.0.12
@@ -25,7 +27,10 @@ faster-whisper
 
 # --- ML / numeric ---
 # If you have an NVIDIA GPU, install the CUDA version of PyTorch for faster Whisper transcription:
-# pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+# pip install torch==2.10.0 --index-url https://download.pytorch.org/whl/cu128
+# 只裝 torch 就好，不要再加 torchvision／torchaudio：沒指定版本會抓到比 torch 2.10.0 更新的版本，
+# 版本對不上時 sentence-transformers 會載入失敗（torchvision::nms does not exist），
+# AI 助理就查不到任何 Podcast 內容。這個專案的程式碼沒有用到這兩個套件。
 torch==2.10.0
 numpy==2.4.2
 sentence-transformers
