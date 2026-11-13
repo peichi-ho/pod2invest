@@ -828,7 +828,7 @@ function renderMarketFocus() {
     return `
       <button type="button"
         onclick="filterDiscoverByTag('${safe}'); document.getElementById('tag-results-section')?.scrollIntoView({behavior:'smooth', block:'start'});"
-        class="flex flex-col text-left bg-tertiary-container rounded-2xl p-5 border border-white/10 hover:shadow-lg hover:bg-[#184248] transition-all">
+        class="flex flex-col text-left bg-tertiary-container rounded-2xl p-5 border border-white/10 hover:shadow-lg hover:bg-[#21585f] hover:border-white/25 transition-all">
         <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
           <h3 class="font-['Epilogue'] font-bold text-2xl text-white leading-snug">${escapeHtml(t.name)}</h3>
           ${consensusHtml}
