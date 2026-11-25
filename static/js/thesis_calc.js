@@ -47,6 +47,9 @@ function showCalcModule(m) {
     btn.classList.toggle('text-white', on);
     btn.classList.toggle('text-on-surface-variant', !on);
   });
+  // 上方「選擇投資標的」共用：論點情境試算用不到風險／立場分數、回測期間與評分理由，收起來(見 calculator.html 的 .calc-sim-only)
+  const pe = document.getElementById('panel-episode');
+  if (pe) pe.classList.toggle('calc-thesis', m === 'thesis');
   _thesisFilterEpisodes(m === 'thesis');
   // 同一集也要重新載入的情況：從摘要另一張可驗證句卡片點進來，要換成那一句論點
   const preferNew = _thesisPreferred && _thesisPreferred.scoreId === String(_thesisPendingScore);
@@ -62,15 +65,13 @@ function _thesisFilterEpisodes(on) {
   if (!sel || typeof episodes === 'undefined' || !episodes.length) return;
   // 目前選的這一集就算沒有可試算的情境也留在清單裡：不要偷偷換成別集，改在下方提示使用者自己換(見 loadThesisValuation)
   const current = sel.value;
-  const list = on ? episodes.filter(e => e.has_calc !== false || String(e.score_id) === String(current)) : episodes;
-  sel.innerHTML = list.map(e =>
-    `<option value="${e.score_id}">${e.published_at || '未知日期'}　${e.asset_name}(${e.ticker})　${e.podcaster || ''}</option>`
-  ).join('');
+  const list = on ? episodes.filter(e => e.has_calc !== false || _epKey(e) === String(current)) : episodes;
+  sel.innerHTML = list.map(_episodeOptionHtml).join('');
   if (!list.length) return;
-  if (list.some(e => String(e.score_id) === String(current))) {
+  if (list.some(e => _epKey(e) === String(current))) {
     sel.value = current;
   } else {
-    sel.value = list[0].score_id;
+    sel.value = _epKey(list[0]);
     if (typeof onEpisodeChange === 'function') onEpisodeChange();
   }
 }

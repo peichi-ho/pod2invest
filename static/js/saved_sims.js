@@ -268,9 +268,12 @@ async function openSavedSim(id) {
 }
 
 // 選集清單只列還沒到期的論點：存檔後那一集過期就不在清單裡，補一個選項進去才選得到
-function _ensureEpisodeOption(scoreId, it) {
+// 回傳 true/false 同原本；選得到時把選項的值(key)存在 it._episodeKey，呼叫端用它選回去
+function _ensureEpisodeOption(scoreId, it, opts = {}) {
   const sel = document.getElementById('in-episode');
-  if ([...sel.options].some(o => String(o.value) === String(scoreId))) return true;
+  const key = typeof _episodeKeyForScore === 'function' ? _episodeKeyForScore(scoreId, opts) : null;
+  it._episodeKey = key || String(scoreId);
+  if ([...sel.options].some(o => String(o.value) === String(it._episodeKey))) return true;
   const r = it.result || {};
   const opt = document.createElement('option');
   opt.value = scoreId;
@@ -285,8 +288,8 @@ async function _restoreSim(it) {
   if (typeof showCalcModule === 'function') showCalcModule('sim');
   const notes = [];
   if (p.mode === 'episode' && p.score_id) {
-    if (!_ensureEpisodeOption(p.score_id, it)) notes.push('這一集已經不在選集清單裡（論點已到期），仍用當時的資料重新模擬。');
-    document.getElementById('in-episode').value = p.score_id;
+    if (!_ensureEpisodeOption(p.score_id, it, { macro: p.macro })) notes.push('這一集已經不在選集清單裡（論點已到期），仍用當時的資料重新模擬。');
+    document.getElementById('in-episode').value = it._episodeKey;
     if (episodes.some(e => String(e.score_id) === String(p.score_id))) onEpisodeChange();
   } else {
     document.getElementById('in-ticker').value = p.ticker || '';
@@ -318,7 +321,7 @@ async function _restoreThesis(it) {
   showCalcModule('thesis');
   const notes = [];
   if (!_ensureEpisodeOption(p.score_id, it)) notes.push('這一集已經不在選集清單裡（論點已到期），仍用當時的條件重新試算。');
-  document.getElementById('in-episode').value = p.score_id;
+  document.getElementById('in-episode').value = it._episodeKey;
   if (episodes.some(e => String(e.score_id) === String(p.score_id))) onEpisodeChange();
   // 直接設定論點情境試算的狀態再試算(不等 showCalcModule 觸發的那次載入；序號較新的請求會蓋掉它)
   _thesis.scoreId = p.score_id;

@@ -21,6 +21,7 @@ from apps.summaries.services.sentiment_score import (
     find_stock_topics_with_fallback,
     get_base_vol_asof,
     classify_stock_sentiment,
+    apply_backtest_direction,
 )
 
 
@@ -145,6 +146,8 @@ class Command(BaseCommand):
                         classify_failed += 1
                         continue
 
+                    # 立場以這集這支股票的可驗證句方向為準(跟 ensure_stock_sentiment_score 同一套)
+                    macro_score, rationale = apply_backtest_direction(record, ticker, result)
                     StockSentimentScore.objects.using("summariesdb").create(
                         summary=record,
                         episode_id=record.episode_id,
@@ -152,9 +155,9 @@ class Command(BaseCommand):
                         ticker=ticker,
                         base=base,
                         annual_vol=annual_vol,
-                        macro_score=result["macro_score"],
+                        macro_score=macro_score,
                         risk_score=result["risk_score"],
-                        rationale=result["rationale"],
+                        rationale=rationale,
                     )
                     created += 1
                 except Exception as e:

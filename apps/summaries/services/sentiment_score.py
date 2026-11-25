@@ -134,8 +134,8 @@ def find_stock_topics_with_fallback(record) -> list[dict]:
     return results
 
 
-def build_classification_context(record, asset_name: str, ticker: str, stock_topic: dict) -> tuple[str, str]:
-    """組出餵給 Gemini 的輸入段落 + 已知立場標籤提示。"""
+def _classification_extra_topics(record, asset_name: str, ticker: str) -> tuple[Optional[dict], list[dict]]:
+    """分類時除了個股段落之外一起讀的段落：總經背景(共用) + 有點名這支股票的操作建議／風險提示。"""
     macro_topic = None
     strategy_topics = []
     for a in record.arguments or []:
@@ -148,6 +148,29 @@ def build_classification_context(record, asset_name: str, ticker: str, stock_top
             blob = json.dumps(a, ensure_ascii=False)
             if asset_name in blob or ticker in blob:
                 strategy_topics.append(a)
+    return macro_topic, strategy_topics
+
+
+def classification_context_sections(record, asset_name: str, ticker: str, stock_topic: dict) -> list[dict]:
+    """
+    分類 AI 評分時讀了哪幾個段落(跟 build_classification_context 用同一套挑法)，給計算機頁
+    「評分理由」列出段落名稱、讓使用者跳回原文看，不再把段落內容整段貼出來。
+    in_summary=False：個股段落是從 outlook_calls 一句話補出來的(單集摘要裡沒有這一段)，沒有原文段落可以跳。
+    """
+    macro_topic, strategy_topics = _classification_extra_topics(record, asset_name, ticker)
+    stock_name = stock_topic.get("topic") or f"個股：{asset_name}"
+    in_summary = any(isinstance(a, dict) and a.get("topic") == stock_name for a in record.arguments or [])
+    sections = [{"topic": stock_name, "role": "個股段落", "in_summary": in_summary}]
+    if macro_topic:
+        sections.append({"topic": macro_topic.get("topic", ""), "role": "共用總經背景", "in_summary": True})
+    for t in strategy_topics:
+        sections.append({"topic": t.get("topic", ""), "role": "有點名這檔標的", "in_summary": True})
+    return sections
+
+
+def build_classification_context(record, asset_name: str, ticker: str, stock_topic: dict) -> tuple[str, str]:
+    """組出餵給 Gemini 的輸入段落 + 已知立場標籤提示。"""
+    macro_topic, strategy_topics = _classification_extra_topics(record, asset_name, ticker)
 
     parts = [f"【個股：{asset_name}】\n{stock_topic.get('summary','')}\n{stock_topic.get('position','')}"]
     if macro_topic:
@@ -227,6 +250,34 @@ def classify_stock_sentiment(client, model: str, record, asset_name: str, ticker
         return None
 
 
+def apply_backtest_direction(record, ticker: str, result: dict) -> tuple[float, str]:
+    """
+    macro_score(立場分數)如果這一集這支股票已經有backtesting驗證句(BacktestingRecord)，
+    改用驗證句的direction為準，不用AI這次重新分類出來的macro_score——驗證句存的是
+    podcaster原話萃取出來的方向，是比較原始、權威的依據；AI獨立重新分類時可能因為
+    讀到的段落組合、當下判斷跟原始萃取有落差，兩邊各自跑一次容易兜不起來。risk_score
+    跟rationale驗證句沒有對應的東西，還是用AI這次分類的結果。
+
+    ensure_stock_sentiment_score(單筆即時補算)與 backfill_stock_sentiment(批次補建)共用這一段：
+    原本只有即時補算有套用，批次補建漏掉，造成同一集「股價模擬立場」跟「可驗證句方向」對不上
+    (例：2026-07-18 股癌 台積電，驗證句看多、立場分數卻是中立)。
+    """
+    from apps.summaries.models import BacktestingRecord
+
+    # 優先用有進回測的驗證句；這集這支股票的驗證句全部被標成 skip(沒進回測)時，也照它的方向，
+    # 只要有驗證句，立場就跟它一致，不會再出現「驗證句看多、立場中立」的情況。
+    bts = BacktestingRecord.objects.using("summariesdb").filter(summary=record, ticker=ticker).order_by("id")
+    bt = bts.exclude(result="skip").first() or bts.first()
+    macro_score = result["macro_score"]
+    rationale = result["rationale"]
+    if bt and bt.direction in ("bullish", "bearish"):
+        bt_macro = 1.0 if bt.direction == "bullish" else -1.0
+        if bt_macro != macro_score:
+            rationale = f"[依驗證句方向校正] {rationale}"
+        macro_score = bt_macro
+    return macro_score, rationale
+
+
 def ensure_stock_sentiment_score(record, ticker: str, client=None, model: Optional[str] = None):
     """
     給定一筆 SummaryRecord 跟目標 ticker，確保這支股票有 StockSentimentScore 可用：
@@ -272,26 +323,7 @@ def ensure_stock_sentiment_score(record, ticker: str, client=None, model: Option
     if not result:
         return None
 
-    # macro_score(立場分數)如果這一集這支股票已經有backtesting驗證句(BacktestingRecord)，
-    # 改用驗證句的direction為準，不用AI這次重新分類出來的macro_score——驗證句存的是
-    # podcaster原話萃取出來的方向，是比較原始、權威的依據；AI獨立重新分類時可能因為
-    # 讀到的段落組合、當下判斷跟原始萃取有落差，兩邊各自跑一次容易兜不起來。risk_score
-    # 跟rationale驗證句沒有對應的東西，還是用AI這次分類的結果。
-    from apps.summaries.models import BacktestingRecord
-
-    bt = (
-        BacktestingRecord.objects.using("summariesdb")
-        .filter(summary=record, ticker=ticker)
-        .exclude(result="skip")
-        .first()
-    )
-    macro_score = result["macro_score"]
-    rationale = result["rationale"]
-    if bt and bt.direction in ("bullish", "bearish"):
-        bt_macro = 1.0 if bt.direction == "bullish" else -1.0
-        if bt_macro != macro_score:
-            rationale = f"[依驗證句方向校正] {rationale}"
-        macro_score = bt_macro
+    macro_score, rationale = apply_backtest_direction(record, ticker, result)
 
     return StockSentimentScore.objects.using("summariesdb").create(
         summary=record,

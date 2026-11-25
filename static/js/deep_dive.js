@@ -28,6 +28,21 @@ function _ddBindAudioIconSync() {
   _ddAudioSyncBound = true;
 }
 
+// 跳到單集裡某個位置：上面的觀點驗證、心智圖等區塊是各自非同步載入的，載完會把下面的內容往下推，
+// 只捲一次的話目標常常被推出畫面(從計算機點段落名稱進來時最明顯)。所以捲過去之後，在接下來約 2.5 秒內
+// 再對準幾次；使用者自己滾輪／觸控／按鍵就停手，不跟使用者搶捲動。
+function _ddScrollToStable(el, block = 'center') {
+  if (!el) return;
+  let stopped = false;
+  const stop = () => { stopped = true; };
+  const evs = ['wheel', 'touchstart', 'keydown', 'mousedown'];
+  evs.forEach(ev => window.addEventListener(ev, stop, { passive: true, once: true }));
+  const go = () => { if (!stopped && document.body.contains(el)) el.scrollIntoView({ behavior: 'auto', block }); };
+  requestAnimationFrame(go);
+  [300, 800, 1500, 2500].forEach(t => setTimeout(go, t));
+  setTimeout(() => evs.forEach(ev => window.removeEventListener(ev, stop)), 2600);
+}
+
 function openDeepDive(summaryId, autoPlay = false, targetBacktestId = null, targetArgTerms = null) {
   // 訪客（未登入）可以自由瀏覽首頁/排行榜/搜尋，但打開單集深度摘要要先登入——
   // openDeepDive() 是全站唯一「開啟單集」的入口，所有進入點（推薦卡片、繼續閱讀、
@@ -254,6 +269,11 @@ function renderDdModeContent(mode) {
       const blob = haystacks.join(' ').toLowerCase();
       return termsLower.some(t => blob.includes(t));
     });
+    if (idx === -1) {
+      // 這個 mode 裡找不到那一段(例如段落名稱不同)：不精確也沒關係，至少帶到「關鍵論點」區塊開頭
+      _ddTargetArgTerms = null;
+      _ddScrollToStable(document.getElementById('dd-arguments'), 'start');
+    }
     if (idx !== -1) {
       _ddTargetArgTerms = null; // 找到了，只跳這一次，避免使用者手動切 mode 時又跳一次
       const targetCard = document.querySelector(`#dd-arguments [data-arg-index="${idx}"]`);
@@ -263,7 +283,7 @@ function renderDdModeContent(mode) {
         // 命中內容如果被摺進「Read More」裡，直接展開，不要讓使用者還要自己點開才看得到
         if (full && full.classList.contains('hidden') && moreBtn) toggleThesis(moreBtn);
         requestAnimationFrame(() => {
-          targetCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          _ddScrollToStable(targetCard);
           targetCard.classList.add('ring-2', 'ring-[#d97f12]', 'ring-offset-2');
           setTimeout(() => targetCard.classList.remove('ring-2', 'ring-[#d97f12]', 'ring-offset-2'), 2000);
         });
@@ -417,7 +437,7 @@ async function loadDeepDive(summaryId) {
         if (_ddTargetBacktestId != null) {
           const targetCard = document.querySelector(`#dd-viewpoints [data-backtest-id="${_ddTargetBacktestId}"]`);
           if (targetCard) {
-            targetCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            _ddScrollToStable(targetCard);
             targetCard.classList.add('ring-2', 'ring-[#d97f12]', 'ring-offset-2');
             setTimeout(() => targetCard.classList.remove('ring-2', 'ring-[#d97f12]', 'ring-offset-2'), 2000);
           }

@@ -55,11 +55,30 @@ function syncFromInput(key) {
 // 換標的(換一集、換股票、切換輸入方式)：上一個結果整個清掉，避免看到別檔股票的圖；
 // 同一個標的只改了參數：結果變淡、提示重新模擬，「儲存這次模擬」先隱藏，免得存到跟畫面對不上的條件。
 // 投入金額只影響下方的金額換算、不用重跑模擬，不算改條件。
+// 選集清單一筆＝一句驗證句的方向(同一集同一檔看多、看空會拆成兩筆，共用同一個 score_id)，
+// 所以選單的值用 key(分數id:驗證句id)；深連結即時補算、試算紀錄補回來的選項沒有 key，就用 score_id。
+function _epKey(e) { return e.key || String(e.score_id); }
+function _currentEpisode() {
+  const v = document.getElementById('in-episode').value;
+  return (episodes || []).find(e => _epKey(e) === String(v)) || null;
+}
+// 只知道 score_id 時(試算紀錄、深連結)找對應的選項；同一個 score_id 有兩筆時，優先挑立場相同或同一句驗證句的
+function _episodeKeyForScore(scoreId, { macro = null, backtestId = null } = {}) {
+  const cands = (episodes || []).filter(e => String(e.score_id) === String(scoreId));
+  const hit = (backtestId != null && cands.find(e => String(e.backtest_id) === String(backtestId)))
+    || (macro != null && cands.find(e => Number(e.macro_score) === Number(macro))) || cands[0];
+  return hit ? _epKey(hit) : null;
+}
+function _episodeOptionHtml(e) {
+  const stance = e.stance_label ? `　（${e.stance_label}）` : '';
+  return `<option value="${_escHtml(_epKey(e))}">${e.published_at || '未知日期'}　${_escHtml(e.asset_name)}(${_escHtml(e.ticker)})　${_escHtml(e.podcaster || '')}${stance}</option>`;
+}
+
 function _simCurrentConditions() {
   return {
     mode,
     inputText: mode === 'manual' ? document.getElementById('in-ticker').value.trim() : null,
-    score_id: mode === 'episode' ? document.getElementById('in-episode').value : null,
+    score_id: mode === 'episode' ? document.getElementById('in-episode').value : null,   // 選項 key，換一筆就算換標的
     months: Number(document.getElementById('in-months').value),
     risk: Number(document.getElementById('in-risk').value),
     macro: Number(document.getElementById('in-macro').value),
@@ -89,7 +108,7 @@ function _simCheckStale() {
   const c = _simCurrentConditions();
   const p = lastSimParams;
   const stale = c.mode !== p.mode || c.months !== p.months || c.risk !== p.risk || c.macro !== p.macro || c.nsim !== p.nsim
-    || (c.mode === 'manual' ? c.inputText !== p.inputText : String(c.score_id) !== String(p.score_id));
+    || (c.mode === 'manual' ? c.inputText !== p.inputText : String(c.score_id) !== String(p.episode_key || p.score_id));
   document.getElementById('result-panel').classList.toggle('opacity-40', stale);
   { const ms = document.getElementById('money-stats'); if (ms) ms.classList.toggle('opacity-40', stale); }
   { const sb = document.getElementById('btn-save-sim'); if (sb) sb.classList.toggle('hidden', stale); }
@@ -253,9 +272,7 @@ async function loadEpisodes() {
     const data = await resp.json();
     episodes = data.episodes || [];
     const sel = document.getElementById('in-episode');
-    sel.innerHTML = episodes.map(e =>
-      `<option value="${e.score_id}">${e.published_at || '未知日期'}　${e.asset_name}(${e.ticker})　${e.podcaster || ''}</option>`
-    ).join('');
+    sel.innerHTML = episodes.map(_episodeOptionHtml).join('');
     if (typeof _thesisFilterEpisodes === 'function' && typeof _calcModule !== 'undefined')
       _thesisFilterEpisodes(_calcModule === 'thesis');
     if (_pendingCalcTarget) {
@@ -282,7 +299,10 @@ async function _applyPendingCalcTarget() {
   if (!_pendingCalcTarget || !episodes.length) return;
   const target = _pendingCalcTarget;
   _pendingCalcTarget = null;
-  let match = episodes.find(e => target.episodeId != null && e.episode_id === target.episodeId && e.ticker === target.ticker)
+  // 同一集同一檔可能拆成看多、看空兩筆：有指定驗證句(從可驗證句卡片點進來)就挑那一句
+  let match = (target.backtestId != null && episodes.find(e => target.episodeId != null && e.episode_id === target.episodeId
+      && e.ticker === target.ticker && String(e.backtest_id) === String(target.backtestId)))
+    || episodes.find(e => target.episodeId != null && e.episode_id === target.episodeId && e.ticker === target.ticker)
     || episodes.find(e => e.ticker === target.ticker);
   if (!match && target.episodeId != null) {
     try {
@@ -306,7 +326,7 @@ async function _applyPendingCalcTarget() {
     }
   }
   if (match) {
-    document.getElementById('in-episode').value = match.score_id;
+    document.getElementById('in-episode').value = _epKey(match);
     if (typeof setThesisPreferredBacktest === 'function') {
       setThesisPreferredBacktest(match.score_id, target.backtestId);
     }
@@ -333,6 +353,9 @@ function renderEpisodeInfo(ep) {
   const icon = n => `<span class="material-symbols-outlined text-sm leading-none">${n}</span>`;
   const chip = (inner, cls, title) =>
     `<span class="inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-bold ${cls}"${title ? ` title="${_escHtml(title)}"` : ''}>${inner}</span>`;
+  // 風險、立場只有股價模擬會用到：包一層 calc-sim-only(回測期間兩個模擬器都用得到，不包)，
+  // 切到論點情境試算時由 #panel-episode.calc-thesis 收起來
+  const simOnly = html => html ? `<span class="calc-sim-only contents">${html}</span>` : '';
   const neutral = 'text-on-surface-variant bg-surface-container';
   // 風險顏色刻意避開紅／綠(那是立場的台股慣例：看多紅、看空綠)，用 藍→金黃→橘 表示 低→中→高，
   // 免得「風險高(紅)」跟「看多(紅)」同時出現時讓人搞混。
@@ -343,17 +366,17 @@ function renderEpisodeInfo(ep) {
       <span class="font-['Epilogue'] text-lg font-bold text-tertiary-container">${_escHtml(ep.asset_name)}</span>
       <span class="text-sm font-bold tracking-widest text-outline bg-surface-container rounded px-2 py-0.5">${_escHtml(ep.ticker)}</span>
       ${chip(icon('event') + _escHtml(ep.published_at) + ' 發布', neutral, '這一集節目的發布日期，也是模擬的基準日')}
-      ${chip('風險 <span class="tracking-widest">' + dots + '</span> ' + _riskWordLabel(ep.risk_score), riskCls, 'Podcast 對這檔股票的風險評估')}
-      ${chip(icon(stance.icon) + '立場 ' + stance.text, stance.cls, 'Podcast 對這檔股票的看法')}
-      ${ep.default_months ? chip(icon('history') + '回測約 ' + _escHtml(ep.default_months) + ' 個月', neutral, '該集 backtesting 的時間範圍，也是投資期間的預設值') : ''}
+      ${simOnly(chip('風險 <span class="tracking-widest">' + dots + '</span> ' + _riskWordLabel(ep.risk_score), riskCls, 'Podcast 對這檔股票的風險評估'))}
+      ${simOnly(chip(icon(stance.icon) + '立場 ' + stance.text, stance.cls, 'Podcast 對這檔股票的看法'))}
+      ${ep.default_months ? chip(icon('history') + '回測約 ' + _escHtml(ep.default_months) + ' 個月', neutral, '這一句論點的回測期間，股價模擬的投資期間、論點情境試算的試算期間都以它為預設值') : ''}
     </div>`;
 }
 
 function onEpisodeChange() {
   _simResetResult();   // 換一集：上一集的模擬圖不能留著
-  const scoreId = document.getElementById('in-episode').value;
-  const ep = episodes.find(e => String(e.score_id) === String(scoreId));
+  const ep = _currentEpisode();
   if (!ep) return;
+  const scoreId = ep.score_id;
   renderEpisodeInfo(ep);
 
   const sourceLink = document.getElementById('episode-source-link');
@@ -384,37 +407,84 @@ function onEpisodeChange() {
     document.getElementById('lbl-months').textContent = m;
   }
 
-  document.getElementById('episode-rationale').textContent = ep.rationale || '(無)';
-  loadSourceText(scoreId);
+  renderScoreBasis(ep);
+  loadSourceText(scoreId, ep.summary_id);
+  // 論點情境試算打開同一句驗證句的論點(看多那筆就開看多那句)
+  if (ep.backtest_id != null && typeof setThesisPreferredBacktest === 'function') setThesisPreferredBacktest(scoreId, ep.backtest_id);
   if (typeof onCalcEpisodeChanged === 'function') onCalcEpisodeChanged(scoreId);
 }
 
-// 「AI實際讀到的完整輸入」原本是一整坨純文字，改成：每個【標題】一張卡片，
-// 「看多：」「看空：」這類開頭做成小標籤，段落放寬行距、限制一行的長度。
-function renderSourceText(el, text) {
-  const raw = String(text || '').trim();
-  if (!raw) { el.textContent = '(這集沒有找到對應的原始段落)'; return; }
-  const chipCls = {
-    '看多': 'text-[#ba1a1a] bg-[#ba1a1a]/10',
-    '看空': 'text-[#1e8e3e] bg-[#1e8e3e]/10',
-  };
-  const para = line => {
-    const k = line.match(/^(看多|看空|中立|操作建議|風險提示|建議|風險)[：:]\s*([\s\S]*)$/);
-    if (!k) return `<p class="leading-7">${_escHtml(line)}</p>`;
-    const cls = chipCls[k[1]] || 'text-on-surface-variant bg-surface-container-lowest';
-    return `<p class="leading-7"><span class="inline-block mr-2 px-2 py-0.5 rounded-full text-xs font-bold ${cls}">${_escHtml(k[1])}</span>${_escHtml(k[2])}</p>`;
-  };
-  el.innerHTML = raw.split(/(?=【[^】\n]+】)/).map(s => s.trim()).filter(Boolean).map(part => {
-    const m = part.match(/^【([^】\n]+)】\s*([\s\S]*)$/);
-    const title = m ? m[1] : '';
-    const lines = (m ? m[2] : part).split(/\n+/).map(l => l.trim()).filter(Boolean);
-    return `<div class="bg-surface-container rounded-lg px-4 py-3">` +
-      (title ? `<div class="text-sm font-bold text-tertiary-container mb-1">${_escHtml(title)}</div>` : '') +
-      `<div class="space-y-1">${lines.map(para).join('')}</div></div>`;
-  }).join('');
+// 「股價模擬用的分數依據」：立場以節目的可驗證句為準，直接顯示那一句(可以跳回原文的觀點驗證卡片)；
+// 風險分數是 AI 讀段落判斷的，才顯示 AI 的理由。AI 理由是當初打分數時一起寫的，立場被改成跟驗證句一致後
+// 它可能還在講「不確定」，所以只拿來說明風險；開頭的「[依驗證句方向校正]」是內部標記，不顯示。
+function renderScoreBasis(ep) {
+  const m = Number(ep.macro_score);
+  const stanceWord = m > 0 ? '看多' : (m < 0 ? '看空' : '中立');
+  const head = document.getElementById('episode-stance-head');
+  const quote = document.getElementById('episode-stance-quote');
+  const link = document.getElementById('episode-stance-link');
+  const rationale = String(ep.rationale || '').replace(/^\[依驗證句方向校正\]\s*/, '');
+  if (ep.stance_quote) {
+    head.textContent = `立場：${stanceWord}（依據節目的可驗證句）`;
+    quote.textContent = `「${ep.stance_quote}」`;
+    quote.classList.remove('hidden');
+  } else {
+    head.textContent = `立場：${stanceWord}（AI 判斷，這一集沒有可驗證句）`;
+    quote.textContent = rationale ? `AI 理由：${rationale}` : '';
+    quote.classList.toggle('hidden', !rationale);
+  }
+  if (ep.stance_quote && ep.summary_id && ep.backtest_id != null) {
+    link.href = '/?open_summary=' + ep.summary_id;
+    link.onclick = (e) => {
+      if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      e.preventDefault();
+      if (window.IS_AUTHENTICATED !== false) {
+        _backOverride = 'calculator'; _backOverrideOwner = 'deep-dive'; _backOverrideArmed = false;
+      }
+      openDeepDive(ep.summary_id, false, ep.backtest_id);   // 跳到觀點驗證裡的這一句
+    };
+    link.classList.remove('hidden');
+  } else {
+    link.classList.add('hidden');
+  }
+  document.getElementById('episode-risk-head').textContent = `風險：${_riskWordLabel(ep.risk_score)}（AI 讀下面的段落判斷）`;
+  document.getElementById('episode-rationale').textContent = rationale || '(無)';
 }
 
-async function loadSourceText(scoreId) {
+// 「AI 評分讀了這些段落」：只列段落名稱，點了用 openDeepDive 的 targetArgTerms 跳到單集原文的那一段
+// (原本把段落內容整段貼出來，但副標題寫死「操作建議／風險提示」，沒點名這檔標的的集數其實沒有這兩段，
+// 看起來像漏顯示；內容本來就跟原文一樣，改成告訴使用者讀了哪幾段、要看再跳過去)。
+let _episodeSourceSummaryId = null;
+function renderSourceSections(el, sections, summaryId) {
+  _episodeSourceSummaryId = summaryId || null;
+  if (!sections || !sections.length) { el.textContent = '(這集沒有找到對應的原始段落)'; return; }
+  el.innerHTML = sections.map((sec, i) => {
+    const inner = `<span class="font-bold text-tertiary-container">${_escHtml(sec.topic)}</span>` +
+      `<span class="text-xs text-outline">${_escHtml(sec.role)}</span>`;
+    if (!sec.in_summary || !summaryId) {
+      return `<span class="inline-flex items-center gap-2 rounded-full bg-surface-container px-4 py-2" title="這段是從節目觀點補出來的，單集摘要裡沒有獨立段落">${inner}</span>`;
+    }
+    return `<a href="/?open_summary=${encodeURIComponent(summaryId)}" data-sec-index="${i}" onclick="return _openSourceSection(event, this)"
+      class="inline-flex items-center gap-2 rounded-full bg-surface-container px-4 py-2 hover:bg-secondary/10 transition-colors">${inner}
+      <span class="material-symbols-outlined text-base leading-none text-secondary">arrow_outward</span></a>`;
+  }).join('');
+  el._sections = sections;
+}
+
+function _openSourceSection(e, a) {
+  if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return true;   // 新分頁開：照網址走
+  e.preventDefault();
+  const el = document.getElementById('episode-source-text');
+  const sec = (el._sections || [])[Number(a.dataset.secIndex)];
+  if (!sec || !_episodeSourceSummaryId) return false;
+  if (window.IS_AUTHENTICATED !== false) {   // 跟「跳轉到原文」一樣：按返回回到計算機，畫面保留
+    _backOverride = 'calculator'; _backOverrideOwner = 'deep-dive'; _backOverrideArmed = false;
+  }
+  openDeepDive(_episodeSourceSummaryId, false, null, [sec.topic]);
+  return false;
+}
+
+async function loadSourceText(scoreId, summaryId) {
   const mySeq = ++sourceTextRequestSeq;
   const el = document.getElementById('episode-source-text');
   el.textContent = '載入中...';
@@ -423,7 +493,7 @@ async function loadSourceText(scoreId) {
     const data = await resp.json();
     if (mySeq !== sourceTextRequestSeq) return;
     if (!resp.ok) { el.textContent = '載入失敗: ' + data.error; return; }
-    renderSourceText(el, data.full_context || data.topic_summary || '');
+    renderSourceSections(el, data.sections || [], summaryId);
   } catch (e) {
     if (mySeq !== sourceTextRequestSeq) return;
     el.textContent = '載入失敗: ' + e;
@@ -450,9 +520,9 @@ async function runSimulation() {
 
   const params = new URLSearchParams({ months, risk_score: risk, macro_score: macro, n_simulations: nsim });
   if (mode === 'episode') {
-    const scoreId = document.getElementById('in-episode').value;
-    if (!scoreId) { statusEl.textContent = '請先選一集'; return; }
-    params.set('score_id', scoreId);
+    const ep = _currentEpisode();
+    if (!ep) { statusEl.textContent = '請先選一集'; return; }
+    params.set('score_id', ep.score_id);
   } else {
     const ticker = await resolveTickerInput();
     if (!ticker) { statusEl.textContent = '請輸入股票代號或名稱，或從搜尋選單選一檔'; return; }
@@ -471,6 +541,7 @@ async function runSimulation() {
     // 這次模擬實際用的條件(儲存試算紀錄用，見 saved_sims.js)：存檔時用這份，不用畫面上之後又改過的值
     lastSimParams = {
       mode, ticker: data.ticker || null, score_id: mode === 'episode' ? params.get('score_id') : null,
+      episode_key: mode === 'episode' ? document.getElementById('in-episode').value : null,
       // 解析後輸入框可能從「台積電」變成「2330.TW」，記解析後的文字，之後輸入框又被改才算換股票
       inputText: mode === 'manual' ? document.getElementById('in-ticker').value.trim() : null,
       months: Number(months), risk: Number(risk), macro: Number(macro), nsim: Number(nsim),
