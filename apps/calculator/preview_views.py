@@ -215,7 +215,7 @@ class EpisodeListPreviewAPIView(APIView):
         # 屬於回測驗證的範圍，不是「接下來要看的標的」，所以不放進選單。
         # 快取 key 帶日期，避免跨日之後還沿用昨天的清單。
         today = date.today()
-        cache_key = f"episode-list-preview:v6:{today.isoformat()}"   # v6：has_thesis 改看 v6 情境、加 has_calc
+        cache_key = f"episode-list-preview:v8:{today.isoformat()}"   # v7：一句驗證句方向一筆(看多／看空分開列)
         cached = cache.get(cache_key)
         if cached is not None:
             return Response(cached)
@@ -225,14 +225,22 @@ class EpisodeListPreviewAPIView(APIView):
             .filter(start_time__isnull=False, end_time__isnull=False, end_time__gte=today)
             .exclude(ticker="")
             .order_by("-summary__published_at", "id")[:1500]
-            .values("summary_id", "ticker", "start_time", "end_time")
+            .values("id", "summary_id", "ticker", "start_time", "end_time", "direction", "thesis", "evidence_quote")
         )
-        months_by_key = {}
+        # 2026-11-26：同一集同一檔可能同時有看多、看空的驗證句。原本合成一筆(立場取第一句、回測月數取
+        # 最後一句，兩邊對不上)，改成「每個方向一筆」：各自帶那一句的立場與回測期間，論點情境試算也打開同一句。
+        # 同方向有好幾句時取 id 最小那句(跟 sentiment_score.apply_backtest_direction 取句的規則一致)。
+        sentences_by_key = {}   # (summary_id, ticker) -> {direction: {"backtest_id", "months"}}
         for bt in bt_rows:
             days = (bt["end_time"] - bt["start_time"]).days
-            if days > 0:
-                # 約略換算成月數，不用精確到日；至少算1個月，避免0個月的模擬。
-                months_by_key[(bt["summary_id"], bt["ticker"])] = max(1, round(days / 30))
+            if days <= 0:
+                continue
+            by_dir = sentences_by_key.setdefault((bt["summary_id"], bt["ticker"]), {})
+            # 約略換算成月數，不用精確到日；至少算1個月，避免0個月的模擬。
+            by_dir.setdefault(bt["direction"] or "", {"backtest_id": bt["id"], "months": max(1, round(days / 30)),
+                                                       # 立場的依據就是這一句：計算機「評分理由」直接顯示它(節目原話優先)
+                                                       "quote": (bt["evidence_quote"] or bt["thesis"] or "").strip()})
+        months_by_key = sentences_by_key   # 下面只拿來判斷「這集這檔有沒有驗證句」
 
         # 2) 對應的分數紀錄(集模式要用)。
         #    注意：不要用 select_related("summary")——SummaryRecord 帶著整份摘要文字，
@@ -266,6 +274,19 @@ class EpisodeListPreviewAPIView(APIView):
                 dedup_by_key[key] = r
         rows = sorted(dedup_by_key.values(), key=lambda r: r["_sm"]["published_at"], reverse=True)[:200]
 
+        # 一句驗證句方向一筆：立場直接用那一句的方向(看多 +1／看空 −1)，風險分數兩筆共用(驗證句沒有風險資訊)
+        stance_word = {"bullish": "看多", "bearish": "看空"}
+        entries = []
+        for r in rows:
+            by_dir = sentences_by_key[(r["summary_id"], r["ticker"])]
+            both = len(by_dir) > 1
+            for direction, sent in sorted(by_dir.items(), key=lambda kv: kv[1]["backtest_id"]):
+                macro = {"bullish": 1.0, "bearish": -1.0}.get(direction, r["macro_score"])
+                entries.append({**r, "_sent": sent, "_macro": macro,
+                                "_stance_label": stance_word.get(direction, "") if both else ""})
+            if len(entries) >= 200:
+                break
+
         # 計算機「論點情境試算」分頁只列有拆好情境的集數(ThesisScenarioExtraction，見 thesis_views.py)
         from apps.summaries.models import ThesisScenarioExtraction
         from apps.summaries.services.thesis_scenario import PROMPT_VERSION
@@ -282,6 +303,12 @@ class EpisodeListPreviewAPIView(APIView):
         payload = {
             "episodes": [
                 {
+                    # 選單選項的值：同一筆分數(同一集同一檔)可能拆成看多、看空兩筆，所以用 分數id:驗證句id
+                    "key": f'{r["id"]}:{r["_sent"]["backtest_id"]}',
+                    "backtest_id": r["_sent"]["backtest_id"],
+                    # 同一集同一檔看多、看空都有時，選單上標出是哪一句；只有一個方向就不標
+                    "stance_label": r["_stance_label"],
+                    "stance_quote": r["_sent"]["quote"],
                     "score_id": r["id"],
                     "summary_id": r["summary_id"],  # 給前端「跳轉到原文」連結用，見bootstrap_path.html
                     "episode_id": r["episode_id"],  # 給「從deep dive頁面試算按鈕跳轉過來」配對用
@@ -290,18 +317,18 @@ class EpisodeListPreviewAPIView(APIView):
                     "published_at": r["_sm"]["published_at"].date().isoformat(),
                     "podcaster": r["_sm"]["podcaster"],
                     "risk_score": r["risk_score"],
-                    "macro_score": r["macro_score"],
+                    "macro_score": r["_macro"],
                     # AI對這集這支股票判斷risk/macro分數時，順便產生的一句話理由(≤200字)，
                     # 跟這筆score同一張表存的欄位，撈這批的成本很低，不用另外呼叫。
                     "rationale": r["rationale"],
                     # 來自這集對這支股票的驗證句時間範圍(約略月數)。改版後選單只列有驗證句的，
                     # 所以這裡一定有值；前端對None仍保留原本手動設定的月數(深連結補進來的集可能沒有)。
-                    "default_months": months_by_key.get((r["summary_id"], r["ticker"])),
+                    "default_months": r["_sent"]["months"],
                     "has_thesis": (r["summary_id"], r["ticker"]) in with_thesis,
                     # 至少一句論點有可以勾選試算的情境(否則論點情境試算只能看「延續目前成長」)
                     "has_calc": (r["summary_id"], r["ticker"]) in with_calc,
                 }
-                for r in rows
+                for r in entries
             ]
         }
         cache.set(cache_key, payload, 300)   # 清單幾乎不變，快取5分鐘
@@ -448,7 +475,7 @@ class EpisodeSourceTextPreviewAPIView(APIView):
 
         from apps.summaries.models import StockSentimentScore
         from apps.summaries.services.sentiment_score import (
-            find_stock_topics_with_fallback, build_classification_context,
+            find_stock_topics_with_fallback, build_classification_context, classification_context_sections,
         )
 
         try:
@@ -465,8 +492,12 @@ class EpisodeSourceTextPreviewAPIView(APIView):
         topic_summary = matched["topic"].get("summary", "") if matched else ""
 
         full_context = ""
+        sections = []
         if matched:
             full_context, _stance_hint = build_classification_context(
+                score.summary, score.asset_name, score.ticker, matched["topic"],
+            )
+            sections = classification_context_sections(
                 score.summary, score.asset_name, score.ticker, matched["topic"],
             )
 
@@ -474,6 +505,9 @@ class EpisodeSourceTextPreviewAPIView(APIView):
             "score_id": score.id,
             "rationale": score.rationale,
             "topic_summary": topic_summary,
+            # 評分時讀了哪幾個段落(只給段落名稱)：計算機頁列出來、點了跳回單集原文對應段落，
+            # 不再把內容整段貼出來(原文就在單集頁，重複貼一次反而容易跟原文對不上)。
+            "sections": sections,
             # AI實際看到的完整輸入(個股段落+總經背景+風險提示)，判斷分類合不合理要看這個，
             # 不是只看topic_summary。matched為None時(fallback內容組不出完整context)是空字串。
             "full_context": full_context,
