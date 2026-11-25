@@ -51,15 +51,23 @@
 
   <!-- ── 標的詳情 ─────────────────────────────────────────────── -->
   <div id="assets-detail-view" class="hidden">
-    <div class="flex items-start justify-between gap-3 mb-1">
-      <div class="flex items-baseline gap-3">
+    <div class="flex flex-wrap items-start justify-between gap-x-3 gap-y-2 mb-1">
+      <div class="flex items-baseline gap-3 min-w-0">
         <h3 id="asset-detail-name" class="font-['Epilogue'] text-3xl font-bold text-tertiary-container"></h3>
         <span id="asset-detail-symbol" class="text-outline font-semibold"></span>
       </div>
-      <button type="button" id="asset-detail-star-btn"
-        class="asset-star-btn inline-flex items-center justify-center w-10 h-10 flex-shrink-0 rounded-full hover:bg-surface-container transition-colors text-outline/40">
-        <span class="material-symbols-outlined text-2xl" style="font-variation-settings:'FILL' 0">star</span>
-      </button>
+      <!-- 右上角：探索相關標的（帶著目前這支標的跳到「探索投資機會」頁）＋收藏星號。
+           名稱很長、一行放不下時（手機）整組換到名稱下一行，靠右對齊（ml-auto），不要把名稱擠成一個字寬 -->
+      <div class="flex-shrink-0 flex items-center gap-2 ml-auto">
+        <button type="button" onclick="openRelatedAssetsExplore()"
+          class="inline-flex items-center gap-1.5 h-10 px-4 rounded-full bg-surface-container-high text-secondary hover:bg-surface-container-highest font-label text-xs font-bold transition-all whitespace-nowrap">
+          <span class="material-symbols-outlined text-base">hub</span>探索相關標的
+        </button>
+        <button type="button" id="asset-detail-star-btn"
+          class="asset-star-btn inline-flex items-center justify-center w-10 h-10 flex-shrink-0 rounded-full hover:bg-surface-container transition-colors text-outline/40">
+          <span class="material-symbols-outlined text-2xl" style="font-variation-settings:'FILL' 0">star</span>
+        </button>
+      </div>
     </div>
 
     <!-- 基本資料 -->
