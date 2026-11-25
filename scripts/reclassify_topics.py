@@ -35,7 +35,7 @@ import django
 django.setup()
 
 from apps.summaries.models import SummaryRecord
-from apps.summaries.services.postprocess import _is_recognized_topic
+from apps.summaries.services.postprocess import _is_recognized_topic, merge_and_sort_arguments
 from apps.summaries.services.gemini import make_client, gemini_generate_with_retry, sanitize_json_text
 
 MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite")
@@ -195,7 +195,9 @@ def apply_updates(bad_topics: list, classification_map: dict):
                 changed = True
                 updated_topics += 1
         if changed:
-            rec.arguments = args
+            # 改名後可能跟既有段落同名(例如「金融市場」→「總體經濟環境」)，要合併並照固定順序排好，
+            # 否則會出現好幾個同名段落、而且排在風險提示後面
+            rec.arguments = merge_and_sort_arguments(args)
             rec.save(using="summariesdb", update_fields=["arguments"])
             updated_records += 1
 

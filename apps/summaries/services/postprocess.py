@@ -65,6 +65,134 @@ def _normalize_evidence_timestamps(values):
     return out
 
 
+def merge_and_sort_arguments(args: list, log_hint: str = "") -> list:
+    """
+    topic 正規化 → 合併相同 topic → 固定排序(總體經濟環境 → 產業 → 個股 → ETF → 操作策略與建議 → 風險提示)。
+    normalize_schema 生成摘要時呼叫；事後改 topic 名稱的腳本(scripts/reclassify_topics.py)改完也要呼叫，
+    否則改名後會出現好幾個「總體經濟環境」、順序也亂掉(2026-11-26 發現 2,532 筆是這樣)。
+    """
+    # ── Topic 正規化：把 LLM 可能產生的變體統一成標準格式 ──────────────────
+    def _normalize_topic(t: str) -> str:
+        t = t.strip()
+        # 固定類型：前綴或包含關鍵字就收攏
+        if t.startswith("總體經濟環境"):
+            return "總體經濟環境"
+        if "操作策略" in t:
+            return "操作策略與建議"
+        if t.startswith("風險提示"):
+            return "風險提示"
+        # 個股型：「個股」後面接任意字元再接冒號（全形/半形皆可）
+        m = re.match(r"^個股.*?[：:](.+)$", t)
+        if m:
+            return f"個股：{m.group(1).strip()}"
+        # 產業型：「產業」後面接任意字元再接冒號
+        m = re.match(r"^產業.*?[：:](.+)$", t)
+        if m:
+            return f"產業：{m.group(1).strip()}"
+        return t
+
+    for a in args:
+        if isinstance(a, dict):
+            topic = _normalize_topic((a.get("topic") or "").strip())
+            a["topic"] = topic
+            if topic and not _is_recognized_topic(topic):
+                logger.warning(
+                    "postprocess: 不符合命名格式的 topic「%s」（summary: %s），"
+                    "prompt 規則可能沒被遵守，需要人工檢查",
+                    topic,
+                    log_hint,
+                )
+
+    # 合併相同 topic 的 arguments
+    merged_map: dict = {}
+    merged_order: list = []
+    for a in args:
+        if not isinstance(a, dict):
+            continue
+        topic = (a.get("topic") or "").strip()
+        if topic not in merged_map:
+            merged_map[topic] = {
+                "topic": topic,
+                "position": (a.get("position") or "").strip(),
+                "summary": (a.get("summary") or "").strip(),
+                "key_data": list(a.get("key_data") or []),
+                "related_concepts": list(a.get("related_concepts") or []),
+                "evidence_timestamps": list(a.get("evidence_timestamps") or []),
+            }
+            merged_order.append(topic)
+        else:
+            base = merged_map[topic]
+            # position：保留較長的那個
+            new_pos = (a.get("position") or "").strip()
+            if len(new_pos) > len(base["position"]):
+                base["position"] = new_pos
+            # summary：兩段合併，以換行分隔
+            new_sum = (a.get("summary") or "").strip()
+            if new_sum and new_sum not in base["summary"]:
+                base["summary"] = base["summary"] + "\n" + new_sum if base["summary"] else new_sum
+            # key_data：直接 extend（值層級去重靠 label+value）
+            existing_kd_keys = {
+                (kd.get("label", ""), kd.get("value", ""))
+                for kd in base["key_data"]
+            }
+            for kd in (a.get("key_data") or []):
+                key = (kd.get("label", ""), kd.get("value", ""))
+                if key not in existing_kd_keys:
+                    base["key_data"].append(kd)
+                    existing_kd_keys.add(key)
+            # related_concepts：合併去重
+            existing_rc = set(base["related_concepts"])
+            for rc in (a.get("related_concepts") or []):
+                if rc not in existing_rc:
+                    base["related_concepts"].append(rc)
+                    existing_rc.add(rc)
+            # evidence_timestamps：合併去重，合併後上限 10 筆
+            existing_ts = set(base["evidence_timestamps"])
+            for ts in (a.get("evidence_timestamps") or []):
+                if ts not in existing_ts:
+                    base["evidence_timestamps"].append(ts)
+                    existing_ts.add(ts)
+
+    # 每個 argument 的 evidence_timestamps 上限 10 筆（依時間序保留最早的）
+    _MAX_TS = 10
+    for base in merged_map.values():
+        ts_list = base.get("evidence_timestamps") or []
+        if len(ts_list) > _MAX_TS:
+            # 依 m:ss 數值排序後取前 _MAX_TS
+            def _ts_sec(t: str) -> int:
+                try:
+                    parts = t.strip().split(":")
+                    return int(parts[0]) * 60 + int(parts[1])
+                except Exception:
+                    return 0
+            ts_list_sorted = sorted(ts_list, key=_ts_sec)
+            # 保留前、中、後的分布：均勻抽樣 _MAX_TS 筆
+            step = len(ts_list_sorted) / _MAX_TS
+            sampled = [ts_list_sorted[int(i * step)] for i in range(_MAX_TS)]
+            base["evidence_timestamps"] = sampled
+
+    merged_args = [merged_map[t] for t in merged_order]
+
+    # 固定排序：總體經濟環境 → 產業：* → 個股：* → ETF：* → 操作策略與建議 → 風險提示 → 其他
+    def _arg_sort_key(a: dict) -> tuple:
+        topic = (a.get("topic") or "").strip()
+        if topic == "總體經濟環境":
+            return (0, topic)
+        if topic.startswith("產業：") or topic.startswith("產業:"):
+            return (1, topic)
+        if topic.startswith("個股：") or topic.startswith("個股:"):
+            return (2, topic)
+        if topic.startswith("ETF：") or topic.startswith("ETF:"):
+            return (3, topic)
+        if topic == "操作策略與建議":
+            return (4, topic)
+        if topic == "風險提示":
+            return (5, topic)
+        return (6, topic)
+
+    return sorted(merged_args, key=_arg_sort_key)
+
+
 def normalize_schema(summary: dict) -> dict:
     if not isinstance(summary, dict):
         return {}
@@ -167,126 +295,9 @@ def normalize_schema(summary: dict) -> dict:
                 if _has_numeric_value(kd.get("value", ""))
             ]
 
-        # ── Topic 正規化：把 LLM 可能產生的變體統一成標準格式 ──────────────────
-        def _normalize_topic(t: str) -> str:
-            t = t.strip()
-            # 固定類型：前綴或包含關鍵字就收攏
-            if t.startswith("總體經濟環境"):
-                return "總體經濟環境"
-            if "操作策略" in t:
-                return "操作策略與建議"
-            if t.startswith("風險提示"):
-                return "風險提示"
-            # 個股型：「個股」後面接任意字元再接冒號（全形/半形皆可）
-            m = re.match(r"^個股.*?[：:](.+)$", t)
-            if m:
-                return f"個股：{m.group(1).strip()}"
-            # 產業型：「產業」後面接任意字元再接冒號
-            m = re.match(r"^產業.*?[：:](.+)$", t)
-            if m:
-                return f"產業：{m.group(1).strip()}"
-            return t
-
-        for a in args:
-            if isinstance(a, dict):
-                topic = _normalize_topic((a.get("topic") or "").strip())
-                a["topic"] = topic
-                if topic and not _is_recognized_topic(topic):
-                    logger.warning(
-                        "postprocess: 不符合命名格式的 topic「%s」（summary: %s），"
-                        "prompt 規則可能沒被遵守，需要人工檢查",
-                        topic,
-                        (summary.get("one_sentence_summary") or "")[:40],
-                    )
-
-        # 合併相同 topic 的 arguments
-        merged_map: dict = {}
-        merged_order: list = []
-        for a in args:
-            if not isinstance(a, dict):
-                continue
-            topic = (a.get("topic") or "").strip()
-            if topic not in merged_map:
-                merged_map[topic] = {
-                    "topic": topic,
-                    "position": (a.get("position") or "").strip(),
-                    "summary": (a.get("summary") or "").strip(),
-                    "key_data": list(a.get("key_data") or []),
-                    "related_concepts": list(a.get("related_concepts") or []),
-                    "evidence_timestamps": list(a.get("evidence_timestamps") or []),
-                }
-                merged_order.append(topic)
-            else:
-                base = merged_map[topic]
-                # position：保留較長的那個
-                new_pos = (a.get("position") or "").strip()
-                if len(new_pos) > len(base["position"]):
-                    base["position"] = new_pos
-                # summary：兩段合併，以換行分隔
-                new_sum = (a.get("summary") or "").strip()
-                if new_sum and new_sum not in base["summary"]:
-                    base["summary"] = base["summary"] + "\n" + new_sum if base["summary"] else new_sum
-                # key_data：直接 extend（值層級去重靠 label+value）
-                existing_kd_keys = {
-                    (kd.get("label", ""), kd.get("value", ""))
-                    for kd in base["key_data"]
-                }
-                for kd in (a.get("key_data") or []):
-                    key = (kd.get("label", ""), kd.get("value", ""))
-                    if key not in existing_kd_keys:
-                        base["key_data"].append(kd)
-                        existing_kd_keys.add(key)
-                # related_concepts：合併去重
-                existing_rc = set(base["related_concepts"])
-                for rc in (a.get("related_concepts") or []):
-                    if rc not in existing_rc:
-                        base["related_concepts"].append(rc)
-                        existing_rc.add(rc)
-                # evidence_timestamps：合併去重，合併後上限 10 筆
-                existing_ts = set(base["evidence_timestamps"])
-                for ts in (a.get("evidence_timestamps") or []):
-                    if ts not in existing_ts:
-                        base["evidence_timestamps"].append(ts)
-                        existing_ts.add(ts)
-
-        # 每個 argument 的 evidence_timestamps 上限 10 筆（依時間序保留最早的）
-        _MAX_TS = 10
-        for base in merged_map.values():
-            ts_list = base.get("evidence_timestamps") or []
-            if len(ts_list) > _MAX_TS:
-                # 依 m:ss 數值排序後取前 _MAX_TS
-                def _ts_sec(t: str) -> int:
-                    try:
-                        parts = t.strip().split(":")
-                        return int(parts[0]) * 60 + int(parts[1])
-                    except Exception:
-                        return 0
-                ts_list_sorted = sorted(ts_list, key=_ts_sec)
-                # 保留前、中、後的分布：均勻抽樣 _MAX_TS 筆
-                step = len(ts_list_sorted) / _MAX_TS
-                sampled = [ts_list_sorted[int(i * step)] for i in range(_MAX_TS)]
-                base["evidence_timestamps"] = sampled
-
-        merged_args = [merged_map[t] for t in merged_order]
-
-        # 固定排序：總體經濟環境 → 產業：* → 個股：* → ETF：* → 操作策略與建議 → 風險提示 → 其他
-        def _arg_sort_key(a: dict) -> tuple:
-            topic = (a.get("topic") or "").strip()
-            if topic == "總體經濟環境":
-                return (0, topic)
-            if topic.startswith("產業：") or topic.startswith("產業:"):
-                return (1, topic)
-            if topic.startswith("個股：") or topic.startswith("個股:"):
-                return (2, topic)
-            if topic.startswith("ETF：") or topic.startswith("ETF:"):
-                return (3, topic)
-            if topic == "操作策略與建議":
-                return (4, topic)
-            if topic == "風險提示":
-                return (5, topic)
-            return (6, topic)
-
-        summary["arguments"] = sorted(merged_args, key=_arg_sort_key)
+        summary["arguments"] = merge_and_sort_arguments(
+            args, (summary.get("one_sentence_summary") or "")[:40]
+        )
 
     oc = summary.get("outlook_calls") or []
     if isinstance(oc, dict):
