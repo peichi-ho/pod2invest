@@ -343,8 +343,8 @@
 <audio id="disc-audio"></audio>
 
 <script>
-  // 讓底部導覽列在「非 SPA 首頁」的獨立頁面（例如 basket.html）上點擊時，
-  // 不會因為 showPage()/#page-x 不存在而報錯，而是直接導回首頁。
+  // 底部導覽列的入口。如果哪天有「非 SPA 首頁」的獨立頁面沿用 base.html，
+  // 這裡不會因為 showPage()/#page-x 不存在而報錯，而是直接導回首頁。
   function navHome(page) {
     // 底部導覽列點擊算「切分頁」而不是「往下鑽」，即使當下頁面有 SPA history 也一樣——
     // 見 app.js 的 _renderPage()，這個旗標只會影響「即將顯示」的那一頁一次就被清掉。
@@ -445,7 +445,7 @@
 
 {% block body_scripts %}
 <!-- JS modules -->
-<script src="{% static 'js/app.js' %}?v=34"></script>
+<script src="{% static 'js/app.js' %}?v=35"></script>
 <script src="{% static 'js/discover.js' %}?v=64"></script>
 <script src="{% static 'js/rankings.js' %}?v=22"></script>
 <script src="{% static 'js/deep_dive.js' %}?v=30"></script>
@@ -453,10 +453,11 @@
 <script src="{% static 'js/thesis_calc.js' %}?v=26"></script>
 <script src="{% static 'js/saved_sims.js' %}?v=1"></script>
 <script src="{% static 'js/ai.js' %}?v=13"></script>
-<script src="{% static 'js/assets.js' %}?v=25"></script>
+<script src="{% static 'js/assets.js' %}?v=26"></script>
+<script src="{% static 'js/explore.js' %}?v=1"></script>
 <script src="{% static 'js/profile.js' %}?v=16"></script>
 <script>
-  {# 從 basket.html 等獨立頁面連回來時可帶 #assets 之類的 hash，指定要打開哪個分頁 #}
+  {# 外部連進來時可帶 #assets、#explore 之類的 hash，指定要打開哪個分頁 #}
   (function () {
     // 從 /preview/ 底下的獨立測試頁面(例如試算模擬器)點「跳轉到原文」連過來時，
     // 帶 ?open_summary=<summary_id>，直接打開該集的深度摘要頁，不用先手動找到那一集。
@@ -467,25 +468,13 @@
       openDeepDive(parseInt(openSummary, 10));
       return;
     }
-    // 從探索投資機會頁（basket.html，獨立頁面）按返回鍵回來時帶 ?open_asset=<代號>，
-    // 另外可帶 asset_category（tw_stock／tw_etf）、asset_name：直接重新打開那支標的的詳情頁，
-    // 回到使用者剛剛離開的個股頁。跟 #hash 一樣是一次性入口，用掉就從網址列清掉。
-    const openAsset = params.get('open_asset');
-    if (openAsset && document.getElementById('page-assets') && typeof openAssetDetail === 'function') {
-      showPage('assets');
-      _currentTab = _PAGE_TAB.assets || 'assets';
-      openAssetDetail({
-        symbol: openAsset,
-        category: params.get('asset_category') || undefined,
-        name: params.get('asset_name') || openAsset,
-      });
-      history.replaceState(null, '', location.pathname);
-      return;
-    }
     const wanted = location.hash.replace('#', '');
     const initial = wanted && document.getElementById('page-' + wanted) ? wanted : 'discover';
     showPage(initial);
     _currentTab = _PAGE_TAB[initial] || 'discover';   // 分頁記憶：這個畫面屬於哪個主分頁（app.js）
+    // 直接連進探索頁（#explore、舊的探索頁網址）時，開機預設的首頁不算「上一頁」：
+    // 清掉後它的返回鍵會回到個股資料查詢（見 app.js 的 onHeaderBack()）
+    if (initial === 'explore') _pageHistory.length = 0;
     // hash 只是「一次性」的深連結入口，用掉就從網址列清掉——SPA 裡平常切分頁本來就
     // 不會更新 hash，留著的話網址列會一直卡在第一次連進來的那個分頁，之後重新整理
     // 永遠回不去首頁，跟使用者實際在哪一頁對不上。

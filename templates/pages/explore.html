@@ -1,0 +1,125 @@
+<!-- ═══════════════════════════════════════════════ PAGE: EXPLORE ═══ -->
+{% comment %}
+  探索投資機會（相關標的）。程式在 static/js/explore.js；資料 API 仍在 apps/knowledge_graph（/api/knowledge-graph/）。
+  屬於 Assets 分頁：從個股資料查詢的切換鈕、或個股詳情的「探索相關標的」進來。
+  id 一律加 explore- 前綴，因為整個系統的頁面都在同一份文件裡。
+{% endcomment %}
+<style>
+  /* 樣式限定在這一頁，不要影響其他頁面 */
+  /* 這頁裡有 position:fixed 的詳情面板。.page 通用的淡入動畫用了 transform，動畫那 0.25 秒內面板會改以
+     本頁為定位基準，收在畫面右側外的面板就撐出橫向捲軸。這頁改成只淡入、不位移。 */
+  #page-explore { animation-name: exploreFadeIn; }
+  @keyframes exploreFadeIn { from { opacity: 0; } to { opacity: 1; } }
+  #page-explore .dot { width: 8px; height: 8px; border-radius: 9999px; }
+  #explore-detail-overlay { transition: opacity .25s ease; }
+  #explore-detail-panel { transition: transform .3s ease; }
+  #page-explore .purpose-card.active, #page-explore .tier-card.active {
+    border-color: #113236; background: #eef4f4;
+  }
+  #page-explore .purpose-card.active .card-icon, #page-explore .tier-card.active .card-icon { color: #113236; }
+</style>
+
+<div id="page-explore" class="page max-w-6xl mx-auto px-6 pt-24 pb-10">
+
+  <!-- 標題：字級、副標、右上角切換鈕的大小都跟「個股資料查詢」頁（templates/pages/assets.html）一樣，
+       兩頁來回切換時標題區不會忽大忽小 -->
+  <div class="flex items-start justify-between gap-4 mb-8">
+    <div>
+      <h1 id="explore-title" class="font-['Epilogue'] text-[40px] leading-none font-bold tracking-tight text-tertiary-container mb-2">探索投資機會</h1>
+      <p class="text-secondary font-medium">從 Podcast 討論與財務數據中，發掘值得關注的標的</p>
+    </div>
+    <div class="flex-shrink-0 flex gap-1 bg-surface-container-high rounded-full p-1">
+      <button onclick="Explore.showAssetsList()" class="px-4 py-2 rounded-full font-label text-xs font-bold transition-all text-secondary hover:bg-surface-container-highest whitespace-nowrap">查看個股資訊</button>
+      <button class="px-4 py-2 rounded-full font-label text-xs font-bold transition-all bg-tertiary-container text-white whitespace-nowrap">探索相關標的</button>
+    </div>
+  </div>
+
+  <!-- 查詢表單 -->
+  <div class="bg-surface-container-low border border-outline-variant/40 rounded-xl p-6 mb-8">
+
+    <label class="block text-base font-semibold text-on-surface mb-2" for="explore-seed-input">查詢標的</label>
+    <div class="relative mb-6">
+      <input id="explore-seed-input" type="text" placeholder="例如：台積電、輝達" autocomplete="off"
+        oninput="Explore.onSeedInput()" onkeydown="if (event.key === 'Escape') Explore.closeSeedDropdown()"
+        class="w-full bg-surface-container-lowest border border-outline-variant rounded-lg pl-4 pr-10 py-3 text-on-surface text-base outline-none focus:border-tertiary-container transition-colors">
+      <button onclick="Explore.clearSeed()" class="absolute right-3 top-1/2 -translate-y-1/2 text-outline hover:text-on-surface">
+        <span class="material-symbols-outlined text-xl">close</span>
+      </button>
+      <!-- 搜尋建議：輸入時從圖譜節點找名稱或代號符合、而且是投資標的的節點，
+           做法與「查看個股資訊」的搜尋下拉相同（輸入後稍等再查、顯示在輸入框正下方的浮動清單） -->
+      <div id="explore-seed-dropdown" class="hidden absolute left-0 right-0 top-full mt-2 bg-surface-container-lowest rounded-2xl shadow-xl z-50 border border-outline-variant/20 max-h-96 overflow-y-auto"></div>
+    </div>
+
+    <div class="flex items-center gap-1.5 mb-3">
+      <span class="text-base font-semibold text-on-surface">選擇關係類型</span>
+      <span class="material-symbols-outlined text-outline text-lg" title="決定要從哪個角度找相關標的">info</span>
+    </div>
+    <div id="explore-purpose-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-6"></div>
+
+    <div class="flex items-center gap-1.5 mb-3">
+      <span class="text-base font-semibold text-on-surface">選擇投資類型</span>
+      <span class="material-symbols-outlined text-outline text-lg" title="決定財務體質篩選的嚴格程度">info</span>
+    </div>
+    <div id="explore-tier-grid" class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6"></div>
+
+    <div class="flex flex-wrap items-center gap-4 text-sm text-on-surface-variant mb-6 pt-2 border-t border-outline-variant/30">
+      <div class="flex items-center gap-2 pt-3">
+        <span>時間窗口</span>
+        <select id="explore-window-days" class="bg-surface-container-lowest border border-outline-variant rounded-md text-sm px-2 py-1 outline-none min-w-[75px]">
+          <option value="14">14 天</option>
+          <option value="30" selected>30 天</option>
+          <option value="60">60 天</option>
+        </select>
+      </div>
+      <div class="flex items-center gap-2 pt-3">
+        <span>截止日</span>
+        <input type="date" id="explore-end-date" class="bg-surface-container-lowest border border-outline-variant rounded-md text-sm px-2 py-1 outline-none">
+      </div>
+    </div>
+
+    <button id="explore-run-btn" onclick="Explore.run()"
+      class="w-full py-3 rounded-lg bg-tertiary-container text-on-tertiary font-headline font-bold text-base hover:opacity-90 active:scale-[.99] transition-all disabled:opacity-40">
+      查詢相關標的
+    </button>
+
+    <div id="explore-progress-panel" class="hidden mt-4 bg-surface-container-low border border-outline-variant/30 rounded-lg p-4">
+      <div class="flex items-center gap-3 mb-3">
+        <div class="relative w-9 h-9 flex-shrink-0">
+          <div class="absolute inset-0 rounded-full border-[3px] border-outline-variant/40 border-t-tertiary-container animate-spin"></div>
+          <span id="explore-progress-icon" class="material-symbols-outlined absolute inset-0 flex items-center justify-center text-lg text-tertiary-container">travel_explore</span>
+        </div>
+        <div class="flex-1 min-w-0">
+          <div id="explore-progress-label" class="text-base font-semibold text-on-surface truncate">準備中…</div>
+          <div id="explore-progress-sub" class="text-[13px] text-on-surface-variant"></div>
+        </div>
+        <div id="explore-progress-percent" class="text-base font-bold text-tertiary-container flex-shrink-0">0%</div>
+      </div>
+      <div class="w-full h-1.5 bg-outline-variant/40 rounded-full overflow-hidden">
+        <div id="explore-progress-bar" class="h-full bg-tertiary-container rounded-full transition-all duration-300 ease-out" style="width:0%"></div>
+      </div>
+    </div>
+
+    <div id="explore-error" class="hidden text-sm text-error mt-3"></div>
+  </div>
+
+  <!-- 結果 -->
+  <div id="explore-results" class="hidden">
+    <div class="flex items-center justify-between mb-3">
+      <h2 id="explore-result-title" class="font-headline font-bold text-xl text-on-surface"></h2>
+      <span class="text-sm text-on-surface-variant">排序方式：綜合相關度</span>
+    </div>
+
+    <div class="flex flex-wrap gap-x-5 gap-y-1 text-[13px] text-on-surface-variant mb-5 bg-surface-container-low border border-outline-variant/30 rounded-lg px-4 py-2.5">
+      <span><b class="text-on-surface">Podcast 數</b>：提及該標的的不同 Podcast 數量</span>
+      <span><b class="text-on-surface">財務驗證</b>：財報檢查通過的項目數</span>
+    </div>
+
+    <div id="explore-basket-grid" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
+  </div>
+
+  <!-- 詳情面板 -->
+  <div id="explore-detail-overlay" class="hidden fixed inset-0 bg-black/30 z-40" onclick="Explore.closeDetail()"></div>
+  <div id="explore-detail-panel" class="fixed top-0 right-0 h-full w-full max-w-md md:max-w-2xl bg-surface z-50 shadow-2xl translate-x-full overflow-y-auto">
+    <div id="explore-detail-body" class="p-6 md:p-8"></div>
+  </div>
+</div>

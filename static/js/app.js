@@ -22,7 +22,7 @@ const TAB_MEMORY_TTL_MS  = 10 * 60 * 1000;   // 離開超過這麼久就放棄�
 const MAIN_TABS = ['discover', 'rankings', 'ai', 'calculator', 'assets'];
 // 子頁面屬於哪個主分頁（跟 _renderPage() 的 navMap 一致，另外 graph 是從計算機點進去的）
 const _PAGE_TAB = { discover: 'discover', 'deep-dive': 'discover', rankings: 'rankings', podcaster: 'rankings',
-                    ai: 'ai', calculator: 'calculator', graph: 'calculator', assets: 'assets' };
+                    ai: 'ai', calculator: 'calculator', graph: 'calculator', assets: 'assets', explore: 'assets' };
 let _currentTab = 'discover';  // 目前這個畫面「屬於」哪個主分頁：最後一次用底部導覽列進去的那個
 const _tabMemory = {};         // tab -> { page, scrollY, tracks, stack, savedAt }
 
@@ -136,6 +136,9 @@ function goBack() {
   if (_pageHistory.length > 0) {
     const prev = _pageHistory.pop();
     _renderPage(prev.page, prev);
+    // 有些「往下鑽」會把離開時的返回目標一起記在這筆歷史上（見 assets.js 的 openRelatedAssetsExplore()），
+    // 回來時要還原，那一頁自己的返回鍵才會跟離開前一樣
+    if (prev.override) [_backOverride, _backOverrideOwner, _backOverrideArmed] = prev.override;
   }
 }
 
@@ -216,7 +219,7 @@ function _renderPage(page, restore = null, opts = {}) {
     window.scrollTo(0, 0);
   }
 
-  const navMap = { discover: 'discover', 'deep-dive': 'discover', rankings: 'rankings', podcaster: 'rankings', calculator: 'calculator', ai: 'ai', profile: 'profile' };
+  const navMap = { discover: 'discover', 'deep-dive': 'discover', rankings: 'rankings', podcaster: 'rankings', calculator: 'calculator', ai: 'ai', profile: 'profile', explore: 'assets' };
   const navId = 'nav-' + (navMap[page] || page);
   const activeBtn = document.getElementById(navId);
   if (activeBtn) { activeBtn.classList.add('active'); activeBtn.classList.remove('opacity-60'); }
@@ -226,6 +229,7 @@ function _renderPage(page, restore = null, opts = {}) {
   if (page === 'ai' && typeof onAiPageShow === 'function') onAiPageShow();
   if (page === 'assets' && typeof onAssetsPageShow === 'function') onAssetsPageShow();
   if (page === 'profile' && typeof onProfilePageShow === 'function') onProfilePageShow();
+  if (page === 'explore' && window.Explore) Explore.onShow();
 
   // 計算機的返回鍵：從底部導覽列直接點進來（等於在切分頁，不是從某個頁面鑽進來）
   // 就不需要顯示，其他入口（深度剖析頁的「試算」、Profile 頁的「New Sim」）都是直接呼叫
@@ -330,7 +334,7 @@ function _updateHeaderBack() {
   const active = document.querySelector('.page.active');
   const page = active ? active.id.replace('page-', '') : '';
   let show = false;
-  if (['deep-dive', 'podcaster', 'graph', 'profile'].includes(page)) show = true;
+  if (['deep-dive', 'podcaster', 'graph', 'profile', 'explore'].includes(page)) show = true;
   else if (page === 'calculator') show = _calcBackVisible;
   else if (page === 'assets') show = !document.getElementById('assets-detail-view')?.classList.contains('hidden');
   else if (page === 'discover') show = !document.getElementById('tag-results-section')?.classList.contains('hidden');
@@ -346,6 +350,12 @@ function onHeaderBack() {
   }
   if (page === 'discover' && !document.getElementById('tag-results-section')?.classList.contains('hidden')) {
     filterDiscoverByTag(null);
+    return;
+  }
+  // 直接用 #explore 連進來時沒有上一頁，返回鍵回到個股資料查詢
+  if (page === 'explore' && !_pageHistory.length && !_backOverride) {
+    showPage('assets');
+    _pageHistory.pop();     // 不要讓剛剛這頁變成個股頁的「上一頁」
     return;
   }
   goBack();

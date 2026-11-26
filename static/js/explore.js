@@ -1,141 +1,12 @@
-{% extends "base.html" %}
-
-{% block title %}投資探索{% endblock %}
-
-{% block extra_head %}
-<style>
-  .dot { width: 8px; height: 8px; border-radius: 9999px; }
-  #detail-overlay { transition: opacity .25s ease; }
-  #detail-panel { transition: transform .3s ease; }
-  .purpose-card.active, .tier-card.active {
-    border-color: #113236; background: #eef4f4;
-  }
-  .purpose-card.active .card-icon, .tier-card.active .card-icon { color: #113236; }
-  ::-webkit-scrollbar { width: 6px; height: 6px; }
-  ::-webkit-scrollbar-thumb { background: #c1c8c9; border-radius: 9999px; }
-</style>
-{% endblock %}
-
-{% block pages %}
-<div class="max-w-6xl mx-auto px-6 pt-24 pb-10">
-
-  <!-- 標題：字級、副標、右上角切換鈕的大小都跟「個股資料查詢」頁（templates/pages/assets.html）一樣，
-       兩頁來回切換時標題區不會忽大忽小 -->
-  <div class="flex items-start justify-between gap-4 mb-8">
-    <div>
-      <h1 id="page-title" class="font-['Epilogue'] text-[40px] leading-none font-bold tracking-tight text-tertiary-container mb-2">探索投資機會</h1>
-      <p class="text-secondary font-medium">從 Podcast 討論與財務數據中，發掘值得關注的標的</p>
-    </div>
-    <div class="flex-shrink-0 flex gap-1 bg-surface-container-high rounded-full p-1">
-      <button onclick="window.location.href='/#assets'" class="px-4 py-2 rounded-full font-label text-xs font-bold transition-all text-secondary hover:bg-surface-container-highest whitespace-nowrap">查看個股資訊</button>
-      <button class="px-4 py-2 rounded-full font-label text-xs font-bold transition-all bg-tertiary-container text-white whitespace-nowrap">探索相關標的</button>
-    </div>
-  </div>
-
-  <!-- 查詢表單 -->
-  <div class="bg-surface-container-low border border-outline-variant/40 rounded-xl p-6 mb-8">
-
-    <label class="block text-base font-semibold text-on-surface mb-2" for="seed-input">查詢標的</label>
-    <div class="relative mb-6">
-      <input id="seed-input" type="text" placeholder="例如：台積電、輝達" autocomplete="off"
-        oninput="onSeedInput()" onkeydown="if (event.key === 'Escape') closeSeedDropdown()"
-        class="w-full bg-surface-container-lowest border border-outline-variant rounded-lg pl-4 pr-10 py-3 text-on-surface text-base outline-none focus:border-tertiary-container transition-colors">
-      <button onclick="clearSeed()" class="absolute right-3 top-1/2 -translate-y-1/2 text-outline hover:text-on-surface">
-        <span class="material-symbols-outlined text-xl">close</span>
-      </button>
-      <!-- 搜尋建議：輸入時從圖譜節點找名稱或代號符合、而且是投資標的的節點，
-           做法與「查看個股資訊」的搜尋下拉相同（輸入後稍等再查、顯示在輸入框正下方的浮動清單） -->
-      <div id="seed-dropdown" class="hidden absolute left-0 right-0 top-full mt-2 bg-surface-container-lowest rounded-2xl shadow-xl z-50 border border-outline-variant/20 max-h-96 overflow-y-auto"></div>
-    </div>
-
-    <div class="flex items-center gap-1.5 mb-3">
-      <span class="text-base font-semibold text-on-surface">選擇關係類型</span>
-      <span class="material-symbols-outlined text-outline text-lg" title="決定要從哪個角度找相關標的">info</span>
-    </div>
-    <div id="purpose-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-6"></div>
-
-    <div class="flex items-center gap-1.5 mb-3">
-      <span class="text-base font-semibold text-on-surface">選擇投資類型</span>
-      <span class="material-symbols-outlined text-outline text-lg" title="決定財務體質篩選的嚴格程度">info</span>
-    </div>
-    <div id="tier-grid" class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6"></div>
-
-    <div class="flex flex-wrap items-center gap-4 text-sm text-on-surface-variant mb-6 pt-2 border-t border-outline-variant/30">
-      <div class="flex items-center gap-2 pt-3">
-        <span>時間窗口</span>
-        <select id="window-days" class="bg-surface-container-lowest border border-outline-variant rounded-md text-sm px-2 py-1 outline-none min-w-[75px]">
-          <option value="14">14 天</option>
-          <option value="30" selected>30 天</option>
-          <option value="60">60 天</option>
-        </select>
-      </div>
-      <div class="flex items-center gap-2 pt-3">
-        <span>截止日</span>
-        <input type="date" id="end-date" class="bg-surface-container-lowest border border-outline-variant rounded-md text-sm px-2 py-1 outline-none">
-      </div>
-    </div>
-
-    <button id="run-btn" onclick="run()"
-      class="w-full py-3 rounded-lg bg-tertiary-container text-on-tertiary font-headline font-bold text-base hover:opacity-90 active:scale-[.99] transition-all disabled:opacity-40">
-      查詢相關標的
-    </button>
-
-    <div id="progress-panel" class="hidden mt-4 bg-surface-container-low border border-outline-variant/30 rounded-lg p-4">
-      <div class="flex items-center gap-3 mb-3">
-        <div class="relative w-9 h-9 flex-shrink-0">
-          <div class="absolute inset-0 rounded-full border-[3px] border-outline-variant/40 border-t-tertiary-container animate-spin"></div>
-          <span id="progress-icon" class="material-symbols-outlined absolute inset-0 flex items-center justify-center text-lg text-tertiary-container">travel_explore</span>
-        </div>
-        <div class="flex-1 min-w-0">
-          <div id="progress-label" class="text-base font-semibold text-on-surface truncate">準備中…</div>
-          <div id="progress-sub" class="text-[13px] text-on-surface-variant"></div>
-        </div>
-        <div id="progress-percent" class="text-base font-bold text-tertiary-container flex-shrink-0">0%</div>
-      </div>
-      <div class="w-full h-1.5 bg-outline-variant/40 rounded-full overflow-hidden">
-        <div id="progress-bar" class="h-full bg-tertiary-container rounded-full transition-all duration-300 ease-out" style="width:0%"></div>
-      </div>
-    </div>
-
-    <div id="error" class="hidden text-sm text-error mt-3"></div>
-  </div>
-
-  <!-- 結果 -->
-  <div id="results" class="hidden">
-    <div class="flex items-center justify-between mb-3">
-      <h2 id="result-title" class="font-headline font-bold text-xl text-on-surface"></h2>
-      <span class="text-sm text-on-surface-variant">排序方式：綜合相關度</span>
-    </div>
-
-    <div class="flex flex-wrap gap-x-5 gap-y-1 text-[13px] text-on-surface-variant mb-5 bg-surface-container-low border border-outline-variant/30 rounded-lg px-4 py-2.5">
-      <span><b class="text-on-surface">Podcast 數</b>：提及該標的的不同 Podcast 數量</span>
-      <span><b class="text-on-surface">財務驗證</b>：財報檢查通過的項目數</span>
-    </div>
-
-    <div id="basket-grid" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
-  </div>
-</div>
-
-<!-- 詳情面板 -->
-<div id="detail-overlay" class="hidden fixed inset-0 bg-black/30 z-40" onclick="closeDetail()"></div>
-<div id="detail-panel" class="fixed top-0 right-0 h-full w-full max-w-md md:max-w-2xl bg-surface z-50 shadow-2xl translate-x-full overflow-y-auto">
-  <div id="detail-body" class="p-6 md:p-8"></div>
-</div>
-{% endblock %}
-
-{% block body_scripts %}
-<script>
-// 這頁是獨立頁面，沒有跑 SPA 的 showPage()，底部導覽列會停在預設的 Discover。
-// 「探索相關標的」是 Assets 分頁的延伸，所以手動把 Assets 標成目前頁面（做法同 app.js 的 _renderPage）。
-(function markAssetsNavActive() {
-  document.querySelectorAll(".nav-btn").forEach(b => { b.classList.remove("active"); b.classList.add("opacity-60"); });
-  const btn = document.getElementById("nav-assets");
-  if (btn) { btn.classList.add("active"); btn.classList.remove("opacity-60"); }
-  const discoverIcon = document.querySelector("#nav-discover .nav-icon");
-  if (discoverIcon) discoverIcon.removeAttribute("style");   // Discover 圖示預設寫死實心，要拿掉才不會看起來還在選取
-})();
+// ── EXPLORE 頁面：探索投資機會（相關標的）────────────────────────
+// 原本是 knowledge_graph app 的獨立頁面（/api/knowledge-graph/basket/），併進單頁系統後
+// 跟其他分頁一樣用 showPage('explore') 切換；HTML 在 templates/pages/explore.html。
+// 整支包在 IIFE 裡：run／render／esc 這類名稱太通用，不能放到全域跟別支程式撞名。
+// 對外只開放 window.Explore（見檔尾），HTML 與動態產生的內容都用 Explore.xxx() 呼叫。
+(function () {
 
 let selectedPurpose = null;
+let _purposeFailed = false;
 let selectedTier = "均衡";
 let lastData = null;
 
@@ -152,10 +23,34 @@ const PURPOSE_ICONS = {
   same_theme: "hub",
 };
 
-(async () => {
+let _initialized = false;
+
+async function initOnce() {
+  if (_initialized) return;
+  _initialized = true;
+
+  const tierGrid = document.getElementById("explore-tier-grid");
+  TIER_OPTIONS.forEach(t => {
+    const el = document.createElement("div");
+    el.className = "tier-card cursor-pointer rounded-lg border-2 border-outline-variant/50 bg-surface-container-lowest p-4 text-center hover:border-outline transition-colors";
+    el.dataset.key = t.key;
+    el.innerHTML = `
+      <div class="font-semibold text-base text-on-surface">${t.label}</div>
+      <div class="text-[13px] text-on-surface-variant mt-0.5">${t.desc}</div>
+    `;
+    el.onclick = () => selectTier(t.key);
+    tierGrid.appendChild(el);
+  });
+  selectTier("均衡");
+  document.getElementById("explore-end-date").value = new Date().toISOString().split("T")[0];
+
+  await loadPurposes();
+}
+
+async function loadPurposes() {
   try {
     const d = await (await fetch("/api/knowledge-graph/basket-purposes/")).json();
-    const grid = document.getElementById("purpose-grid");
+    const grid = document.getElementById("explore-purpose-grid");
     (d.purposes || []).forEach((p, i) => {
       const el = document.createElement("div");
       el.className = "purpose-card cursor-pointer rounded-lg border-2 border-outline-variant/50 bg-surface-container-lowest p-4 hover:border-outline transition-colors";
@@ -170,25 +65,22 @@ const PURPOSE_ICONS = {
       if (i === 0) selectPurpose(p.key);
     });
   } catch (e) {
+    _purposeFailed = true;
     showError("投資目的載入失敗：" + e.message);
   }
+}
 
-  const tierGrid = document.getElementById("tier-grid");
-  TIER_OPTIONS.forEach(t => {
-    const el = document.createElement("div");
-    el.className = "tier-card cursor-pointer rounded-lg border-2 border-outline-variant/50 bg-surface-container-lowest p-4 text-center hover:border-outline transition-colors";
-    el.dataset.key = t.key;
-    el.innerHTML = `
-      <div class="font-semibold text-base text-on-surface">${t.label}</div>
-      <div class="text-[13px] text-on-surface-variant mt-0.5">${t.desc}</div>
-    `;
-    el.onclick = () => selectTier(t.key);
-    tierGrid.appendChild(el);
-  });
-  selectTier("均衡");
-
-  document.getElementById("end-date").value = new Date().toISOString().split("T")[0];
-})();
+// 切到這一頁時由 app.js 的 _renderPage() 呼叫
+function onShow() {
+  if (!_initialized) initOnce();
+  else if (_purposeFailed) {     // 之前沒載到投資目的（例如那時網路斷了）就再試一次
+    _purposeFailed = false;
+    hideError();
+    loadPurposes();
+  }
+  // 先在背景把「查詢標的」搜尋建議的索引建好，打第一個字時就不用等 3~4 秒
+  fetch("/api/knowledge-graph/seed-suggest/?warm=1").catch(() => {});
+}
 
 function selectPurpose(key) {
   selectedPurpose = key;
@@ -201,7 +93,7 @@ function selectTier(key) {
 }
 
 function clearSeed() {
-  document.getElementById("seed-input").value = "";
+  document.getElementById("explore-seed-input").value = "";
   closeSeedDropdown();
 }
 
@@ -210,7 +102,7 @@ let _seedTimer = null;
 let _seedReq = 0;
 
 function onSeedInput() {
-  const q = document.getElementById("seed-input").value.trim();
+  const q = document.getElementById("explore-seed-input").value.trim();
   clearTimeout(_seedTimer);
   if (!q) { closeSeedDropdown(); return; }
   _seedTimer = setTimeout(() => runSeedSuggest(q), 300);
@@ -219,13 +111,13 @@ function onSeedInput() {
 function closeSeedDropdown() {
   _seedReq++;                      // 還在路上的舊回應不要再蓋回來
   clearTimeout(_seedTimer);
-  const dd = document.getElementById("seed-dropdown");
+  const dd = document.getElementById("explore-seed-dropdown");
   dd.classList.add("hidden");
   dd.innerHTML = "";
 }
 
 async function runSeedSuggest(q) {
-  const dd = document.getElementById("seed-dropdown");
+  const dd = document.getElementById("explore-seed-dropdown");
   const reqId = ++_seedReq;
   dd.innerHTML = '<p class="text-outline text-base p-4 text-center">搜尋中...</p>';
   dd.classList.remove("hidden");
@@ -236,7 +128,7 @@ async function runSeedSuggest(q) {
     if (!res.ok) throw new Error(data.error || res.status);
     const list = data.suggestions || [];
     dd.innerHTML = list.length ? list.map(s => `
-      <div data-name="${escAttr(s.name)}" onclick="pickSeedSuggestion(this.dataset.name)"
+      <div data-name="${escAttr(s.name)}" onclick="Explore.pickSeedSuggestion(this.dataset.name)"
         class="flex items-center justify-between gap-3 px-4 py-4 hover:bg-surface-container-highest cursor-pointer border-b border-outline-variant/10 last:border-0 transition-colors">
         <div class="flex items-baseline gap-2 min-w-0">
           <span class="text-xs font-bold text-outline uppercase tracking-wider flex-shrink-0 px-1.5 py-0.5 rounded bg-surface-container-highest">${esc(s.market)}</span>
@@ -252,51 +144,61 @@ async function runSeedSuggest(q) {
 
 // 點建議只把名稱填進輸入框（還要選關係類型再按查詢），名稱就是圖譜節點名，查詢時才對得到
 function pickSeedSuggestion(name) {
-  document.getElementById("seed-input").value = name;
+  document.getElementById("explore-seed-input").value = name;
   closeSeedDropdown();
 }
 
-// 從「查看個股資訊」詳情頁的「探索相關標的」按鈕跳過來時，網址會帶 ?seed=名稱&symbol=代號：
-// 先把名稱填進「查詢標的」；名稱不一定等於圖譜裡的節點名（查詢要用節點名才對得到），
-// 所以再用代號問搜尋建議，找到代號完全相同的標的就換成它的節點名。
-// 只填入、不自動查詢：關係類型、投資類型還要讓使用者確認。
-(async function prefillSeedFromUrl() {
-  const params = new URLSearchParams(location.search);
-  const seed = (params.get("seed") || "").trim();
-  const symbol = (params.get("symbol") || "").trim();
-  if (!seed && !symbol) return;
-  const inp = document.getElementById("seed-input");
-  inp.value = seed || symbol;
-  if (!symbol) return;
+// 從個股詳情頁的「探索相關標的」過來（assets.js 呼叫）：把名稱填進「查詢標的」；
+// 名稱不一定等於圖譜裡的節點名（查詢要用節點名才對得到），所以再用代號問搜尋建議，
+// 找到代號完全相同的標的就換成它的節點名。只填入、不自動查詢：關係類型、投資類型還要讓使用者確認。
+const _nodeNameBySymbol = {};   // 代號 → 查到過的節點名
+let _activeSeed = null;         // 目前畫面上（查詢中或已查完）是哪個標的的結果
+
+async function openWithSeed(seed, symbol) {
+  const inp = document.getElementById("explore-seed-input");
+  // 畫面上留著別支標的的結果會讓人以為是這支的，清掉；同一支就保留，來回切換不用重查
+  if (_activeSeed && _activeSeed !== seed && _activeSeed !== _nodeNameBySymbol[symbol]) resetResults();
+  closeSeedDropdown();
+  hideError();
+  inp.value = _nodeNameBySymbol[symbol] || seed || symbol;
+  if (!symbol || _nodeNameBySymbol[symbol]) return;
   const filled = inp.value;
   try {
     const res = await fetch("/api/knowledge-graph/seed-suggest/?q=" + encodeURIComponent(symbol));
     if (!res.ok) return;
     const hit = ((await res.json()).suggestions || []).find(s => String(s.code).toLowerCase() === symbol.toLowerCase());
-    if (hit && inp.value === filled) inp.value = hit.name;     // 使用者已經改過輸入框就不要蓋掉
+    if (!hit) return;
+    _nodeNameBySymbol[symbol] = hit.name;
+    if (inp.value === filled) inp.value = hit.name;     // 使用者已經改過輸入框就不要蓋掉
   } catch (e) { /* 查不到就維持帶過來的名稱 */ }
-})();
-
-// 頂部返回鍵（#header-back-btn 在 base.html 的橫幅裡，預設隱藏）：這頁是獨立頁面，沒有載入 app.js，
-// 沒有 onHeaderBack()／_updateHeaderBack()，要自己顯示、自己接。
-//   - 從個股詳情頁的「探索相關標的」過來（網址帶 symbol）→ 回到那支標的的詳情頁
-//   - 其他進來的方式（個股資料查詢列表上的切換鈕、直接輸入網址）→ 回到個股資料查詢列表
-// 詳情頁的畫面狀態在記憶體裡，換頁就沒了，所以不能用 history.back()（會回到首頁），
-// 而是用首頁的深連結 ?open_asset= 重新打開（見 base.html 的啟動程式）。
-function onHeaderBack() {
-  const params = new URLSearchParams(location.search);
-  const symbol = (params.get("symbol") || "").trim();
-  if (!symbol) { window.location.href = "/#assets"; return; }
-  const back = new URLSearchParams({ open_asset: symbol });
-  if (params.get("category")) back.set("asset_category", params.get("category"));
-  if (params.get("seed")) back.set("asset_name", params.get("seed"));
-  window.location.href = "/?" + back;
 }
-document.getElementById("header-back-btn")?.classList.remove("hidden");
+
+// 回到還沒查詢的狀態：中斷進行中的查詢、收掉結果／詳情面板／標題
+function resetResults() {
+  if (currentSearch) { currentSearch.close(); currentSearch = null; }
+  _scoreReq++;
+  _activeSeed = null;
+  lastData = null;
+  setLoading(false);
+  closeDetail();
+  document.getElementById("explore-results").classList.add("hidden");
+  document.getElementById("explore-title").textContent = "探索投資機會";
+}
+
+// 右上角「查看個股資訊」：這組切換鈕對應的是個股清單。上一頁就是個股頁時走返回（捲動位置會還原），
+// 如果個股頁停在某支標的的詳情，收起來回清單。
+function showAssetsList() {
+  const prev = _pageHistory[_pageHistory.length - 1];
+  if (prev && prev.page === "assets") goBack(); else showPage("assets");
+  if (!document.getElementById("assets-detail-view").classList.contains("hidden")) {
+    _backOverride = null; _backOverrideOwner = null; _backOverrideArmed = false;
+    closeAssetDetail();
+  }
+}
 
 document.addEventListener("click", (e) => {
-  const dd = document.getElementById("seed-dropdown");
-  const inp = document.getElementById("seed-input");
+  const dd = document.getElementById("explore-seed-dropdown");
+  const inp = document.getElementById("explore-seed-input");
   if (dd && inp && !dd.contains(e.target) && e.target !== inp) closeSeedDropdown();
 });
 
@@ -311,20 +213,21 @@ const STEP_ICONS = {
 };
 
 function run() {
-  const seed = document.getElementById("seed-input").value.trim();
+  const seed = document.getElementById("explore-seed-input").value.trim();
   closeSeedDropdown();
   hideError();
   if (!seed) { showError("請輸入標的名稱"); return; }
   if (!selectedPurpose) { showError("請選擇關係類型"); return; }
 
-  const windowDays = document.getElementById("window-days").value;
+  const windowDays = document.getElementById("explore-window-days").value;
   const params = new URLSearchParams({
     seed, purpose: selectedPurpose, window_days: windowDays,
-    end_date: document.getElementById("end-date").value,
+    end_date: document.getElementById("explore-end-date").value,
     risk_tier: selectedTier,
   });
 
-  document.getElementById("results").classList.add("hidden");
+  document.getElementById("explore-results").classList.add("hidden");
+  _activeSeed = seed;
   setLoading(true);
   updateProgress({ stage: "start", label: "準備中…", percent: 0 });
 
@@ -363,20 +266,20 @@ function run() {
 }
 
 function updateProgress(msg) {
-  document.getElementById("progress-icon").textContent = STEP_ICONS[msg.stage] || "hourglass_top";
-  document.getElementById("progress-label").textContent = msg.label || "處理中…";
-  document.getElementById("progress-sub").textContent =
+  document.getElementById("explore-progress-icon").textContent = STEP_ICONS[msg.stage] || "hourglass_top";
+  document.getElementById("explore-progress-label").textContent = msg.label || "處理中…";
+  document.getElementById("explore-progress-sub").textContent =
     (msg.item_current != null && msg.item_total) ? `第 ${msg.item_current} / ${msg.item_total} 項` : "";
   const pct = Math.max(0, Math.min(100, Math.round(msg.percent ?? 0)));
-  document.getElementById("progress-percent").textContent = pct + "%";
-  document.getElementById("progress-bar").style.width = pct + "%";
+  document.getElementById("explore-progress-percent").textContent = pct + "%";
+  document.getElementById("explore-progress-bar").style.width = pct + "%";
 }
 
 function render(data) {
-  document.getElementById("page-title").textContent = `探索與 ${data.seed} 相關的投資機會`;
-  document.getElementById("result-title").textContent = `找到 ${data.basket.length} 個相關標的`;
+  document.getElementById("explore-title").textContent = `探索與 ${data.seed} 相關的投資機會`;
+  document.getElementById("explore-result-title").textContent = `找到 ${data.basket.length} 個相關標的`;
 
-  const grid = document.getElementById("basket-grid");
+  const grid = document.getElementById("explore-basket-grid");
   if (!data.basket.length) {
     const suggestions = data.seed_suggestions || [];
     grid.className = "";
@@ -384,7 +287,7 @@ function render(data) {
       <div class="text-center py-14 text-on-surface-variant text-base">
         圖譜裡找不到「${esc(data.seed)}」，你是不是要找：
         <div class="flex gap-2 justify-center flex-wrap mt-4">
-          ${suggestions.map(s => `<span class="px-4 py-1.5 rounded-full border border-outline-variant text-base cursor-pointer hover:border-tertiary-container hover:text-tertiary-container transition-colors" onclick="pickSuggestion('${esc(s).replace(/'/g, "\\'")}')">${esc(s)}</span>`).join("")}
+          ${suggestions.map(s => `<span class="px-4 py-1.5 rounded-full border border-outline-variant text-base cursor-pointer hover:border-tertiary-container hover:text-tertiary-container transition-colors" onclick="Explore.pickSuggestion('${esc(s).replace(/'/g, "\\'")}')">${esc(s)}</span>`).join("")}
         </div>
       </div>` : `<div class="text-center py-14 text-on-surface-variant text-base">沒有找到符合條件的標的，試試看調整窗口長度或換一個標的。</div>`;
   } else {
@@ -392,7 +295,7 @@ function render(data) {
     grid.innerHTML = data.basket.map((c, i) => cardHtml(c, i)).join("");
     loadAssetScores(data);
   }
-  document.getElementById("results").classList.remove("hidden");
+  document.getElementById("explore-results").classList.remove("hidden");
 }
 
 // 「Podcast 看法」分數：Basket 結果畫好後另外算（要跑 LLM 判斷），不拖慢原本的搜尋。
@@ -430,7 +333,7 @@ function kgScoreHtml(s, windowDays) {
 }
 
 function pickSuggestion(name) {
-  document.getElementById("seed-input").value = name;
+  document.getElementById("explore-seed-input").value = name;
   run();
 }
 
@@ -490,7 +393,7 @@ function cardHtml(c, idx) {
   const indirect = isIndirect(c);
 
   return `
-  <div class="bg-surface-container-lowest border border-outline-variant/40 @container rounded-xl p-5 flex flex-col hover:border-tertiary-container/50 transition-colors cursor-pointer" onclick="openDetail(${idx})">
+  <div class="bg-surface-container-lowest border border-outline-variant/40 @container rounded-xl p-5 flex flex-col hover:border-tertiary-container/50 transition-colors cursor-pointer" onclick="Explore.openDetail(${idx})">
     <div class="flex items-center gap-2.5 flex-wrap mb-3">
       <span class="w-10 h-10 flex items-center justify-center rounded-full bg-tertiary-container text-on-tertiary text-lg font-bold flex-shrink-0">${idx + 1}</span>
       ${ticker ? `<span class="text-lg text-on-surface-variant font-semibold">${esc(ticker)}</span>` : ""}
@@ -579,7 +482,7 @@ function connectionsHtml(c) {
         ${rows.slice(0, SEG_VISIBLE_ROWS).map(segmentRowHtml).join("")}
         ${hidden.length ? `
           <div id="seg-more-${si}" class="hidden">${hidden.map(segmentRowHtml).join("")}</div>
-          <button type="button" onclick="toggleSegMore(${si}, ${hidden.length})" class="mt-1 text-sm text-secondary font-semibold flex items-center gap-1">
+          <button type="button" onclick="Explore.toggleSegMore(${si}, ${hidden.length})" class="mt-1 text-sm text-secondary font-semibold flex items-center gap-1">
             <span id="seg-more-label-${si}">展開其餘 ${hidden.length} 筆</span>
             <span id="seg-more-icon-${si}" class="material-symbols-outlined text-base">expand_more</span>
           </button>` : ""}
@@ -642,10 +545,10 @@ function openDetail(idx) {
       <div class="grid grid-cols-2 gap-x-3 gap-y-1">
         ${checklistItems}
       </div>
-      <div class="flex items-center justify-end gap-1 mt-2 text-sm text-secondary font-semibold cursor-pointer" onclick="toggleCheckExplanations()">
-        查看指標解釋 <span id="check-explanations-icon" class="material-symbols-outlined text-base">expand_more</span>
+      <div class="flex items-center justify-end gap-1 mt-2 text-sm text-secondary font-semibold cursor-pointer" onclick="Explore.toggleCheckExplanations()">
+        查看指標解釋 <span id="explore-check-explanations-icon" class="material-symbols-outlined text-base">expand_more</span>
       </div>
-      <div id="check-explanations" class="hidden mt-2 text-[13px] text-on-surface-variant bg-surface-container-low rounded-lg p-3 space-y-2">
+      <div id="explore-check-explanations" class="hidden mt-2 text-[13px] text-on-surface-variant bg-surface-container-low rounded-lg p-3 space-y-2">
         ${explanationRows}
       </div>
       <div class="text-xs text-on-surface-variant mt-3 space-y-0.5">
@@ -657,14 +560,14 @@ function openDetail(idx) {
 
   const rewardSection = rewardSectionHtml(layer2);
 
-  const body = document.getElementById("detail-body");
+  const body = document.getElementById("explore-detail-body");
   body.innerHTML = `
     <div class="flex items-start justify-between mb-5">
       <div class="flex items-center gap-2">
         <span class="w-7 h-7 flex items-center justify-center rounded-full bg-tertiary-container text-on-tertiary text-base font-bold">${idx + 1}</span>
         <span class="text-base text-on-surface-variant font-medium">${esc(ticker)}</span>
       </div>
-      <button onclick="closeDetail()" class="w-8 h-8 flex items-center justify-center rounded-full hover:bg-surface-container transition-colors">
+      <button onclick="Explore.closeDetail()" class="w-8 h-8 flex items-center justify-center rounded-full hover:bg-surface-container transition-colors">
         <span class="material-symbols-outlined text-outline">close</span>
       </button>
     </div>
@@ -705,8 +608,8 @@ function openDetail(idx) {
     </button>
   `;
 
-  document.getElementById("detail-overlay").classList.remove("hidden");
-  const panel = document.getElementById("detail-panel");
+  document.getElementById("explore-detail-overlay").classList.remove("hidden");
+  const panel = document.getElementById("explore-detail-panel");
   panel.classList.remove("translate-x-full");
 }
 
@@ -848,26 +751,31 @@ function rewardSectionHtml(layer2) {
 }
 
 function toggleCheckExplanations() {
-  document.getElementById("check-explanations").classList.toggle("hidden");
+  document.getElementById("explore-check-explanations").classList.toggle("hidden");
 }
 
 function closeDetail() {
-  document.getElementById("detail-overlay").classList.add("hidden");
-  document.getElementById("detail-panel").classList.add("translate-x-full");
+  document.getElementById("explore-detail-overlay").classList.add("hidden");
+  document.getElementById("explore-detail-panel").classList.add("translate-x-full");
 }
 
 function setLoading(on) {
-  document.getElementById("run-btn").disabled = on;
-  document.getElementById("progress-panel").classList.toggle("hidden", !on);
+  document.getElementById("explore-run-btn").disabled = on;
+  document.getElementById("explore-progress-panel").classList.toggle("hidden", !on);
 }
 function showError(msg) {
-  const el = document.getElementById("error");
+  const el = document.getElementById("explore-error");
   el.textContent = msg; el.classList.remove("hidden");
 }
 function hideError() {
-  document.getElementById("error").classList.add("hidden");
+  document.getElementById("explore-error").classList.add("hidden");
 }
 function esc(s) { return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;"); }
 function escAttr(s) { return esc(s).replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;"); }
-</script>
-{% endblock %}
+
+window.Explore = {
+  onShow, openWithSeed, showAssetsList,
+  onSeedInput, closeSeedDropdown, clearSeed, pickSeedSuggestion, pickSuggestion, run,
+  openDetail, closeDetail, toggleSegMore, toggleCheckExplanations,
+};
+})();

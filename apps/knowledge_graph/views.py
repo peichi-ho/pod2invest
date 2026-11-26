@@ -2,7 +2,7 @@ import json
 from collections import defaultdict
 from django.conf import settings
 from django.http import JsonResponse
-from django.shortcuts import render
+from django.shortcuts import render, redirect
 from django.views.decorators.csrf import csrf_exempt
 
 from django.db import connections
@@ -603,15 +603,17 @@ def generate_graph_from_summaries(request):
 # ==========================================
 
 def basket_page(request):
-    """渲染 Basket 探索頁面。"""
-    from .services.seed_suggest import warm_async
-    warm_async()    # 先在背景建好「查詢標的」搜尋建議的索引
-    return render(request, "knowledge_graph/basket.html")
+    """舊的探索頁網址。探索投資機會已併進單頁系統（templates/pages/explore.html、
+    static/js/explore.js），這裡只把舊連結、書籤導到那個分頁。"""
+    return redirect("/#explore")
 
 
 def seed_suggest_api(request):
-    """探索頁「查詢標的」輸入框的搜尋建議：名稱或代號符合輸入文字的投資標的節點。"""
-    from .services.seed_suggest import suggest_seeds
+    """探索頁「查詢標的」輸入框的搜尋建議：名稱或代號符合輸入文字的投資標的節點。
+    帶 ?warm=1（切到探索頁時）只是請它先在背景把索引建好，打第一個字時就不用等。"""
+    from .services.seed_suggest import suggest_seeds, warm_async
+    if request.GET.get("warm"):
+        warm_async()
     q = request.GET.get("q", "").strip()
     return JsonResponse({"suggestions": suggest_seeds(q)}, json_dumps_params={"ensure_ascii": False})
 
