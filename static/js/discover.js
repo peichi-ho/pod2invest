@@ -342,9 +342,8 @@ function toggleSignalDetail(chipBtn, asset, week, podcaster, event) {
 // ── 論點方塊 ──────────────────────────────────────────────────
 // 「市場共識」點開 podcaster 後的觀點、「單一來源」卡片裡的觀點共用同一個版型，
 // 圓角／內距只在這裡改一處，兩種方塊才不會又長得不一樣。
-// 注意：這個專案的 Tailwind 設定把 rounded-xl 改成 3rem（很圓），rounded-md 則是預設的
-// 小圓角，之前兩種方塊就是因為用了不同的 rounded-* 才看起來一個很圓、一個幾乎是直角。
-// p-6：圓角很大，內距太小的話裡面的標籤跟按鈕會貼著弧線，所以內容跟邊緣至少留 24px。
+// 注意：這個專案的 Tailwind 設定把 rounded-xl 改成 3rem（很圓）。這裡用 rounded-2xl（1rem），
+// 跟外層卡片右側的圓角一樣大，裡外才是同一套風格。
 const _THESIS_RESULT_CFG = {
   pass:    { label: '✓ 正確',   color: '#0f6e56', bg: '#e1f5ee' },
   fail:    { label: '✗ 錯誤',   color: '#993c1d', bg: '#faece7' },
@@ -358,13 +357,22 @@ function _thesisBoxHtml(r, { extraCls = '' } = {}) {
   const cfg = _THESIS_RESULT_CFG[r.result] || _THESIS_RESULT_CFG.pending;
   const episodeName = escapeHtml((r.source_filename || '').replace(/\.srt$/i, ''));
   return `
-    <div class="bg-surface-container-lowest rounded-xl border border-outline-variant/50 p-6 ${extraCls}">
+    <div class="bg-surface-container-lowest rounded-2xl border border-outline-variant/50 p-4 ${extraCls}">
       <div class="flex items-start justify-between gap-4 mb-3">
         <p class="min-w-0 flex-1 text-sm font-bold text-tertiary-container font-['Epilogue'] leading-snug">${r.thesis ? `「${escapeHtml(r.thesis)}」` : ''}</p>
         <span class="flex-shrink-0 whitespace-nowrap text-[10px] font-bold px-2 py-0.5 rounded-full" style="background:${cfg.bg};color:${cfg.color}">${cfg.label}</span>
       </div>
-      <div class="mb-4 truncate text-[11px] text-outline" title="${episodeName}">${episodeName}</div>
-      <button onclick="openDeepDive(${r.summary_id}, false, ${r.id})" class="w-full py-2.5 bg-on-primary-container text-white rounded-full font-label text-[11px] font-bold tracking-widest">閱讀論點</button>
+      <!-- start_time 是這一集的發布日，用日曆圖示＋底色小標籤跟集數標題分開：有些節目標題本身就帶日期
+           （甚至跟發布日差一天），兩串日期長得一樣排在一起會像顯示錯誤。日期不截斷，標題太長只截標題。
+           「閱讀論點」在同一行靠右；手機放不下時整顆換到下一行、一樣靠右 -->
+      <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <div class="flex items-center gap-2 min-w-0 flex-1 basis-56 text-[11px] text-outline">
+          ${r.start_time ? `<span class="flex-shrink-0 inline-flex items-center gap-1 rounded-md bg-surface-container px-2 py-1 font-semibold text-on-surface-variant"><span class="material-symbols-outlined text-[13px] leading-none" aria-hidden="true">calendar_today</span>${escapeHtml(r.start_time.slice(0, 10))} 發布</span>` : ''}
+          <span class="min-w-0 truncate" title="${episodeName}">${episodeName}</span>
+        </div>
+        <!-- 游標移上去：橘色加深、箭頭往右滑 -->
+        <button type="button" onclick="openDeepDive(${r.summary_id}, false, ${r.id})" class="group ml-auto flex-shrink-0 inline-flex items-center gap-1 py-2 pl-4 pr-3 rounded-full bg-on-primary-container hover:bg-[#a85f06] text-white font-label text-[11px] font-bold tracking-widest transition-colors active:scale-95">閱讀論點<span class="material-symbols-outlined text-sm leading-none transition-transform group-hover:translate-x-1" aria-hidden="true">arrow_forward</span></button>
+      </div>
     </div>`;
 }
 
@@ -490,7 +498,6 @@ function renderSignalCards(records) {
     const podcasters = Object.keys(data.podcasters);
     const p = podcasters[0];
     const pct = accMap[p]?.pct;
-    const accBarColor = pct >= 70 ? '#286671' : pct >= 55 ? '#d97f12' : '#c1c8c9';
     const key = `${asset}||${latestWeek}`;
     const allRec = _signalRecordsByAssetWeek[key] || [];
     const seen = new Set();
@@ -512,16 +519,15 @@ function renderSignalCards(records) {
     return `
       <div class="bg-white rounded-2xl overflow-hidden" style="border-left:3px solid #c1c8c9;border-top:0.5px solid #e5e3d9;border-right:0.5px solid #e5e3d9;border-bottom:0.5px solid #e5e3d9;border-radius:0 1rem 1rem 0;">
         <div class="p-4">
-          <div class="flex justify-between items-start mb-2">
-            <div class="font-['Epilogue'] font-bold text-[17px] text-on-surface leading-tight">${renderAssetNameStar(data.ticker, asset)}</div>
-            <span class="text-[11px] px-2.5 py-1 rounded-full bg-surface-container text-outline font-semibold">單一來源${data.opposite ? `（另有 ${data.opposite} 人${data.dir === 'bullish' ? '看空' : '看多'}）` : ''}</span>
+          <div class="flex flex-wrap items-center gap-x-3 gap-y-2 mb-2">
+            <div class="font-['Epilogue'] font-bold text-xl text-tertiary-container leading-tight [&>span]:translate-y-0">${renderAssetNameStar(data.ticker, asset)}</div>
+            ${data.opposite ? `<span class="bg-surface-container text-secondary text-[11px] font-semibold px-2.5 py-1 rounded-full whitespace-nowrap">另有 ${data.opposite} 人${data.dir === 'bullish' ? '看空' : '看多'}</span>` : ''}
           </div>
           <div class="flex flex-wrap gap-1.5 mb-3">
             <span class="text-[11px] font-semibold px-2.5 py-1.5 rounded-xl border bg-secondary text-white border-secondary">
               <span class="font-bold">${escapeHtml(p)}</span>${pct != null ? `<span class="ml-1 opacity-70">${pct}%</span>` : ''}
             </span>
           </div>
-          ${pct != null ? `<div class="h-1 bg-surface-container rounded-full mb-3"><div class="h-full rounded-full" style="width:${pct}%;background:${accBarColor};"></div></div>` : ''}
           ${firstThesisHtml}
           ${hasMoreViews ? `
           <div class="hidden">${restThesisHtml}</div>
@@ -534,14 +540,12 @@ function renderSignalCards(records) {
   }
 
   function renderCard(asset, data) {
-    const podcasters = Object.keys(data.podcasters);
+    // 節目依準確率高到低排；還沒有準確率的排最後（同分維持原本順序）
+    const podcasters = Object.keys(data.podcasters)
+      .sort((a, b) => (accMap[b]?.pct ?? -1) - (accMap[a]?.pct ?? -1));
     const count = podcasters.length;
     const isStrong = count >= 3;
     const borderColor = isStrong ? '#286671' : '#d97f12';
-    const badgeClass = isStrong
-      ? 'bg-secondary-container/40 text-secondary font-bold'
-      : 'bg-[#fff3e0] text-[#854f0b] font-bold';
-    const badgeLabel = isStrong ? '強共識' : '弱共識';
     const accs = podcasters.map(p => accMap[p]?.pct).filter(v => v != null);
     const avgAcc = accs.length ? Math.round(accs.reduce((a, b) => a + b, 0) / accs.length) : null;
     const assetKey = asset.replace(/'/g, "\\'");
@@ -552,20 +556,17 @@ function renderSignalCards(records) {
         <span class="font-bold">${p}</span>${pct != null ? `<span class="ml-1 opacity-70">${pct}%</span>` : ''}
       </button>`;
     }).join('');
-    // 標題列：左邊「標的名稱 ＋ N 人看多 · 平均準確率」，右邊強／弱共識徽章。
-    // 左邊那組放不下（手機寬度）時 flex-wrap 會讓人數／準確率那顆換到名稱下面。
+    // 標題列：「標的名稱 ＋ N 人看多 · 平均準確率」。強／弱共識不再另外放徽章——區塊標題跟左側色條
+    // 已經表示了。放不下（手機寬度）時 flex-wrap 會讓人數／準確率那顆換到名稱下面。
     // [&>span]:translate-y-0：renderAssetNameStar() 為了「名稱＋星星」在純文字行裡置中，會把整組往上推 2px；
     // 但這裡名稱本身就是跟旁邊 chip 用 items-center 置中的 flex 項目（盒子高度剛好等於那組的高度），
     // 再往上推只會讓名稱比 chip 高一截，所以在這一列把它取消。
     return `
       <div class="bg-white rounded-2xl overflow-hidden" style="border-left:3px solid ${borderColor};border-top:0.5px solid #e5e3d9;border-right:0.5px solid #e5e3d9;border-bottom:0.5px solid #e5e3d9;border-radius:0 1rem 1rem 0;">
         <div class="p-4">
-          <div class="flex justify-between items-start gap-3 mb-3">
-            <div class="flex flex-wrap items-center gap-x-3 gap-y-2 min-w-0">
-              <div class="font-['Epilogue'] font-bold text-[17px] text-on-surface leading-tight [&>span]:translate-y-0">${renderAssetNameStar(data.ticker, asset)}</div>
-              <span class="bg-surface-container text-secondary text-[11px] font-semibold px-2.5 py-1 rounded-full whitespace-nowrap">${count} 人${dirFilter === 'bullish' ? '看多' : '看空'}${data.opposite ? `（另有 ${data.opposite} 人${dirFilter === 'bullish' ? '看空' : '看多'}）` : ''}${avgAcc != null ? ` · 平均準確率 ${avgAcc}%` : ''}</span>
-            </div>
-            <span class="flex-shrink-0 text-[11px] px-2.5 py-1 rounded-full ${badgeClass}">${badgeLabel}（${count}人）</span>
+          <div class="flex flex-wrap items-center gap-x-3 gap-y-2 mb-3">
+            <div class="font-['Epilogue'] font-bold text-xl text-tertiary-container leading-tight [&>span]:translate-y-0">${renderAssetNameStar(data.ticker, asset)}</div>
+            <span class="bg-surface-container text-secondary text-[11px] font-semibold px-2.5 py-1 rounded-full whitespace-nowrap">${count} 人${dirFilter === 'bullish' ? '看多' : '看空'}${data.opposite ? `（另有 ${data.opposite} 人${dirFilter === 'bullish' ? '看空' : '看多'}）` : ''}${avgAcc != null ? ` · 平均準確率 ${avgAcc}%` : ''}</span>
           </div>
           <div class="flex flex-wrap gap-1.5 mb-3">${chips}</div>
           <div class="signal-detail hidden mt-2 space-y-2"></div>
